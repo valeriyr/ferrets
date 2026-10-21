@@ -433,7 +433,12 @@ fn kept_pool_carried_as_initial_starts_at_new_forms_initial() {
     let mut app = app();
     app.world_mut().resource_mut::<ContentRegistry>().register(
         EntityTypeDef::new("carafe")
-            .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(50))
             .with_pool(Pool::energy(40))
             .with_morphs([MorphTransition::new(
@@ -533,7 +538,12 @@ fn amount_initial_held_under_maximum_its_passives_lower() {
         let dimmed = registry.register_entity_buff("dimmed", passive_buff("-20", PoolShift::Clamp));
         registry.register(
             EntityTypeDef::new("squat_lamp")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::builtin(
                     PoolId::HEALTH,
                     FixedU64::from_num(50),
@@ -1418,7 +1428,12 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("keep")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_pool(Pool::energy(40))
                 .with_dying(2, []),
@@ -1438,7 +1453,12 @@ fn app() -> App {
         };
         registry.register(
             EntityTypeDef::new("egg")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(2, [])
                 .with_morphs([
@@ -1462,7 +1482,12 @@ fn app() -> App {
         for name in ["hatchling", "husk", "grub", "pupa", "shell"] {
             registry.register(
                 EntityTypeDef::new(name)
-                    .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                    .with_location(
+                        utils::GROUND_DOMAIN,
+                        CellSize::ONE,
+                        Solidity::Solid,
+                        utils::GROUND,
+                    )
                     .with_pool(Pool::health(80))
                     .with_dying(2, []),
             );
@@ -1482,7 +1507,12 @@ fn app() -> App {
         };
         let vessel = |name: &str, health: u32, energy: Option<u32>| {
             let def = EntityTypeDef::new(name)
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(health))
                 .with_dying(2, []);
             match energy {
@@ -1632,7 +1662,12 @@ fn app() -> App {
         // A lantern starting at half its health, its maximum raised by `glow`.
         registry.register(
             EntityTypeDef::new("dim_lantern")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::builtin(
                     PoolId::HEALTH,
                     FixedU64::from_num(50),
@@ -1646,7 +1681,12 @@ fn app() -> App {
         // `wings` and the raise's difference given to the pool.
         registry.register(
             EntityTypeDef::new("low_lamp")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::builtin(
                     PoolId::HEALTH,
                     FixedU64::from_num(50),
@@ -1663,7 +1703,12 @@ fn app() -> App {
         ] {
             registry.register(
                 EntityTypeDef::new(name)
-                    .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                    .with_location(
+                        utils::GROUND_DOMAIN,
+                        CellSize::ONE,
+                        Solidity::Solid,
+                        utils::GROUND,
+                    )
                     .with_pool(Pool::health(50))
                     .with_pool(Pool::builtin(
                         PoolId::ENERGY,
@@ -1850,7 +1895,12 @@ fn carry_initial_app() -> App {
         };
         let vessel = |name: &str| {
             EntityTypeDef::new(name)
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
         };
         registry

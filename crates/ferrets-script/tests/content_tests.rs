@@ -14,6 +14,7 @@ use ferrets_content::{
     concealment::Concealment,
     cost::Cost,
     detection::Detection,
+    domain::DomainDef,
     dying::{Bequest, DeathKind, DyingDef, LeftBy},
     entity_buffs::{EntityBuffDef, Interruption, Lasting},
     entity_effect::EntityEffect,
@@ -21,8 +22,8 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        Emission, FieldAction, FieldCoverage, FieldDecay, FieldEffect, FieldGrowth, FieldLayer,
-        FieldPlacement, FieldSourceDef, FieldVision,
+        Emission, FieldAction, FieldCoverage, FieldDecay, FieldEffect, FieldGrowth, FieldPlacement,
+        FieldSourceDef, FieldVision,
     },
     gateway::{Doors, GatewayDef, Joins},
     kinds::{Kind, Kinds},
@@ -54,6 +55,7 @@ use ferrets_content::{
     stack_rule::StackRule,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
+    terrains::Terrains,
     transport::{PassengerConduct, PassengerFate},
     tunnel::{OtherEndLost, Passage, TunnelDef},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
@@ -62,7 +64,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::LayerId};
+use ferrets_pathfinder::{layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask};
 use ferrets_script::{
     content,
     engine::{ScriptEngine, lua::LuaEngine},
@@ -83,7 +85,12 @@ fn loads_races_resources_and_entities() {
 
     let expected = EntityTypeDef::new("archer")
         .with_race("human")
-        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::ONE,
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_movement(
             FixedU64::from_str("0.3").unwrap(),
             FixedU64::from_str("0.5").unwrap(),
@@ -95,7 +102,7 @@ fn loads_races_resources_and_entities() {
         .with_dying(2, [])
         .with_attack(
             AttackDef::new(Weapon::new(
-                LayerId::new(1),
+                utils::GROUND,
                 Delivery::Instant,
                 None,
                 Slain::Remains,
@@ -116,9 +123,11 @@ fn loads_races_resources_and_entities() {
 fn declared_acquire_range_overrides_weapon_range_default() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("scout", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = {
                 damage = 2, attack_range = 3, acquire_range = 7, attack_period = 4, damage_point = 2,
             },
@@ -129,11 +138,16 @@ fn declared_acquire_range_overrides_weapon_range_default() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let expected = EntityTypeDef::new("scout")
-        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::ONE,
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_pool(Pool::health(20))
         .with_attack(
             AttackDef::new(Weapon::new(
-                LayerId::new(1),
+                utils::GROUND,
                 Delivery::Instant,
                 None,
                 Slain::Remains,
@@ -152,9 +166,11 @@ fn declared_acquire_range_overrides_weapon_range_default() {
 fn custom_stat_is_declared_and_seeded() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("morale", 0)
         define_entity("hero", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { morale = 7 },
             pools = { health = { maximum = 10 } },
         })
@@ -185,8 +201,10 @@ fn custom_player_stat_is_declared() {
 fn unknown_stat_name_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("gadget", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { bogus = 1 },
         })
     "#;
@@ -203,8 +221,10 @@ fn unknown_stat_name_errors() {
 fn pool_written_among_stats_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("gadget", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { health = { maximum = 20 } },
         })
     "#;
@@ -221,8 +241,10 @@ fn pool_written_among_stats_errors() {
 fn unknown_pool_name_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("gadget", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { mana = { maximum = 20 } },
         })
     "#;
@@ -239,12 +261,14 @@ fn unknown_pool_name_errors() {
 fn parses_armor_bonus_damage_vs_and_energy() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_tag("armored")
         define_tag("dragon")
 
         define_entity("knight", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = {
                 damage = 12, attack_range = 1, attack_period = 4, damage_point = 2,
                 armor = 4,
@@ -257,12 +281,17 @@ fn parses_armor_bonus_damage_vs_and_energy() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let expected = EntityTypeDef::new("knight")
-        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::ONE,
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_pool(Pool::health(100))
         .with_armor(4)
         .with_attack(
             AttackDef::new(Weapon::new(
-                LayerId::new(1),
+                utils::GROUND,
                 Delivery::Instant,
                 None,
                 Slain::Remains,
@@ -289,15 +318,17 @@ fn parses_armor_bonus_damage_vs_and_energy() {
 fn pool_reads_initial() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("lamp", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = {
                 health = { maximum = 20, initial = "full" },
                 energy = { maximum = 10, initial = "2.5" },
             },
         })
         define_entity("wick", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = {
                 health = { maximum = 20 },
                 energy = { maximum = 200, initial = { share = "0.25" } },
@@ -327,8 +358,10 @@ fn pool_reads_initial() {
 fn rise_reads_time_and_how_each_pool_is_held() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("tower", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = {
                 health = { maximum = 400 },
                 energy = { maximum = 200, initial = 50 },
@@ -336,7 +369,7 @@ fn rise_reads_time_and_how_each_pool_is_held() {
             rise = { time = 10, pools = { health = { follows_work_from = { share = "0.1" } }, energy = "gained_on_risen" } },
         })
         define_entity("hut", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             rise = { time = 4, pools = { health = "initial" } },
         })
@@ -366,8 +399,10 @@ fn rise_reads_time_and_how_each_pool_is_held() {
 fn rise_pool_of_unknown_word_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             rise = { time = 4, pools = { health = "rising" } },
         })
@@ -385,8 +420,10 @@ fn rise_pool_of_unknown_word_is_rejected() {
 fn rise_pool_following_work_without_initial_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             rise = { time = 4, pools = { health = {} } },
         })
@@ -404,8 +441,10 @@ fn rise_pool_following_work_without_initial_is_rejected() {
 fn rise_pool_following_work_from_full_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             rise = { time = 4, pools = { health = { follows_work_from = "full" } } },
         })
@@ -423,8 +462,10 @@ fn rise_pool_following_work_from_full_is_rejected() {
 fn rise_pool_of_unknown_name_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             rise = { time = 4, pools = { health = "initial", mana = "initial" } },
         })
@@ -442,8 +483,10 @@ fn rise_pool_of_unknown_name_is_rejected() {
 fn rise_pool_following_work_from_table_without_share_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             rise = { time = 4, pools = { health = { follows_work_from = { shar = "0.1" } } } },
         })
@@ -461,8 +504,10 @@ fn rise_pool_following_work_from_table_without_share_is_rejected() {
 fn rise_without_time_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             rise = { pools = { health = "initial" } },
         })
@@ -480,8 +525,10 @@ fn rise_without_time_is_rejected() {
 fn rise_without_pools_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             rise = { time = 4 },
         })
@@ -499,8 +546,10 @@ fn rise_without_pools_is_rejected() {
 fn pool_initial_of_unknown_word_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("lamp", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20, initial = "half" } },
         })
     "#;
@@ -517,11 +566,13 @@ fn pool_initial_of_unknown_word_is_rejected() {
 fn parses_repairer_and_repair_ratio() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
         define_tag("building")
 
         define_entity("depot", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             price = { gold = 200 },
             rise = { time = 20, pools = { health = "initial" } },
@@ -530,7 +581,7 @@ fn parses_repairer_and_repair_ratio() {
         })
 
         define_entity("worker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { repair_speed = "1.0", repair_cost_factor = "0.25",
                 repair_range = 1,
             },
@@ -570,17 +621,19 @@ fn parses_repairer_and_repair_ratio() {
 fn parses_transporter() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
 
         define_entity("footman", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_size = 1 },
             pools = { health = { maximum = 60 } },
             tags = { "infantry" },
         })
 
         define_entity("wagon", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = "0.25", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_capacity = 6,
                 load_range = 2, unload_range = 3, load_period = 4, unload_period = 8,
             },
@@ -631,10 +684,12 @@ fn parses_transporter() {
 fn parses_sheltering_transporter() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
 
         define_entity("cart", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
@@ -658,10 +713,12 @@ fn parses_sheltering_transporter() {
 fn unknown_passenger_conduct_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
 
         define_entity("cart", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
@@ -682,10 +739,12 @@ fn unknown_passenger_conduct_errors() {
 fn unknown_boarding_affiliation_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
 
         define_entity("cart", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
@@ -706,10 +765,12 @@ fn unknown_boarding_affiliation_errors() {
 fn unknown_passenger_fate_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
 
         define_entity("cart", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { cargo_capacity = 2,
                 load_range = 1, unload_range = 1, load_period = 0, unload_period = 0,
             },
@@ -811,11 +872,13 @@ fn gateway_of_undefined_tunnel_errors() {
 fn entity_holding_as_transporter_and_gateway_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_network("warren", {
             carries = "any", boarding = "own", capacity = 40, fate = "destroy",
         })
         define_entity("burrow", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             gateway = { network = "warren", doors = "both" },
             transporter = { carries = "any", boarding = "own", fate = "destroy", conduct = "shelter" },
@@ -879,11 +942,13 @@ fn unknown_passage_errors() {
 fn parses_flat_per_tick_repair_cost() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
         define_tag("building")
 
         define_entity("hauler", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { repair_speed = "1.0", repair_range = 1 },
             pools = { health = { maximum = 20 } },
             repairer = {
@@ -919,10 +984,12 @@ fn parses_flat_per_tick_repair_cost() {
 fn parses_medic_paying_energy_at_flat_rate() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("biological")
 
         define_entity("medic", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = {
                 repair_speed = "1.0", repair_range = 2,
             },
@@ -964,6 +1031,8 @@ fn parses_medic_paying_energy_at_flat_rate() {
 fn parses_skill_with_buff_effect() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity_buff("haste", {
             lasting = { ticks = 20 },
@@ -981,7 +1050,7 @@ fn parses_skill_with_buff_effect() {
         })
 
         define_entity("mage", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 40 }, energy = { maximum = 100, regen = "1" } },
             skills = { "battle_focus" },
         })
@@ -1015,6 +1084,8 @@ fn parses_skill_with_buff_effect() {
 fn parses_skill_requirements() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity_buff("haste", {
             lasting = { ticks = 20 },
@@ -1031,7 +1102,7 @@ fn parses_skill_requirements() {
             requires = { { research = "arcana" } },
         })
         define_entity("mage", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 40 } },
             skills = { "war_secret" },
         })
@@ -1073,8 +1144,10 @@ fn requirement_naming_undeclared_research_is_rejected() {
 fn requirement_naming_no_kind_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mortar", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 10 } },
             requires = { { forge = "blacksmith" } },
         })
@@ -1094,9 +1167,11 @@ fn requirement_naming_no_kind_is_rejected() {
 fn requirement_naming_two_kinds_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("workshop")
         define_entity("mortar", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 10 } },
             requires = { { entity_type = "blacksmith", tag = "workshop" } },
         })
@@ -1116,8 +1191,10 @@ fn requirement_naming_two_kinds_is_rejected() {
 fn requirement_naming_two_kinds_reports_shape_before_lookup() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mortar", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 10 } },
             requires = { { entity_type = "blacksmith", research = "arcana" } },
         })
@@ -1139,8 +1216,10 @@ fn requirement_naming_two_kinds_reports_shape_before_lookup() {
 fn requirement_that_is_bare_name_is_rejected() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mortar", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 10 } },
             requires = { "blacksmith" },
         })
@@ -1415,10 +1494,12 @@ fn skill_with_unknown_buff_errors() {
 fn parses_projectile_and_splash() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_projectile("shell", { speed = "0.4", aim = "position" })
 
         define_entity("mortar", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = {
                 damage = 12, attack_range = 6, attack_period = 10, damage_point = 4,
             },
@@ -1438,11 +1519,16 @@ fn parses_projectile_and_splash() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let expected = EntityTypeDef::new("mortar")
-        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::ONE,
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_pool(Pool::health(30))
         .with_attack(
             AttackDef::new(Weapon::new(
-                LayerId::new(1),
+                utils::GROUND,
                 Delivery::Projectile(registry.projectile("shell").expect("shell is registered")),
                 Some(SplashDef::new(
                     SplashShape::Circular,
@@ -1450,7 +1536,7 @@ fn parses_projectile_and_splash() {
                         (1, FixedU64::from_str("0.5").unwrap()),
                         (2, FixedU64::from_str("0.25").unwrap()),
                     ],
-                    LayerId::new(1),
+                    utils::GROUND,
                     true,
                 )),
                 Slain::Remains,
@@ -1503,9 +1589,11 @@ fn weapon_without_targets_is_rejected() {
     // that reaches nothing could never fire, so the rest says nothing without it.
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("mortar", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { damage = 12, attack_range = 6, attack_period = 10, damage_point = 4 },
             attack = {},
         })
@@ -1564,9 +1652,11 @@ fn unknown_projectile_aim_is_rejected() {
 fn parses_selection_priority_and_class() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("caster", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { sight_range = 12 },
             pools = { health = { maximum = 20 } },
             selection = { priority = 42, class = "spellcaster" },
@@ -1575,7 +1665,12 @@ fn parses_selection_priority_and_class() {
     let registry = content::load(&engine(), source).expect("load content");
 
     let expected = EntityTypeDef::new("caster")
-        .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::ONE,
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_pool(Pool::health(20))
         .with_selection(42, Some("spellcaster"))
         .with_sight_range(12);
@@ -1587,9 +1682,11 @@ fn parses_selection_priority_and_class() {
 fn selection_class_defaults_to_type_name() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("marine", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
@@ -1636,6 +1733,8 @@ fn wires_production_catalogues_across_entities() {
 fn parses_research_with_buff_and_requirements() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_resource("gold")
         define_player_buff("sharp_blades", {
             stack = "ignore",
@@ -1651,7 +1750,7 @@ fn parses_research_with_buff_and_requirements() {
             time = 100,
         })
         define_entity("lab", {
-            location = { occupation = ground, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
             researcher = { "smithing", "tactics" },
         })
     "#;
@@ -1681,11 +1780,13 @@ fn parses_research_with_buff_and_requirements() {
 fn loads_declared_requirements_onto_entities() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("blacksmith", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
         define_entity("mortar", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { { entity_type = "blacksmith" } },
         })
     "#;
@@ -1701,15 +1802,17 @@ fn loads_declared_requirements_onto_entities() {
 fn loads_requirement_nodes_and_state_leaves() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("keep", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
         define_entity("castle", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
         define_research("tactics", { time = 10 })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { any = {
                 { entity_type = "keep" },
                 { all = {
@@ -1758,13 +1861,15 @@ fn loads_requirement_nodes_and_state_leaves() {
 fn requirement_table_mixing_list_and_key_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_tag("hall")
         define_entity("forge", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             tags = { "hall" },
         })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { { entity_type = "forge" }, any = { { tag = "hall" } } },
         })
     "#;
@@ -1781,9 +1886,11 @@ fn requirement_table_mixing_list_and_key_errors() {
 fn requirement_list_with_stray_key_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_research("masonry", { time = 10 })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { reserch = "masonry" },
         })
     "#;
@@ -1800,11 +1907,13 @@ fn requirement_list_with_stray_key_errors() {
 fn requirement_node_list_naming_key_beside_entries_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("keep", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { any = { { entity_type = "keep" }, entity_type = "castle" } },
         })
     "#;
@@ -1821,13 +1930,15 @@ fn requirement_node_list_naming_key_beside_entries_errors() {
 fn bare_list_inside_requirement_list_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_tag("hall")
         define_entity("forge", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             tags = { "hall" },
         })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { { entity_type = "forge" }, { { tag = "hall" } } },
         })
     "#;
@@ -1844,11 +1955,13 @@ fn bare_list_inside_requirement_list_errors() {
 fn requirement_list_with_several_stray_keys_names_first_in_sorted_order() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("keep", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { { entity_type = "keep" }, zeal = 1, banner = 2, moat = 3 },
         })
     "#;
@@ -1865,12 +1978,14 @@ fn requirement_list_with_several_stray_keys_names_first_in_sorted_order() {
 fn requirement_list_with_hole_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_research("masonry", { time = 10 })
         define_entity("keep", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { { entity_type = "keep" }, UNDEFINED, { research = "masonry" } },
         })
     "#;
@@ -1887,11 +2002,13 @@ fn requirement_list_with_hole_errors() {
 fn requirement_list_with_index_past_its_length_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("keep", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { [1] = { entity_type = "keep" }, [3] = { entity_type = "keep" } },
         })
     "#;
@@ -1926,8 +2043,10 @@ fn as_long_as_list_with_stray_key_errors() {
 fn requirement_string_other_than_risen_or_idle_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { "resting" },
         })
     "#;
@@ -2006,8 +2125,10 @@ fn as_long_as_reads_bare_list_as_all() {
 fn bound_naming_two_thresholds_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { { health = { under = 20, under_share = "0.5" } } },
         })
     "#;
@@ -2024,8 +2145,10 @@ fn bound_naming_two_thresholds_errors() {
 fn stat_requirement_with_unknown_stat_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("knight", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { { stat = "girth", under = "1" } },
         })
     "#;
@@ -2042,13 +2165,15 @@ fn stat_requirement_with_unknown_stat_errors() {
 fn loads_while_buff_and_passives() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity_buff("on_fire", {
             lasting = { as_long_as = { health = { under_share = "0.34" } } },
             stack = "ignore",
             effects = { { stats = { { entity_stat = "health_drain", op = "flat", value = "0.15" } } } },
         })
         define_entity("depot", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 200 } },
             passives = { "on_fire" },
         })
@@ -2070,8 +2195,10 @@ fn loads_while_buff_and_passives() {
 fn passive_naming_unknown_buff_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("depot", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             passives = { "on_fire" },
         })
     "#;
@@ -2105,8 +2232,10 @@ fn research_with_unknown_buff_errors() {
 fn researcher_with_unknown_research_errors() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("lab", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             researcher = { "smithing" },
         })
     "#;
@@ -2126,8 +2255,10 @@ fn researcher_with_unknown_research_errors() {
 fn undeclared_requirement_panics_on_load() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("mortar", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             requires = { { entity_type = "blacksmith" } },
         })
     "#;
@@ -2142,9 +2273,11 @@ fn undeclared_requirement_panics_on_load() {
 fn loads_declared_tags_onto_entities() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_tag("flying")
         define_entity("gryphon", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             tags = { "flying" },
         })
     "#;
@@ -2159,8 +2292,10 @@ fn loads_declared_tags_onto_entities() {
 fn undeclared_tag_panics_on_load() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("gryphon", {
-            location = { occupation = ground, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             tags = { "flying" },
         })
     "#;
@@ -2175,6 +2310,8 @@ fn undeclared_tag_panics_on_load() {
 fn define_layer_returns_ids_in_declaration_order() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         local air = define_layer("air")
         assert(ground == 1)
         assert(air == 2)
@@ -2187,22 +2324,45 @@ fn define_layer_returns_ids_in_declaration_order() {
 }
 
 #[test]
-fn loads_occupation_of_several_layers_combined_with_bitwise_or() {
+fn loads_occupies_mask_combined_with_bitwise_or() {
     let source = r#"
         local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         local air = define_layer("air")
         define_entity("gryphon", {
-            location = { occupation = ground | air, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid", occupies = ground | air },
         })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
 
     let expected = EntityTypeDef::new("gryphon").with_location(
-        LayerId::new(1) | LayerId::new(2),
+        utils::GROUND_DOMAIN,
         CellSize::ONE,
         Solidity::Solid,
+        utils::GROUND | utils::AIR,
     );
     assert_eq!(registry.entity("gryphon"), Some(&expected));
+}
+
+#[test]
+fn location_without_occupies_occupies_its_domain_layer() {
+    let source = r#"
+        define_layer("ground")
+        local AIR = define_layer("air")
+        define_terrain("land")
+        define_domain("aloft", { layer = AIR, terrains = "any" })
+        define_entity("kite", {
+            location = { domain = "aloft", size = 1, solidity = "solid" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let location = registry.entity("kite").and_then(|def| def.location);
+    assert_eq!(
+        location.map(|location| location.occupies()),
+        Some(LayerMask::from(utils::AIR))
+    );
 }
 
 #[test]
@@ -2210,26 +2370,20 @@ fn layer_id_looks_up_defined_layer() {
     let source = r#"
         define_layer("ground")
         define_layer("air")
-        define_entity("gryphon", {
-            location = { occupation = layer_id("air"), size = 1, solidity = "solid" },
-        })
+        define_terrain("land")
+        define_domain("aloft", { layer = layer_id("air"), terrains = "any" })
     "#;
     let registry = content::load(&engine(), source).expect("load content");
 
-    let expected = EntityTypeDef::new("gryphon").with_location(
-        LayerId::new(2),
-        CellSize::ONE,
-        Solidity::Solid,
-    );
-    assert_eq!(registry.entity("gryphon"), Some(&expected));
+    let aloft = registry.domain("aloft").expect("aloft defined");
+    assert_eq!(registry.domain_def(aloft).layer(), utils::AIR);
 }
 
 #[test]
 fn reports_undefined_layer_lookup_as_content_error() {
     let source = r#"
-        define_entity("gryphon", {
-            location = { occupation = layer_id("ground"), size = 1, solidity = "solid" },
-        })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = layer_id("ground"), terrains = "any" })
     "#;
 
     let Err(error) = content::load(&engine(), source) else {
@@ -2242,52 +2396,126 @@ fn reports_undefined_layer_lookup_as_content_error() {
     );
 }
 
-//
-// ─── Terrains ─────────────────────────────────────────────────────────────────
-//
-
-#[test]
-fn loads_declared_terrains() {
-    let source = r#"
-        local ground = define_layer("ground")
-        local water = define_layer("water")
-        define_terrain("grass", ground)
-        define_terrain("shore", ground | water)
-    "#;
-    let registry = content::load(&engine(), source).expect("load content");
-
-    assert_eq!(
-        registry.terrain("grass"),
-        Some(LayerId::new(1).into()),
-        "grass passes ground only"
-    );
-    assert_eq!(
-        registry.terrain("shore"),
-        Some(LayerId::new(1) | LayerId::new(2)),
-        "shore passes both layers"
-    );
-}
-
-#[test]
-#[should_panic(expected = "terrain 'water' passes unregistered layers")]
-fn terrain_passing_undeclared_layer_panics_on_load() {
-    let source = r#"
-        define_layer("ground")
-        define_terrain("water", 2)
-    "#;
-    let _ = content::load(&engine(), source);
-}
-
 #[test]
 #[should_panic(expected = "entity type 'gryphon' occupies unregistered layers")]
-fn undeclared_occupation_layer_panics_on_load() {
+fn undeclared_occupied_layer_panics_on_load() {
     let source = r#"
-        define_layer("ground")
+        local ground = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("gryphon", {
-            location = { occupation = 8, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid", occupies = ground | 8 },
         })
     "#;
     let _ = content::load(&engine(), source);
+}
+
+//
+// ─── Terrains and domains ─────────────────────────────────────────────────────
+//
+
+#[test]
+fn define_terrain_returns_bits_in_declaration_order() {
+    let source = r#"
+        assert(define_terrain("land") == 1)
+        assert(define_terrain("shallow_water") == 2)
+        assert(define_terrain("deep_water") == 4)
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    assert_eq!(registry.terrain("deep_water"), Some(TerrainId::new(4)));
+}
+
+#[test]
+fn loads_domain_terrains_as_mask_or_any() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        local AIR = define_layer("air")
+        local LAND = define_terrain("land")
+        local SHALLOW_WATER = define_terrain("shallow_water")
+        define_domain("ground", { layer = GROUND, terrains = LAND | SHALLOW_WATER })
+        define_domain("air", { layer = AIR, terrains = "any" })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let domain = |name: &str| *registry.domain_def(registry.domain(name).expect("defined"));
+    assert_eq!(
+        domain("ground"),
+        DomainDef::new(
+            utils::GROUND,
+            Terrains::Only(TerrainMask::from(utils::LAND) | utils::SHALLOW_WATER),
+        )
+    );
+    assert_eq!(domain("air"), DomainDef::new(utils::AIR, Terrains::Any));
+}
+
+#[test]
+fn reports_undefined_domain_as_content_error() {
+    let source = r#"
+        define_layer("ground")
+        define_entity("gryphon", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+        })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject undefined domain");
+    };
+
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("domain 'ground' is not defined")),
+        "got {error:?}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "domain 'naval' names unregistered terrains 0b1000")]
+fn domain_naming_undeclared_terrain_panics_on_load() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_terrain("land")
+        define_domain("naval", { layer = GROUND, terrains = 8 })
+    "#;
+    let _ = content::load(&engine(), source);
+}
+
+#[test]
+fn reports_terrains_neither_any_nor_mask_as_content_error() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = { "land" } })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a list of names where a mask is expected");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "terrains must be 'any' or a terrain mask, found table"
+    );
+}
+
+#[test]
+fn negative_terrain_mask_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground")
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = -1 })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a negative terrain mask");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(message, "terrains must be a terrain mask, found -1");
 }
 
 //
@@ -2297,8 +2525,11 @@ fn undeclared_occupation_layer_panics_on_load() {
 #[test]
 fn reports_unknown_enum_as_content_error() {
     let source = r#"
+        local GROUND = define_layer("ground")
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("wall", {
-            location = { occupation = 1, size = 1, solidity = "wobbly" },
+            location = { domain = "ground", size = 1, solidity = "wobbly" },
         })
     "#;
 
@@ -2321,10 +2552,12 @@ fn repairer_without_rate_errors() {
     // casualty at a flat rate are both ordinary, so content states which it is.
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("building")
 
         define_entity("worker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { repair_speed = "1.0", repair_range = 1 },
             pools = { health = { maximum = 20 } },
             repairer = { repairs = { tags = { "building" } }, presence = { present = { crew = 1 } } },
@@ -2345,10 +2578,12 @@ fn repairer_without_cost_errors() {
     // and requiring it keeps a misspelled field from quietly meaning free.
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("building")
 
         define_entity("worker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { repair_speed = "1.0", repair_range = 1 },
             pools = { health = { maximum = 20 } },
             repairer = {
@@ -2371,10 +2606,12 @@ fn repairer_without_cost_errors() {
 fn unknown_repair_rate_mode_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("biological")
 
         define_entity("medic", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { repair_speed = "1.0", repair_range = 1 },
             pools = { health = { maximum = 20 } },
             repairer = {
@@ -2397,10 +2634,12 @@ fn unknown_repair_rate_mode_errors() {
 fn unknown_work_presence_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("building")
 
         define_entity("worker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { repair_speed = "1.0" },
             pools = { health = { maximum = 20 } },
             repairer = {
@@ -2424,11 +2663,13 @@ fn unknown_work_presence_errors() {
 fn docks_and_annex_read_their_terms() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
         define_tag("building")
 
         define_entity("barracks", {
-            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
             stats = { build_range = 1 },
             pools = { health = { maximum = 100 } },
             tags = { "building" },
@@ -2436,7 +2677,7 @@ fn docks_and_annex_read_their_terms() {
             docks = { { at = { 2, 0 }, accepts = { types = { "tech_lab" } } } },
         })
         define_entity("tech_lab", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 40, drain = "2" } },
             tags = { "building" },
             price = { gold = 25 },
@@ -2479,6 +2720,8 @@ fn docks_and_annex_read_their_terms() {
 fn watch_effect_reads_its_radius_and_duration() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_skill("scan", {
             cooldown = 10,
@@ -2511,6 +2754,8 @@ fn watch_effect_reads_its_radius_and_duration() {
 fn skill_reads_time_it_is_worked_over() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("ritual_time", 1)
 
         define_skill("bolt", {
@@ -2574,6 +2819,8 @@ fn skill_reads_time_it_is_worked_over() {
 fn delayed_cast_reads_when_it_pays_and_what_it_refunds() {
     let source = r#"
         define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = 1, terrains = "any" })
         define_skill("portal", {
             cooldown = 10,
             caster = "entity",
@@ -2668,6 +2915,8 @@ fn entity_stat_without_floor_is_refused() {
 fn skill_reads_reach_it_is_cast_from() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("raise_range", 1)
 
         define_skill("bolt", {
@@ -2720,6 +2969,8 @@ fn skill_reads_reach_it_is_cast_from() {
 fn skill_reach_by_undefined_stat_errors() {
     let source = r#"
         define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = 1, terrains = "any" })
 
         define_skill("far_sight", {
             cooldown = 10,
@@ -2740,9 +2991,11 @@ fn skill_reach_by_undefined_stat_errors() {
 fn summon_effect_reads_its_type_and_count() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("skeleton", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
         })
         define_skill("raise_dead", {
@@ -2780,9 +3033,11 @@ fn summon_effect_reads_its_type_and_count() {
 fn summon_effect_reads_its_landing_and_arrival() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("mound", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
             rise = { time = 30, pools = { health = "initial" } },
         })
@@ -2816,8 +3071,10 @@ fn summon_effect_reads_its_landing_and_arrival() {
 fn summon_without_landing_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mound", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
         })
         define_skill("raise_mound", {
@@ -2836,8 +3093,10 @@ fn summon_without_landing_errors() {
 fn summon_without_arrival_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mound", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
         })
         define_skill("raise_mound", {
@@ -2856,9 +3115,11 @@ fn summon_without_arrival_errors() {
 fn summon_reads_its_field_rules() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("power", { layer = "anywhere", decay = "instant" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("power", { terrains = "any", decay = "instant" })
         define_entity("mound", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
             rise = { time = 30, pools = { health = "initial" } },
         })
@@ -2897,8 +3158,10 @@ fn summon_reads_its_field_rules() {
 fn summon_naming_unknown_arrival_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mound", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
         })
         define_skill("raise_mound", {
@@ -2917,15 +3180,17 @@ fn summon_naming_unknown_arrival_errors() {
 fn warper_reads_its_catalogue_field_rules_and_landing() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("power", { layer = "anywhere", decay = "instant" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("power", { terrains = "any", decay = "instant" })
         define_entity("recruit", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
             train_time = 10,
             rise = { time = 30, pools = { health = "initial" } },
         })
         define_entity("relay", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
             warper = {
                 warps = { "recruit" },
@@ -2958,8 +3223,10 @@ fn warper_reads_its_catalogue_field_rules_and_landing() {
 fn warper_without_warps_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("relay", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
             warper = { within = {}, landing = "sighted" },
         })
@@ -2974,8 +3241,10 @@ fn warper_without_warps_errors() {
 fn warper_without_landing_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("relay", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
             warper = { warps = { "recruit" }, within = {} },
         })
@@ -2990,8 +3259,10 @@ fn warper_without_landing_errors() {
 fn trainer_without_trains_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("relay", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
             trainer = {},
         })
@@ -3006,12 +3277,14 @@ fn trainer_without_trains_errors() {
 fn skill_numbers_read_stats() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("scan_radius", 0)
         define_entity_stat("scan_time", 1)
         define_entity_stat("host_size", 1)
-        define_field("creep", { layer = "anywhere", decay = "instant" })
+        define_field("creep", { terrains = "any", decay = "instant" })
         define_entity("skeleton", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
         })
         define_skill("scan", {
@@ -3074,6 +3347,8 @@ fn skill_numbers_read_stats() {
 fn summon_of_undefined_type_errors() {
     let source = r#"
         define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = 1, terrains = "any" })
 
         define_skill("raise_dead", {
             cooldown = 10,
@@ -3095,8 +3370,10 @@ fn summon_of_undefined_type_errors() {
 fn empty_dying_block_panics_on_load() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("marine", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 40 } },
             dying = {},
         })
@@ -3108,20 +3385,22 @@ fn empty_dying_block_panics_on_load() {
 fn dying_reads_what_it_leaves_and_deaths_that_leave_it() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("corpse", {
-            location = { occupation = GROUND, size = 1, solidity = "passable" },
+            location = { domain = "ground", size = 1, solidity = "passable" },
             tags = { "remains" },
             stats = { lifetime = 600 },
         })
         define_entity("broodling", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
         })
         -- A body states what it rots into and no time: it has lain its whole
         -- life already, so what it leaves goes down the tick its decay ends.
         define_entity("ash", {
-            location = { occupation = GROUND, size = 1, solidity = "passable" },
+            location = { domain = "ground", size = 1, solidity = "passable" },
             tags = { "remains" },
             stats = { lifetime = 60 },
             dying = { leaves = { { entity = "corpse" } } },
@@ -3129,12 +3408,12 @@ fn dying_reads_what_it_leaves_and_deaths_that_leave_it() {
         -- An entry that names no deaths takes the engine's own rule; one that
         -- names them is left by exactly those. A count of one is the default.
         define_entity("marine", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 40 } },
             dying = { time = 2, leaves = { { entity = "corpse" } } },
         })
         define_entity("hive", {
-            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            location = { domain = "ground", size = { 3, 3 }, solidity = "solid" },
             pools = { health = { maximum = 200 } },
             dying = { time = 2, leaves = {
                 { entity = "corpse", on = { "killed", "expired" } },
@@ -3193,9 +3472,11 @@ fn dying_reads_what_it_leaves_and_deaths_that_leave_it() {
 fn weapon_reads_what_it_leaves_of_what_it_kills() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("mortar", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { damage = 10, attack_range = 6,
                 acquire_range = 8, attack_period = 20, damage_point = 8,
             },
@@ -3203,7 +3484,7 @@ fn weapon_reads_what_it_leaves_of_what_it_kills() {
             attack = { targets = GROUND, slain = "nothing" },
         })
         define_entity("marine", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { damage = 10, attack_range = 6,
                 acquire_range = 8, attack_period = 20, damage_point = 8,
             },
@@ -3233,9 +3514,11 @@ fn weapon_reads_what_it_leaves_of_what_it_kills() {
 fn lifetime_stat_parses() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("skeleton", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { lifetime = 900 },
             pools = { health = { maximum = 50 } },
         })
@@ -3254,19 +3537,21 @@ fn lifetime_stat_parses() {
 fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
 
         define_entity("seam", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             resource_source = { kind = "gold", depletion = "destroy" },
         })
         define_entity("refinery", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             resource_source = { kind = "gold", depletion = "persist" },
         })
         define_entity("tapper", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { harvest_range = 1 },
             pools = { health = { maximum = 20 } },
             resource_carrier = {
@@ -3278,7 +3563,7 @@ fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
             },
         })
         define_entity("gang", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { harvest_range = 1 },
             pools = { health = { maximum = 20 } },
             resource_carrier = {
@@ -3338,14 +3623,16 @@ fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
 fn crew_limit_of_zero_panics() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
 
         define_entity("seam", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             resource_source = { kind = "gold", depletion = "destroy" },
         })
         define_entity("tapper", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { harvest_range = 1 },
             pools = { health = { maximum = 20 } },
             resource_carrier = {
@@ -3362,17 +3649,19 @@ fn crew_limit_of_zero_panics() {
 fn attached_presence_reads_berths_and_stance() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("wood")
         define_resource("gold")
         define_tag("building")
 
         define_entity("tree", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             resource_source = { kind = "wood", depletion = "destroy" },
             berths = { canopy = { points = { { "0.5", "0.5" } } } },
         })
         define_entity("lodge", {
-            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             price = { gold = 10 },
             rise = { time = 4, pools = { health = "initial" } },
@@ -3382,7 +3671,7 @@ fn attached_presence_reads_berths_and_stance() {
             },
         })
         define_entity("sprite", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { harvest_range = 1, build_range = 1 },
             pools = { health = { maximum = 20 } },
             resource_carrier = {
@@ -3456,15 +3745,17 @@ fn attached_presence_reads_berths_and_stance() {
 fn overbuilding_type_reads_its_source() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
         define_tag("building")
 
         define_entity("mine", {
-            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
             resource_source = { kind = "gold", depletion = "destroy" },
         })
         define_entity("shaft_house", {
-            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             price = { gold = 10 },
             rise = { time = 4, pools = { health = "initial" } },
@@ -3488,15 +3779,17 @@ fn overbuilding_type_reads_its_source() {
 fn orbit_stance_reads_radius_and_period() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("wood")
 
         define_entity("tree", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             resource_source = { kind = "wood", depletion = "destroy" },
             berths = { canopy = { points = { { "0.5", "0.5" } } } },
         })
         define_entity("sprite", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { harvest_range = 1 },
             pools = { health = { maximum = 20 } },
             resource_carrier = {
@@ -3610,15 +3903,17 @@ fn stance_table_of_two_movements_errors() {
 fn unknown_berth_stance_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("wood")
 
         define_entity("tree", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             resource_source = { kind = "wood", depletion = "destroy" },
             berths = { canopy = { points = { { "0.5", "0.5" } } } },
         })
         define_entity("sprite", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { harvest_range = 1 },
             pools = { health = { maximum = 20 } },
             resource_carrier = {
@@ -3641,8 +3936,11 @@ fn unknown_berth_stance_errors() {
 #[test]
 fn reports_malformed_number_as_number_error() {
     let source = r#"
+        local GROUND = define_layer("ground")
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("archer", {
-            location = { occupation = 1, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = "fast" },
         })
     "#;
@@ -3745,8 +4043,8 @@ fn parses_fields_sources_placement_and_effects() {
     assert_eq!(registry.field_def(creep).vision(), FieldVision::Watched);
     assert_eq!(registry.field_def(power).vision(), FieldVision::Dark);
     assert_eq!(
-        registry.field_def(creep).layer(),
-        FieldLayer::Passable(LayerMask::from(LayerId::new(1)))
+        registry.field_def(creep).terrains(),
+        Terrains::Only(utils::LAND.into())
     );
 
     assert_eq!(
@@ -3847,8 +4145,10 @@ fn parses_fields_sources_placement_and_effects() {
 fn unknown_field_name_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hive", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             field_sources = { { field = "creep", radius = 3, growth = "instant", while_rising = "nothing", while_disabled = "full" } },
         })
     "#;
@@ -3865,9 +4165,11 @@ fn unknown_field_name_errors() {
 fn field_placement_rule_names_exactly_one_verb() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("creep", { layer = GROUND, decay = "never" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = LAND, decay = "never" })
         define_entity("spore", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             field_placement = { { requires = "creep", forbids = "creep", of = "anyone", coverage = "any" } },
         })
     "#;
@@ -3882,9 +4184,11 @@ fn field_placement_rule_names_exactly_one_verb() {
 fn unknown_field_coverage_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("veil", { layer = "anywhere", decay = "instant" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("veil", { terrains = "any", decay = "instant" })
         define_entity("zealot", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             field_effects = { { field = "veil", of = "allied", coverage = "half", inside = { "conceal" } } },
         })
     "#;
@@ -3901,9 +4205,11 @@ fn unknown_field_coverage_errors() {
 fn field_effect_without_coverage_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("veil", { layer = "anywhere", decay = "instant" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("veil", { terrains = "any", decay = "instant" })
         define_entity("zealot", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             field_effects = { { field = "veil", of = "allied", inside = { "conceal" } } },
         })
     "#;
@@ -3924,7 +4230,9 @@ fn field_effect_without_coverage_errors() {
 fn unknown_field_vision_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("creep", { layer = GROUND, decay = "never", vision = "glowing" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = LAND, decay = "never", vision = "glowing" })
     "#;
     let error = content::load(&engine(), source).err().expect("bad vision");
     assert!(
@@ -3937,7 +4245,9 @@ fn unknown_field_vision_errors() {
 fn unknown_field_decay_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("creep", { layer = GROUND, decay = "slowly" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = LAND, decay = "slowly" })
     "#;
     let error = content::load(&engine(), source).err().expect("bad decay");
     assert!(
@@ -3954,9 +4264,11 @@ fn unknown_field_decay_errors() {
 fn breeder_and_broodling_round_trip() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("brood_period", 1)
         define_entity("hatch", {
-            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            location = { domain = "ground", size = { 3, 3 }, solidity = "solid" },
             stats = { brood_period = 12 },
             pools = { health = { maximum = 300 } },
             berths = { brood = { points = { { "0.5", "3.5" }, { "-1", "1.0" } }, slots = 2 } },
@@ -3964,18 +4276,18 @@ fn breeder_and_broodling_round_trip() {
                         orphans = { linger = { reseat = { distance = 3 } } } },
         })
         define_entity("grub", {
-            location = { occupation = GROUND, size = 1, solidity = "passable" },
+            location = { domain = "ground", size = 1, solidity = "passable" },
             pools = { health = { maximum = 25 } },
             broodling = { berths = "brood", stance = "still" },
         })
         define_entity("pen", {
-            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             berths = { sty = { points = { { "0.5", "2.5" }, { "1.5", "2.5" }, { "0.5", "-0.5" }, { "1.5", "-0.5" } }, slots = 4 } },
             breeder = { breeds = "piglet", period = 30, limit = 4, orphans = "perish" },
         })
         define_entity("piglet", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
             broodling = { berths = "sty", stance = { roaming = { speed = "0.05", dwell = 40 } } },
         })
@@ -4037,8 +4349,10 @@ fn breeder_and_broodling_round_trip() {
 fn unknown_orphan_fate_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hatch", {
-            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            location = { domain = "ground", size = { 3, 3 }, solidity = "solid" },
             pools = { health = { maximum = 300 } },
             breeder = { breeds = "grub", period = 12, limit = 1, orphans = "wander" },
         })
@@ -4054,8 +4368,10 @@ fn unknown_orphan_fate_errors() {
 fn unknown_morph_reason_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             tags = { "winged" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
@@ -4074,8 +4390,10 @@ fn unknown_morph_reason_errors() {
 fn lingering_without_reseat_distance_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hatch", {
-            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            location = { domain = "ground", size = { 3, 3 }, solidity = "solid" },
             pools = { health = { maximum = 300 } },
             breeder = { breeds = "grub", period = 12, limit = 1, orphans = { linger = { reseat = {} } } },
         })
@@ -4093,8 +4411,10 @@ fn lingering_without_reseat_distance_errors() {
 fn brood_period_of_wrong_shape_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hatch", {
-            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            location = { domain = "ground", size = { 3, 3 }, solidity = "solid" },
             pools = { health = { maximum = 300 } },
             breeder = { breeds = "grub", period = "soon", limit = 1, orphans = "perish" },
         })
@@ -4110,9 +4430,11 @@ fn brood_period_of_wrong_shape_errors() {
 fn morph_interrupted_and_reason_read_and_default() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             pools = { health = { maximum = 40 } },
             morphs = {
@@ -4122,12 +4444,12 @@ fn morph_interrupted_and_reason_read_and_default() {
             },
         })
         define_entity("flier", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             pools = { health = { maximum = 40 } },
         })
         define_entity("statue", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
         })
     "#;
@@ -4158,13 +4480,15 @@ fn morph_interrupted_and_reason_read_and_default() {
 fn morph_without_pool_carry_names_no_pool() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = { { into = "flier", time = 20, placement = "reserve", cancel = "committed" } },
         })
         define_entity("flier", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
         })
     "#;
@@ -4177,9 +4501,11 @@ fn morph_without_pool_carry_names_no_pool() {
 fn pool_carry_reads_each_keyword() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         local function form(name)
             define_entity(name, {
-                location = { occupation = GROUND, size = 1, solidity = "solid" },
+                location = { domain = "ground", size = 1, solidity = "solid" },
                 pools = { health = { maximum = 10 } },
             })
         end
@@ -4189,7 +4515,7 @@ fn pool_carry_reads_each_keyword() {
         form("full")
         form("started")
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 10 } },
             morphs = {
                 { into = "shared", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "committed" },
@@ -4224,13 +4550,15 @@ fn pool_carry_reads_each_keyword() {
 fn unknown_pool_carry_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = { { into = "flier", land_pool_carry = { health = "half" }, time = 20, placement = "reserve", cancel = "committed" } },
         })
         define_entity("flier", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
         })
     "#;
@@ -4247,16 +4575,18 @@ fn unknown_pool_carry_errors() {
 fn via_reads_form_entering_carries_and_reverts() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         local function form(name)
             define_entity(name, {
-                location = { occupation = GROUND, size = 1, solidity = "solid" },
+                location = { domain = "ground", size = 1, solidity = "solid" },
                 pools = { health = { maximum = 10 }, energy = { maximum = 10 } },
             })
         end
         form("cocoon")
         form("moth")
         define_entity("larva", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 10 }, energy = { maximum = 10 } },
             morphs = { {
                 into = "moth",
@@ -4295,16 +4625,18 @@ fn via_reads_form_entering_carries_and_reverts() {
 fn via_reads_initial_on_entering_and_reverting() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         local function form(name)
             define_entity(name, {
-                location = { occupation = GROUND, size = 1, solidity = "solid" },
+                location = { domain = "ground", size = 1, solidity = "solid" },
                 pools = { health = { maximum = 10 }, energy = { maximum = 10 } },
             })
         end
         form("cocoon")
         form("moth")
         define_entity("larva", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 10 }, energy = { maximum = 10 } },
             morphs = { {
                 into = "moth",
@@ -4333,16 +4665,18 @@ fn via_reads_initial_on_entering_and_reverting() {
 fn via_without_carries_names_no_pool_and_reads_dies() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         local function form(name)
             define_entity(name, {
-                location = { occupation = GROUND, size = 1, solidity = "solid" },
+                location = { domain = "ground", size = 1, solidity = "solid" },
                 pools = { health = { maximum = 10 } },
             })
         end
         form("cocoon")
         form("moth")
         define_entity("larva", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 10 } },
             morphs = { {
                 into = "moth",
@@ -4363,8 +4697,10 @@ fn via_without_carries_names_no_pool_and_reads_dies() {
 fn interrupted_beside_via_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("larva", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             morphs = { {
                 into = "moth",
                 via = { form = "cocoon", interrupted = "dies" },
@@ -4386,8 +4722,10 @@ fn interrupted_beside_via_errors() {
 fn unknown_revert_carry_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("larva", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             morphs = { {
                 into = "moth",
                 via = { form = "cocoon", interrupted = { reverts = { health = "half" } } },
@@ -4408,8 +4746,10 @@ fn unknown_revert_carry_errors() {
 fn carry_of_undefined_pool_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("larva", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             morphs = { { into = "moth", land_pool_carry = { mana = "share" }, time = 20, placement = "reserve", cancel = "committed" } },
         })
     "#;
@@ -4609,8 +4949,10 @@ fn pool_shift_beside_stats_errors() {
 fn unknown_morph_interrupted_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "committed", interrupted = "vanishes" },
@@ -4634,12 +4976,14 @@ fn unknown_morph_interrupted_errors() {
 fn type_reads_concealment_and_stands_exposed_unless_declared() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("shade", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             concealment = "concealed",
         })
         define_entity("footman", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -4657,8 +5001,10 @@ fn type_reads_concealment_and_stands_exposed_unless_declared() {
 fn unknown_concealment_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("shade", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             concealment = "shadowy",
         })
     "#;
@@ -4672,15 +5018,15 @@ fn unknown_concealment_errors() {
 }
 
 #[test]
-fn unknown_field_layer_errors() {
+fn unknown_field_terrains_keyword_errors() {
     let source = r#"
-        define_field("mist", { layer = "everywhere", decay = "instant" })
+        define_field("mist", { terrains = "everywhere", decay = "instant" })
     "#;
     let error = content::load(&engine(), source)
         .err()
-        .expect("bad field layer");
+        .expect("bad field terrains");
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("field layer must be 'anywhere' or a layer mask, found 'everywhere'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("terrains must be 'any' or a terrain mask, found 'everywhere'")),
         "{error:?}"
     );
 }
@@ -4689,9 +5035,11 @@ fn unknown_field_layer_errors() {
 fn unknown_while_disabled_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("power", { layer = GROUND, decay = "instant" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("power", { terrains = LAND, decay = "instant" })
         define_entity("pylon", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             field_sources = {
                 { field = "power", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "dims" },
             },
@@ -4854,9 +5202,11 @@ fn unknown_entity_effect_errors() {
 fn field_effect_reads_concealed() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("veil", { layer = "anywhere", decay = "instant" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("veil", { terrains = "any", decay = "instant" })
         define_entity("zealot", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             field_effects = { { field = "veil", of = "allied", coverage = "every", inside = { "conceal" } } },
         })
     "#;
@@ -4879,9 +5229,11 @@ fn field_effect_reads_concealed() {
 fn field_effect_reads_both_sides() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("power", { layer = "anywhere", decay = "instant" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("power", { terrains = "any", decay = "instant" })
         define_entity("zealot", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             field_effects = { { field = "power", of = "own", coverage = "every",
                 inside = { "conceal" }, outside = { "disable", "conceal" } } },
         })
@@ -4905,9 +5257,11 @@ fn field_effect_reads_both_sides() {
 fn field_effect_reads_holds_while() {
     let source = r#"
         local GROUND = define_layer("ground")
-        define_field("creep", { layer = "anywhere", decay = "instant" })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = "any", decay = "instant" })
         define_entity("pit", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
             field_effects = { { field = "creep", of = "anyone", coverage = "every", holds_while = "risen",
                 outside = { { stats = { { entity_stat = "health_drain", op = "flat", value = "0.2" } } } } } },
@@ -4924,9 +5278,11 @@ fn field_effect_reads_holds_while() {
 fn parses_field_detection_and_watch_detection() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         local AIR = define_layer("air")
-        define_field("true_sight", { layer = "anywhere", decay = "instant", detection = GROUND | AIR })
-        define_field("veil", { layer = "anywhere", decay = "instant" })
+        define_field("true_sight", { terrains = "any", decay = "instant", detection = GROUND | AIR })
+        define_field("veil", { terrains = "any", decay = "instant" })
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
@@ -4942,7 +5298,7 @@ fn parses_field_detection_and_watch_detection() {
         field("true_sight").detection(),
         Detection::Reveals(LayerMask::EMPTY | ground | air)
     );
-    assert_eq!(field("true_sight").layer(), FieldLayer::Anywhere);
+    assert_eq!(field("true_sight").terrains(), Terrains::Any);
     assert_eq!(field("veil").detection(), Detection::Blind);
 
     let scan = registry
@@ -4973,6 +5329,8 @@ fn parses_field_detection_and_watch_detection() {
 fn relocate_effect_reads_journey_and_landing() {
     let source = r#"
         define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = 1, terrains = "any" })
         define_skill("blink", {
             cooldown = 140,
             caster = "entity",
@@ -5043,9 +5401,11 @@ fn relocate_effect_reads_journey_and_landing() {
 fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("undead")
         define_entity("crypt", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
         define_skill("grave_gate", {
             cooldown = 600,
@@ -5206,8 +5566,10 @@ fn relocate_gathering_with_unknown_sight_errors() {
 fn relocate_home_reads_its_kinds_from_either_spot() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("crypt", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
         })
         define_skill("homeward", {
             cooldown = 900,
@@ -5350,6 +5712,8 @@ fn relocate_count_of_unknown_shape_errors() {
 fn relocate_landing_of_unknown_word_errors() {
     let source = r#"
         define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = 1, terrains = "any" })
         define_skill("blink", {
             cooldown = 1,
             caster = "entity",
@@ -5378,15 +5742,17 @@ fn carrier_content(points: &str, stance: &str) -> String {
     format!(
         r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", {{ layer = GROUND, terrains = "any" }})
         define_resource("wood")
 
         define_entity("tree", {{
-            location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
+            location = {{ domain = "ground", size = 1, solidity = "solid" }},
             resource_source = {{ kind = "wood", depletion = "destroy" }},
             berths = {{ canopy = {{ points = {points} }} }},
         }})
         define_entity("sprite", {{
-            location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
+            location = {{ domain = "ground", size = 1, solidity = "solid" }},
             stats = {{ harvest_range = 1 }},
             pools = {{ health = {{ maximum = 20 }} }},
             resource_carrier = {{
@@ -5403,6 +5769,8 @@ fn carrier_content(points: &str, stance: &str) -> String {
 /// One self-contained ranged unit (no production catalogue).
 const ARCHER: &str = r#"
     local GROUND = define_layer("ground")
+    local LAND = define_terrain("land")
+    define_domain("ground", { layer = GROUND, terrains = "any" })
 
     define_race("human")
 
@@ -5410,7 +5778,7 @@ const ARCHER: &str = r#"
 
     define_entity("archer", {
         race = "human",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 6, attack_range = 4, attack_period = 7, damage_point = 3,
@@ -5426,6 +5794,8 @@ const ARCHER: &str = r#"
 /// A worker and a hall referencing each other's catalogues.
 const BASE: &str = r#"
     local GROUND = define_layer("ground")
+    local LAND = define_terrain("land")
+    define_domain("ground", { layer = GROUND, terrains = "any" })
 
     define_race("human")
 
@@ -5434,7 +5804,7 @@ const BASE: &str = r#"
 
     define_entity("peasant", {
         race = "human",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", build_range = 1, harvest_range = 1 },
         pools = { health = { maximum = 30 } },
         dying = { time = 2 },
@@ -5449,7 +5819,7 @@ const BASE: &str = r#"
 
     define_entity("town_hall", {
         race = "human",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "ground", size = { 3, 3 }, solidity = "solid" },
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
         price = { gold = 400 },
@@ -5461,13 +5831,15 @@ const BASE: &str = r#"
 
 const FIELDS: &str = r#"
     local GROUND = define_layer("ground")
+    local LAND = define_terrain("land")
+    define_domain("ground", { layer = GROUND, terrains = "any" })
 
-    define_field("creep", { layer = GROUND, decay = { cycle = 9 }, vision = "watched" })
-    define_field("power", { layer = GROUND, decay = "instant" })
-    define_field("blight", { layer = GROUND, decay = "never" })
+    define_field("creep", { terrains = LAND, decay = { cycle = 9 }, vision = "watched" })
+    define_field("power", { terrains = LAND, decay = "instant" })
+    define_field("blight", { terrains = LAND, decay = "never" })
 
     define_entity("hive", {
-        location = { occupation = GROUND, size = 2, solidity = "solid" },
+        location = { domain = "ground", size = 2, solidity = "solid" },
         pools = { health = { maximum = 100 } },
         rise = { time = 20, pools = { health = "initial" } },
         field_sources = {
@@ -5476,7 +5848,7 @@ const FIELDS: &str = r#"
     })
 
     define_entity("pylon", {
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         pools = { health = { maximum = 100 } },
         field_sources = {
             { field = "power", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
@@ -5487,7 +5859,7 @@ const FIELDS: &str = r#"
     })
 
     define_entity("gateway", {
-        location = { occupation = GROUND, size = 2, solidity = "solid" },
+        location = { domain = "ground", size = 2, solidity = "solid" },
         pools = { health = { maximum = 100 } },
         field_placement = {
             { requires = "power", of = "own", coverage = "any" },
@@ -5499,7 +5871,7 @@ const FIELDS: &str = r#"
     })
 
     define_entity("zergling", {
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1 },
         pools = { health = { maximum = 20 } },
         field_effects = {
@@ -5526,9 +5898,11 @@ fn attacker_with(block: &str) -> String {
     format!(
         r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", {{ layer = GROUND, terrains = "any" }})
 
         define_entity("mortar", {{
-            location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
+            location = {{ domain = "ground", size = 1, solidity = "solid" }},
             stats = {{ damage = 12, attack_range = 6, attack_period = 10, damage_point = 4 }},
             attack = {{ targets = GROUND, {block} }},
         }})
@@ -5540,12 +5914,14 @@ fn attacker_with(block: &str) -> String {
 fn morph_transitions_round_trip() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
         define_tag("winged")
         define_entity_stat("morph_time", 1)
 
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5", morph_time = 20 },
             pools = { health = { maximum = 40 }, energy = { maximum = 50 } },
             tags = { "winged" },
@@ -5565,16 +5941,16 @@ fn morph_transitions_round_trip() {
             },
         })
         define_entity("flier", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             pools = { health = { maximum = 40 } },
         })
         define_entity("chrysalis", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 60 } },
         })
         define_entity("statue", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
         })
     "#;
@@ -5625,8 +6001,10 @@ fn morph_transitions_round_trip() {
 fn unknown_morph_placement_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "hover", cancel = "committed" },
@@ -5646,8 +6024,10 @@ fn unknown_morph_placement_errors() {
 fn unknown_morph_cancel_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "maybe" },
@@ -5667,8 +6047,10 @@ fn unknown_morph_cancel_errors() {
 fn morph_time_of_wrong_shape_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = "fast", placement = "reserve", cancel = "committed" },
@@ -5688,8 +6070,10 @@ fn morph_time_of_wrong_shape_errors() {
 fn unknown_morph_time_stat_errors() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = { stat = "bogus" }, placement = "reserve", cancel = "committed" },
@@ -5709,6 +6093,8 @@ fn unknown_morph_time_stat_errors() {
 fn parses_turret_and_its_mount() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_turret("cannon", {
             targets = GROUND,
@@ -5716,7 +6102,7 @@ fn parses_turret_and_its_mount() {
         })
 
         define_entity("wagon", {
-            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
             stats = { speed = "0.3", radius = "1", weight = "2",
                 turn_rate = 30, pivot_rate = 30, aim_rate = 30,
                 damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
@@ -5731,14 +6117,19 @@ fn parses_turret_and_its_mount() {
     assert_eq!(
         registry.turret_def(cannon),
         &TurretDef::new(
-            Weapon::new(LayerId::new(1), Delivery::Instant, None, Slain::Remains),
+            Weapon::new(utils::GROUND, Delivery::Instant, None, Slain::Remains),
             TurretStats::default(),
             WeaponConduct::OnTheMove,
         )
     );
 
     let expected = EntityTypeDef::new("wagon")
-        .with_location(LayerId::new(1), CellSize::new(2, 2), Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::new(2, 2),
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_movement(
             FixedU64::from_str("0.3").unwrap(),
             FixedU64::from_str("1").unwrap(),
@@ -5766,6 +6157,8 @@ fn parses_turret_and_its_mount() {
 fn parses_turret_reading_its_own_stats() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("flak_damage", 0)
 
         define_turret("flak", {
@@ -5774,7 +6167,7 @@ fn parses_turret_reading_its_own_stats() {
         })
 
         define_entity("keep", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = { flak_damage = 3,
                 damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
             },
@@ -5802,6 +6195,8 @@ fn parses_turret_reading_its_own_stats() {
 fn rejects_unknown_weapon_conduct() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_turret("gun", { targets = GROUND, conduct = "whenever" })
     "#;
@@ -5818,9 +6213,11 @@ fn rejects_unknown_weapon_conduct() {
 fn rejects_mount_of_undefined_turret() {
     let source = r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
 
         define_entity("wagon", {
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = {
                 damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
             },
@@ -5855,6 +6252,8 @@ fn casting_error(cast: &str) -> ScriptError {
     let source = format!(
         r#"
         define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", {{ layer = 1, terrains = "any" }})
         define_skill("trip", {{
             cooldown = 1,
             caster = "entity",
@@ -5874,6 +6273,8 @@ fn skill_error(effect: &str) -> ScriptError {
     let source = format!(
         r#"
         define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", {{ layer = 1, terrains = "any" }})
         define_tag("hall")
         define_skill("trip", {{ cooldown = 1, caster = "entity", effect = {effect} }})
         "#
@@ -5890,6 +6291,8 @@ fn relocation_error(journey: &str) -> ScriptError {
     let source = format!(
         r#"
         define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", {{ layer = 1, terrains = "any" }})
         define_skill("trip", {{
             cooldown = 1,
             caster = "entity",
@@ -5922,6 +6325,8 @@ fn gateway_content(tunnel: &str, gateway: &str, stats: &str) -> String {
     format!(
         r#"
         local GROUND = define_layer("ground")
+        local LAND = define_terrain("land")
+        define_domain("ground", {{ layer = GROUND, terrains = "any" }})
         define_tag("ground")
         define_network("warren", {{
             carries = {{ tags = {{ "ground" }} }}, boarding = "own", capacity = 40, fate = "destroy",
@@ -5929,7 +6334,7 @@ fn gateway_content(tunnel: &str, gateway: &str, stats: &str) -> String {
         define_tunnel("tunnel", {{ {tunnel} }})
 
         define_entity("burrow", {{
-            location = {{ occupation = GROUND, size = 1, solidity = "solid" }},
+            location = {{ domain = "ground", size = 1, solidity = "solid" }},
             stats = {{ {stats} }},
             pools = {{ health = {{ maximum = 100 }} }},
             train_time = 10,

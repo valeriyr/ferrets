@@ -57,8 +57,7 @@ pub struct MapData {
     /// Terrain palette: the registered terrain names the cells reference.
     terrains: Vec<String>,
     /// Per-cell terrain as indices into `terrains`, row-major,
-    /// `width × height` entries. Empty means the map declares no terrain and
-    /// every cell is passable on every layer.
+    /// `width × height` entries.
     terrain_cells: Vec<u8>,
     /// The seats the map declares, indexed by slot id.
     slots: Vec<MapSlot>,
@@ -67,11 +66,17 @@ pub struct MapData {
 }
 
 impl MapData {
-    /// Creates an empty `width × height` map: no terrain declared (every cell
-    /// passable on every layer), no seats, no placements.
+    /// Creates a `width × height` map with every cell of `terrain`, no seats
+    /// and no placements.
     ///
     /// Panics if a dimension is zero.
-    pub fn new(name: impl Into<String>, projection: Projection, width: u32, height: u32) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        projection: Projection,
+        width: u32,
+        height: u32,
+        terrain: impl Into<String>,
+    ) -> Self {
         assert!(
             width > 0 && height > 0,
             "map dimensions must be greater than 0"
@@ -82,8 +87,8 @@ impl MapData {
             movement_model: MovementModel::default(),
             width,
             height,
-            terrains: Vec::new(),
-            terrain_cells: Vec::new(),
+            terrains: vec![terrain.into()],
+            terrain_cells: vec![0; width as usize * height as usize],
             slots: Vec::new(),
             placements: Vec::new(),
         }
@@ -133,8 +138,6 @@ impl MapData {
 
     /// Returns the per-cell terrain as indices into
     /// [`terrains`](Self::terrains), row-major, `width × height` entries.
-    /// Empty means the map declares no terrain and every cell is passable on
-    /// every layer.
     pub fn terrain_cells(&self) -> &[u8] {
         &self.terrain_cells
     }
@@ -171,24 +174,10 @@ impl MapData {
         &self.placements
     }
 
-    /// Declares the map's terrain by setting every cell to `terrain`,
-    /// replacing whatever terrain was declared before. Overwrite individual
-    /// cells afterwards with [`set_terrain`](Self::set_terrain).
-    pub fn fill_terrain(&mut self, terrain: impl Into<String>) {
-        self.terrains = vec![terrain.into()];
-        self.terrain_cells = vec![0; self.width as usize * self.height as usize];
-    }
-
     /// Sets the terrain of one cell, adding the name to the palette if new.
     ///
-    /// Panics if no terrain has been declared (see
-    /// [`fill_terrain`](Self::fill_terrain)), the cell is out of bounds, or
-    /// the palette overflows.
+    /// Panics if the cell is out of bounds, or the palette overflows.
     pub fn set_terrain(&mut self, cell: (u32, u32), terrain: &str) {
-        assert!(
-            !self.terrain_cells.is_empty(),
-            "declare the map's terrain with fill_terrain before setting cells"
-        );
         let (x, y) = cell;
         assert!(
             x < self.width && y < self.height,

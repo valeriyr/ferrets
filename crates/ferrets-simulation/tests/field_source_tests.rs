@@ -2,11 +2,9 @@
 
 use ferrets_content::{
     detection::Detection,
-    field::{
-        Emission, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldLayer, FieldSourceDef,
-        FieldVision,
-    },
+    field::{Emission, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef, FieldVision},
     registry::ContentRegistry,
+    terrains::Terrains,
 };
 use ferrets_simulation::components::field_source::{
     Emitted, FieldSourceState, FieldSourcesComponent,
@@ -107,14 +105,13 @@ fn gradual_growth(cycle: u32, initial_radius: u32) -> FieldGrowth {
     }
 }
 
-/// The handle of one registered field over a ground layer.
+/// The handle of one registered field lying on every terrain.
 fn creep() -> FieldId {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
     registry.register_field(
         "creep",
         FieldDef::new(
-            FieldLayer::Passable(ground.into()),
+            Terrains::Any,
             FieldDecay::Never,
             FieldVision::Dark,
             Detection::Blind,

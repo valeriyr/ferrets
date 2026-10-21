@@ -347,7 +347,7 @@ fn bytes_of_clamps_channels_past_full() {
 
 #[test]
 fn composition_reads_terrain_per_cell() {
-    // Revealed, the picture is the map: the central lake and the grass around
+    // Revealed, the picture is the map: the central lake and the land around
     // it must not come out the same color, or the terrain layer is not being
     // read per cell.
     let mut app = utils::view_app();
@@ -360,7 +360,7 @@ fn composition_reads_terrain_per_cell() {
 #[test]
 fn composition_hides_ground_never_seen() {
     // Nothing is placed, so nothing has ever been seen: every cell reads as the
-    // same void, lake and grass alike.
+    // same void, lake and land alike.
     let mut app = utils::view_app();
     utils::compose_minimap(&mut app);
 

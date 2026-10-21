@@ -10,8 +10,8 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        Emission, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldLayer, FieldPlacement,
-        FieldSourceDef, FieldVision,
+        Emission, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldPlacement, FieldSourceDef,
+        FieldVision,
     },
     landing::Landing,
     location::Solidity,
@@ -21,6 +21,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     requirement::Requirement,
     resource::DepletionPolicy,
+    terrains::Terrains,
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
@@ -741,7 +742,7 @@ fn app() -> App {
         let power = registry.register_field(
             "power",
             FieldDef::new(
-                FieldLayer::Passable(utils::GROUND.into()),
+                Terrains::Only(utils::LAND.into()),
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -799,7 +800,7 @@ fn app() -> App {
         let mud = registry.register_field(
             "mud",
             FieldDef::new(
-                FieldLayer::Passable(utils::GROUND.into()),
+                Terrains::Only(utils::LAND.into()),
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -824,7 +825,12 @@ fn app() -> App {
         // A spring holds no ground of its own; a well is raised over one.
         registry.register(
             EntityTypeDef::new("spring")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Passable,
+                    utils::GROUND,
+                )
                 .with_resource_source("gold", DepletionPolicy::Destroy),
         );
         registry.register(
@@ -845,13 +851,13 @@ fn app() -> App {
         );
         // A lookout sees two cells about itself.
         registry.register(
-            utils::walker("lookout", utils::GROUND)
+            utils::walker("lookout", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(20))
                 .with_sight_range(2),
         );
         // A lancer rises for longer than its warper cools down for it.
         registry.register(
-            utils::walker("lancer", utils::GROUND)
+            utils::walker("lancer", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_price(price::from([("gold", 50)]))
@@ -863,7 +869,7 @@ fn app() -> App {
                 .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ONE),
         );
         registry.register(
-            utils::walker("mason", utils::GROUND)
+            utils::walker("mason", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(
@@ -883,7 +889,7 @@ fn app() -> App {
 /// A one-cell walker named `name` like a blade: costing `gold` and one supply,
 /// trained in `TRAIN_TIME` and rising over `RISE_TIME`.
 fn blade_like(name: &str, gold: u32) -> EntityTypeDef {
-    utils::walker(name, utils::GROUND)
+    utils::walker(name, utils::GROUND_DOMAIN)
         .with_pool(Pool::health(20))
         .with_dying(1, [])
         .with_price(price::from([("gold", gold)]))

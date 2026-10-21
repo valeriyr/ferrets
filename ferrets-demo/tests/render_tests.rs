@@ -27,6 +27,7 @@ use ferrets_demo::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing};
+use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_simulation::{
     beside::{Beside, Lean},
     command::SkillTarget,
@@ -660,6 +661,45 @@ fn rival_caster_in_fog_casting_at_cell_pulses_nothing() {
 }
 
 //
+// ─── Flight ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn body_in_air_domain_is_drawn_lifted_whatever_else_it_occupies() {
+    let mut app = utils::view_app();
+    app.world_mut().insert_resource(render::Smoothing(false));
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        let (ground, air) = (
+            registry.layer("ground").expect("the demo declares ground"),
+            registry.layer("air").expect("the demo declares air"),
+        );
+        let domain = registry
+            .domain("air")
+            .expect("the demo declares the air domain");
+        registry.register(
+            EntityTypeDef::new("skyhook")
+                .with_location(
+                    domain,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    LayerMask::from(ground) | air,
+                )
+                .with_pool(Pool::health(40)),
+        );
+    }
+    let skyhook = spawn_at(&mut app, "skyhook", 20, 20);
+    draw(&mut app);
+
+    // A one-cell body at (20, 20) is centered at −20.5 × 32 = −656 pixels
+    // down the screen and lifted 32 × 0.9 = 28.8 pixels; its depth is a
+    // sprite's 1.0 plus the air layer's 1.0.
+    let drawn = app.world().get::<Transform>(skyhook).expect("a drawn body");
+    assert_eq!(drawn.translation.y, -20.5 * 32.0 + 32.0 * 0.9);
+    assert_eq!(drawn.translation.z, 1.0 + 1.0);
+}
+
+//
 // ─── Glimpses and crews ───────────────────────────────────────────────────────
 //
 
@@ -943,9 +983,14 @@ fn spawn_owned_at(app: &mut App, type_name: &str, x: u32, y: u32, owner: PlayerI
 /// demo's war wagon, so a one-cell body with a centred mount keeps the geometry
 /// here trivial whatever the demo rebalances.
 fn register_gun_wagon(app: &mut App) {
-    let ground = {
+    let (ground, domain) = {
         let registry = app.world().resource::<ContentRegistry>();
-        registry.layer("ground").expect("the demo declares ground")
+        (
+            registry.layer("ground").expect("the demo declares ground"),
+            registry
+                .domain("ground")
+                .expect("the demo declares the ground domain"),
+        )
     };
     let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
     let gun = registry.register_turret(
@@ -958,7 +1003,7 @@ fn register_gun_wagon(app: &mut App) {
     );
     registry.register(
         EntityTypeDef::new("gun_wagon")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(domain, CellSize::ONE, Solidity::Solid, ground)
             .with_movement(
                 FixedU64::from_num(0.3),
                 FixedU64::from_num(0.5),

@@ -26,8 +26,6 @@ use ferrets_simulation::{
     simulation_id::SimulationId,
 };
 
-use utils::{GROUND, GROUND_LAYER, NOMINAL_MILLIS};
-
 #[test]
 fn spawn_command_on_one_peer_executes_on_both() {
     let (a, b) = LoopbackTransport::pair();
@@ -2136,7 +2134,6 @@ fn two_player_app() -> App {
     let mut app = utils::make_app(utils::human_slots(2));
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
         registry.register(utils::harness_soldier());
         registry.register(utils::harness_base());
         registry.validate();
@@ -2253,7 +2250,7 @@ const EXPENSIVE_TICK: FixedU64 = FixedU64::lit("65");
 fn capacity_of(exec_millis: FixedU64) -> GameSpeed {
     GameSpeed::new(ferrets_bevy_plugin::sustainable_factor(
         exec_millis,
-        NOMINAL_MILLIS,
+        utils::NOMINAL_MILLIS,
     ))
 }
 
@@ -2292,7 +2289,6 @@ fn combat_victory_app() -> App {
     let mut app = utils::make_app(utils::human_slots(2));
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
         registry.register(utils::harness_soldier());
         registry.register(utils::harness_base());
         registry.validate();
@@ -2312,7 +2308,6 @@ fn ffa_elimination_app() -> App {
     let mut app = utils::make_app(utils::human_slots(3));
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
         registry.register(utils::harness_soldier());
         registry.register(utils::harness_base());
         registry.validate();

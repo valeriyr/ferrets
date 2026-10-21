@@ -16,7 +16,7 @@ use ferrets_content::{
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::FieldSourceDef,
     gateway::{GatewayDef, Joins},
-    location::LocationDef,
+    location::{LocationDef, Solidity},
     morph::MorphReason,
     pool::PoolInitial,
     pool_def::PoolId,
@@ -28,6 +28,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
+use ferrets_pathfinder::mover_shape::MoverShape;
 use ferrets_physics::body;
 
 use crate::{
@@ -524,7 +525,8 @@ pub(crate) fn spawn_bequest(
     let cells = world.resource::<Map>().find_placements_near(
         around,
         around_size,
-        &location_def,
+        entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def),
+        location_def.solidity(),
         count as usize,
     );
 
@@ -598,7 +600,7 @@ fn spawn_remains(
     }
     world
         .resource_mut::<Map>()
-        .place_entity(&location, &location_def, class);
+        .place_if_some(entity_def::grid_mark_of(&location, location_def, class));
 
     let id = world.resource_mut::<SimulationIds>().mint();
     let mut queue = OrderQueueComponent::default();
@@ -920,7 +922,7 @@ pub(crate) fn lift_footprint(world: &mut World, entity: Entity) {
         let location = world
             .get::<LocationComponent>(entity)
             .expect("only entities with LocationComponent hold a footprint");
-        map.displace_entity(location, &location_def, class);
+        map.displace_if_some(entity_def::grid_mark_of(location, location_def, class));
     });
 }
 
@@ -939,7 +941,7 @@ pub(crate) fn restore_footprint(world: &mut World, entity: Entity) {
         let location = world
             .get::<LocationComponent>(entity)
             .expect("only entities with LocationComponent hold a footprint");
-        map.place_entity(location, &location_def, class);
+        map.place_if_some(entity_def::grid_mark_of(location, location_def, class));
     });
 }
 
@@ -965,7 +967,8 @@ pub fn place_back_beside(world: &mut World, entity: Entity, beside: Beside, lean
     let location_def = entity_def::of(world, entity)
         .location
         .expect("only entities with LocationDef can be placed back");
-    match cell_back_beside(world, entity, beside, lean, &location_def) {
+    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
+    match cell_back_beside(world, entity, beside, lean, shape, location_def.solidity()) {
         Some(cell) => {
             place_back_at(world, entity, cell, &location_def);
             SetDown::Placed
@@ -1054,9 +1057,9 @@ pub(crate) fn place_back_beside_admitted(
 }
 
 /// The cell [`place_back_beside`] would stand `entity` on, or `None` when
-/// nothing within the search radius takes a footprint of `fits`: an attached
-/// entity searches around the cell of the berth it sits at; any other beside
-/// `beside`, the cells `lean` names first.
+/// nothing within the search radius takes a footprint of `shape` and
+/// `solidity`: an attached entity searches around the cell of the berth it
+/// sits at; any other beside `beside`, the cells `lean` names first.
 ///
 /// Panics for a `Lean::WentIn` on an entity that is not hidden.
 pub(crate) fn cell_back_beside(
@@ -1064,25 +1067,27 @@ pub(crate) fn cell_back_beside(
     entity: Entity,
     beside: Beside,
     lean: Lean,
-    fits: &LocationDef,
+    shape: MoverShape,
+    solidity: Solidity,
 ) -> Option<CellPos> {
     let map = world.resource::<Map>();
     if entity_def::attached(world, entity) {
         let berth = body::anchor(entity_def::position(world, entity));
-        return map.find_placement_near(berth, CellSize::new(1, 1), fits);
+        return map.find_placement_near(berth, CellSize::new(1, 1), shape, solidity);
     }
     let around = entity_def::beside_rect(world, entity, beside);
     match lean {
         Lean::WentIn => map.find_placement_near_toward(
             around.origin,
             around.size,
-            fits,
+            shape,
+            solidity,
             entity_def::went_in_rect(world, entity),
         ),
         Lean::Toward(toward) => {
-            map.find_placement_near_toward(around.origin, around.size, fits, toward)
+            map.find_placement_near_toward(around.origin, around.size, shape, solidity, toward)
         }
-        Lean::Nothing => map.find_placement_near(around.origin, around.size, fits),
+        Lean::Nothing => map.find_placement_near(around.origin, around.size, shape, solidity),
     }
 }
 
@@ -1135,7 +1140,8 @@ pub(crate) fn stand_or_retry(world: &mut World, entity: Entity, beside: Beside, 
     let location_def = entity_def::of(world, entity)
         .location
         .expect("only entities with LocationDef can stand");
-    match cell_back_beside(world, entity, beside, lean, &location_def) {
+    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
+    match cell_back_beside(world, entity, beside, lean, shape, location_def.solidity()) {
         Some(cell) => place_back_at(world, entity, cell, &location_def),
         None => wait_off_map(world, entity, beside, lean),
     }
@@ -1328,7 +1334,7 @@ fn stand_at(
             .get_mut::<LocationComponent>(entity)
             .expect("an entity on the map has a location");
         location.position = FixedUVec2::from(cell);
-        map.place_entity(&location, location_def, class);
+        map.place_if_some(entity_def::grid_mark_of(&location, *location_def, class));
     });
 }
 

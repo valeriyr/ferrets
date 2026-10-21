@@ -7,20 +7,33 @@ use bevy::prelude::*;
 use ferrets_content::registry::ContentRegistry;
 use ferrets_script::{content, engine::lua::LuaEngine};
 
-/// The demo's content, as a Lua script. It declares the ground, water and air
-/// navigation layers (named by [`crate::map::GROUND`], [`crate::map::WATER`]
-/// and [`crate::map::AIR`]) and a terrain for each surface. Fractional stats
-/// are decimal strings so they parse straight to fixed-point (no `f64`).
+/// The demo's content, as a Lua script. It declares the ground and air
+/// navigation layers (named by [`crate::map::GROUND`] and
+/// [`crate::map::AIR`]), the terrains of the map's ground and the domains
+/// over them. Fractional stats are decimal strings so they parse
+/// straight to fixed-point (no `f64`).
 pub const CONTENT: &str = r#"
     local GROUND = define_layer("ground")
-    local WATER = define_layer("water")
     local AIR = define_layer("air")
 
-    -- Every surface is flyable, so the air layer is open where the ground and
-    -- water layers are not: a flier crosses the lake and passes over whatever
-    -- stands on the shore, because nothing on those layers claims this one.
-    define_terrain("grass", GROUND | AIR)
-    define_terrain("water", WATER | AIR)
+    -- The ground is land, shallow water at the lake's edge, and deep water.
+    local LAND = define_terrain("land")
+    local SHALLOW_WATER = define_terrain("shallow_water")
+    local DEEP_WATER = define_terrain("deep_water")
+
+    -- Everything on the ground is in one layer and collides with everything
+    -- else there; the terrains are what tell a ship from a soldier. Soldiers
+    -- and what they leave wade shallow water; buildings, mines and groves
+    -- stand on land; the naga swims; ships keep to the water; the sea fortress
+    -- needs deep water. A flier is over every terrain, and passes over
+    -- whatever stands on the ground, because nothing there occupies the air
+    -- but the fortress.
+    define_domain("land", { layer = GROUND, terrains = LAND })
+    define_domain("ground", { layer = GROUND, terrains = LAND | SHALLOW_WATER })
+    define_domain("amphibious", { layer = GROUND, terrains = LAND | SHALLOW_WATER | DEEP_WATER })
+    define_domain("naval", { layer = GROUND, terrains = SHALLOW_WATER | DEEP_WATER })
+    define_domain("deep_naval", { layer = GROUND, terrains = DEEP_WATER })
+    define_domain("air", { layer = AIR, terrains = "any" })
 
     define_race("human")
     define_race("orc")
@@ -40,22 +53,22 @@ pub const CONTENT: &str = r#"
     -- Creep covers the ground and recedes ring by ring, half a second a ring,
     -- once nothing sustains it, and whoever spreads it sees every cell of it;
     -- power is there while its pylon stands and gone the tick it falls.
-    define_field("creep", { layer = GROUND, decay = { cycle = 10 }, vision = "watched" })
-    define_field("power", { layer = GROUND, decay = "instant" })
+    define_field("creep", { terrains = LAND, decay = { cycle = 10 }, vision = "watched" })
+    define_field("power", { terrains = LAND, decay = "instant" })
     -- Blight is the ground the undead build on: it spreads from every
     -- structure they raise, heals what stands on it, and recedes slowly once
     -- nothing sustains it. Unlike creep it watches nothing — the dead see by
     -- their own eyes.
-    define_field("blight", { layer = GROUND, decay = { cycle = 40 } })
+    define_field("blight", { terrains = LAND, decay = { cycle = 40 } })
     -- True sight is what a detector projects. It grants no sight of its own —
     -- a turret sees by its own eyes — but whatever hides on the ground or in
-    -- the air under it is seen by whoever covers it. Lying anywhere, it
-    -- reaches over water, so a cloaked flier gets no shelter from a lake.
-    define_field("true_sight", { layer = "anywhere", decay = "instant", detection = GROUND | AIR })
+    -- the air under it is seen by whoever covers it. Lying on every terrain,
+    -- it reaches over the lake, so a cloaked flier gets no shelter there.
+    define_field("true_sight", { terrains = "any", decay = "instant", detection = GROUND | AIR })
     -- The veil an arbiter casts over the ground and the air it flies over:
     -- gone the tick it moves on, seeing nothing, detecting nothing; what it
     -- does for those inside is theirs to declare.
-    define_field("veil", { layer = "anywhere", decay = "instant" })
+    define_field("veil", { terrains = "any", decay = "instant" })
 
     -- What a structure that will not stand on creep declares, and what the
     -- elves add to it: neither the swarm's ground nor the undead's.
@@ -90,7 +103,7 @@ pub const CONTENT: &str = r#"
     -- tag is the engine's own, like "building": what wears it lies where it is
     -- left, answers to nobody, and is gone when its lifetime runs out.
     define_entity("corpse", {
-        location = { occupation = GROUND, size = 1, solidity = "passable" },
+        location = { domain = "ground", size = 1, solidity = "passable" },
         tags = { "remains" },
         stats = { lifetime = 600 },
     })
@@ -222,10 +235,10 @@ pub const CONTENT: &str = r#"
         effect = { apply_buff = "war_drums" },
     })
 
-    -- The lake boss: a raceless water fortress spawning free ships. Ships are
+    -- The lake boss: a raceless sea fortress spawning free ships. Ships are
     -- ranged so they shell shore targets; the fortress is the boss's building.
     define_entity("ship", {
-        location = { occupation = WATER, size = 1, solidity = "solid" },
+        location = { domain = "naval", size = 1, solidity = "solid" },
         stats = {
             speed = "0.25", turn_rate = 6, pivot_rate = 9, radius = "0.5", weight = 6,
             damage = 12, attack_range = 5, acquire_range = 8, attack_period = 10, damage_point = 4,
@@ -237,15 +250,16 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 80 } },
         dying = { time = 2 },
         -- Shore bombardment: a slow ball, so shots at a moving target are wasted.
-        attack = { targets = GROUND | WATER | AIR, projectile = "cannonball" },
+        attack = { targets = GROUND | AIR, projectile = "cannonball" },
         train_time = 100,
     })
-    -- The fortress is tall enough to be in the way of what flies: it holds the
-    -- water layer under it and the air layer over it at once, so fliers must go
-    -- around a keep that ships must also go around. It is the only thing on the
-    -- map that closes the air, which is what gives the air layer any shape at
-    -- all. Occupying the air also makes it a legal target for anti-air, since
-    -- targetability follows occupation unless a type says otherwise.
+    -- The fortress is tall enough to be in the way of what flies: it is in
+    -- the ground layer over deep water and occupies the air over it too, so fliers
+    -- must go around a keep that ships must also go around. It is the only
+    -- thing on the map that closes the air, which is what gives the air layer
+    -- any shape at all. Occupying the air also makes it a legal target for
+    -- anti-air, since a body is targetable where it occupies unless its type
+    -- says otherwise.
     -- Four guns, one at each corner, which is what a building has instead of
     -- turning: the keep stands square to the map wherever it was put and only the
     -- guns come about — at sixty degrees a second, so bringing one onto something
@@ -260,11 +274,11 @@ pub const CONTENT: &str = r#"
     -- and aimed at a place rather than a body, so one laboriously-aimed round is a
     -- round a moving target can walk out from under.
     define_turret("keep_gun", {
-        targets = GROUND | WATER | AIR,
+        targets = GROUND | AIR,
         projectile = "shell",
     })
     define_entity("sea_fortress", {
-        location = { occupation = WATER | AIR, size = { 5, 5 }, solidity = "solid" },
+        location = { domain = "deep_naval", size = { 5, 5 }, solidity = "solid", occupies = GROUND | AIR },
         stats = { sight_range = 16, supply_provided = 5,
             damage = 10, attack_range = 12, acquire_range = 14, attack_period = 30,
             damage_point = 12, aim_rate = 3, attack_arc = 60,
@@ -289,13 +303,13 @@ pub const CONTENT: &str = r#"
 
     -- Neutral resource sources.
     define_entity("gold_mine", {
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         resource_source = { kind = "gold", depletion = "persist" },
     })
     -- A tree seats one worker in its canopy; a gold mine seats nobody, so a
     -- worker that sits on its source needs something built over the mine.
     define_entity("tree", {
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "land", size = 1, solidity = "solid" },
         resource_source = { kind = "wood", depletion = "destroy" },
         berths = { canopy = { points = { { "0.5", "0.5" } } } },
     })
@@ -331,7 +345,7 @@ pub const CONTENT: &str = r#"
     local function worker(name, race, builds, work)
         define_entity(name, {
             race = race,
-            location = { occupation = GROUND, size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, solidity = "solid" },
             stats = {
                 -- The baseline weight everything else is authored against: a
                 -- worker is what a crowd is made of, and what gives way in one.
@@ -377,7 +391,7 @@ pub const CONTENT: &str = r#"
     local function main_hall(name, race, trains, berths)
         define_entity(name, {
             race = race,
-            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
             -- Enough starting headroom for the first few units; farms carry the
             -- army beyond it. Sight reaches the mine placed by the base, so
             -- the economy never depends on a lucky scout.
@@ -398,7 +412,7 @@ pub const CONTENT: &str = r#"
     local function farm(name, race)
         define_entity(name, {
             race = race,
-            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
             stats = { sight_range = 3, supply_provided = 6 },
             pools = { health = { maximum = 200 } },
             dying = { time = 2 },
@@ -411,7 +425,7 @@ pub const CONTENT: &str = r#"
     local function camp(name, race, trains, researches, berths)
         define_entity(name, {
             race = race,
-            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
             stats = { sight_range = 6 },
             pools = { health = { maximum = 500 } },
             dying = { time = 2 },
@@ -445,7 +459,7 @@ pub const CONTENT: &str = r#"
     -- they do, whoever fits through the ruins walks away.
     define_entity("bunker", {
         race = "human",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 7,
             cargo_capacity = 4,
             -- Boarding steps over the threshold; unloading spills everyone out
@@ -478,7 +492,7 @@ pub const CONTENT: &str = r#"
     -- the iron weapons and vitality drill upgrades.
     define_entity("blacksmith", {
         race = "human",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 5 },
         pools = { health = { maximum = 350 } },
         dying = { time = 2 },
@@ -489,7 +503,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("archer", {
         race = "human",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 7, damage_point = 3,
@@ -512,7 +526,7 @@ pub const CONTENT: &str = r#"
         bonus_damage_vs = { grunt = 4 },
         attack = {
             -- The human answer to everything that moves, whatever layer it moves on.
-            targets = GROUND | WATER | AIR,
+            targets = GROUND | AIR,
             -- A fast arrow: visibly in flight at range 4, but rarely wasted.
             projectile = "arrow",
         },
@@ -530,7 +544,7 @@ pub const CONTENT: &str = r#"
     -- and only one medic may work a patient at a time.
     define_entity("medic", {
         race = "human",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 9,
             -- A flat point of health per tick, whatever the patient is — a unit's
@@ -566,7 +580,7 @@ pub const CONTENT: &str = r#"
     -- where the shot was aimed rather than on whatever it was tracking.
     define_entity("mortar", {
         race = "human",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             -- Tube, carriage and crew: heavier than the infantry it walks with,
             -- though nothing like the grunt that can shoulder it aside.
@@ -586,7 +600,7 @@ pub const CONTENT: &str = r#"
             -- Siege fires at the ground, so it must not take aim at what flies: the
             -- blast below already spares fliers, and a mortar allowed to *target*
             -- one would walk into range and drop shells that could never damage it.
-            targets = GROUND | WATER,
+            targets = GROUND,
             -- The shell crosses one cell every five ticks, so a target that keeps
             -- moving takes the direct hit while the burst lands behind it.
             projectile = "shell",
@@ -620,14 +634,14 @@ pub const CONTENT: &str = r#"
     define_entity_stat("morph_time", 1)
 
     -- Each form names the other, which is why the pair is authored as two types:
-    -- everything that differs between them — layer, speed, what reaches them — is
+    -- everything that differs between them — domain, speed, what reaches them — is
     -- a type property, and the change is just an edge between the two. Only the
     -- grounded form is trainable; the aloft one exists solely as the other end
     -- of the change.
-    local function gryphon(name, occupation, targetable, speed, fate, morphs, trainable)
+    local function gryphon(name, domain, targetable, speed, fate, morphs, trainable)
         define_entity(name, {
             race = "human",
-            location = { occupation = occupation, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = domain, size = { 2, 2 }, solidity = "solid" },
             targetable = targetable,
             morphs = morphs,
             stats = {
@@ -665,8 +679,8 @@ pub const CONTENT: &str = r#"
         })
     end
     -- Grounded, the beast stands tall enough to be shot out of the air — the
-    -- case occupation alone cannot express, since holding the air layer would
-    -- also wall the sky off. Aloft it is answerable where it lives and nowhere
+    -- case where it is attacked differs from where it stands, since occupying
+    -- the air would also wall the sky off. Aloft it is answerable where it lives and nowhere
     -- else: taking off is exactly what shakes an axe, which is the whole reason
     -- to climb.
     --
@@ -680,14 +694,14 @@ pub const CONTENT: &str = r#"
     -- spills its archer alive beside the wreck, but one shot out of the sky
     -- takes saddle and rider down together — which is the risk that prices
     -- the ride.
-    gryphon("gryphon", GROUND, GROUND | AIR, "0.3", "eject", {
+    gryphon("gryphon", "ground", GROUND | AIR, "0.3", "eject", {
         { into = "gryphon_aloft", land_pool_carry = { health = "clamp", energy = "clamp" },
           time = { stat = "morph_time" },
           placement = "revalidate",
           cancel = "committed",
           cost = { energy = "20" } },
     }, true)
-    gryphon("gryphon_aloft", AIR, AIR, "0.45", "destroy", {
+    gryphon("gryphon_aloft", "air", AIR, "0.45", "destroy", {
         -- A plain tick count, where the take-off reads its stat: landing pace
         -- is nothing anyone would research.
         { into = "gryphon", land_pool_carry = { health = "clamp", energy = "clamp" },
@@ -702,7 +716,7 @@ pub const CONTENT: &str = r#"
     -- footprint, radius one, which is the widest a 2x2 may carry.
     define_entity("zeppelin", {
         race = "orc",
-        location = { occupation = AIR, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "air", size = { 2, 2 }, solidity = "solid" },
         stats = {
             -- A gas envelope the size of a building: the heaviest thing that
             -- flies, so a gryphon meeting one aloft is the one that gives way.
@@ -749,7 +763,7 @@ pub const CONTENT: &str = r#"
     -- gang of peons can be watched crawling round a long job.
     define_entity("big_rock", {
         race = "orc",
-        location = { occupation = GROUND, size = { 4, 4 }, solidity = "solid" },
+        location = { domain = "land", size = { 4, 4 }, solidity = "solid" },
         stats = { sight_range = 2 },
         pools = { health = { maximum = 2000 } },
         dying = { time = 2 },
@@ -766,7 +780,7 @@ pub const CONTENT: &str = r#"
     -- by exact type name.)
     define_entity("pig_farm", {
         race = "orc",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 3, supply_provided = 6,
             cargo_capacity = 4,
             -- A crawl space, not a door: one body a second each way.
@@ -789,8 +803,8 @@ pub const CONTENT: &str = r#"
     -- The orc watch tower: what it can be hit by and where it stands are
     -- different answers, like the grounded gryphon. It is rooted on the ground
     -- and blocks only the ground, so fliers pass over it freely — but it stands
-    -- tall enough to be shot out of the air, which `targetable` says and
-    -- `occupation` could not. Occupying the air instead would make it a wall
+    -- tall enough to be shot out of the air, which `targetable` says apart
+    -- from what it occupies. Occupying the air instead would make it a wall
     -- across the sky, which is the fortress's job, not a tower's.
     --
     -- The watch tower only watches: the farthest eyes on the orc side, the
@@ -799,7 +813,7 @@ pub const CONTENT: &str = r#"
     -- is the orc answer to fliers.
     define_entity("watch_tower", {
         race = "orc",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         targetable = GROUND | AIR,
         stats = {
             sight_range = 12,
@@ -829,7 +843,7 @@ pub const CONTENT: &str = r#"
     -- through the change above.
     define_entity("guard_tower", {
         race = "orc",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         targetable = GROUND | AIR,
         stats = {
             damage = 14, attack_range = 7, acquire_range = 9, attack_period = 12, damage_point = 5,
@@ -837,7 +851,7 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 350 } },
         dying = { time = 2 },
-        attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
+        attack = { targets = GROUND | AIR, projectile = "arrow" },
         tags = { "building" },
         -- The watch tower's price and the upgrade's on top of it, over the
         -- raising and the upgrading together: what the tower cost to have.
@@ -852,7 +866,7 @@ pub const CONTENT: &str = r#"
     -- infantry and hosts no research, and its own walls are thinner than one.
     define_entity("siege_works", {
         race = "orc",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 5 },
         pools = { health = { maximum = 400 } },
         dying = { time = 2 },
@@ -866,7 +880,7 @@ pub const CONTENT: &str = r#"
     })
 
     define_turret("siege_cannon", {
-        targets = GROUND | WATER,
+        targets = GROUND,
         projectile = "cannonball",
         conduct = "on_the_move",
         -- A cannonball leaves no body behind, as the mortar's shell does not.
@@ -892,7 +906,7 @@ pub const CONTENT: &str = r#"
         -- Two cells on a side, like the gryphon: the widest body a two-wide gap
         -- lets through, and a footprint that has to round a corner rather than
         -- slip past it.
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
         stats = {
             -- Slow, and heavy enough that a grunt walking into one gives way.
             -- Its body is the circle inscribed in that footprint, radius one.
@@ -940,7 +954,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("grunt", {
         race = "orc",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             -- Heavy melee in body as well as armor: four times a worker's
             -- weight on the same one-cell footprint, so a peon walking into a
@@ -958,9 +972,9 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 60, regen = "0.05" } },
         dying = FALLS,
         tags = { "biological" },
-        -- An axe reaches what stands on the ground or floats on the water and
+        -- An axe reaches what is in the ground layer, ships included, and
         -- nothing that flies.
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         -- Blood rite: the grunt buys the archer's frenzy with its own blood and
         -- a little gold — regeneration (above) walks the price off afterwards.
         skills = { "blood_rite" },
@@ -974,7 +988,7 @@ pub const CONTENT: &str = r#"
     -- pool. The heal takes a target, so casting is button-then-click.
     define_entity("shaman", {
         race = "orc",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
             sight_range = 8,
@@ -1021,7 +1035,7 @@ pub const CONTENT: &str = r#"
     -- to bury.
     define_entity("hatchling", {
         race = "swarm",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.32", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
             damage = 4, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 2,
@@ -1032,7 +1046,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 25 } },
         dying = { time = 1 },
         tags = { "biological" },
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         selection = { priority = 10 },
         field_effects = {
             { field = "creep", of = "anyone", coverage = "any", inside = { {
@@ -1073,7 +1087,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("hatchery", {
         race = "swarm",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 9, supply_provided = 10 },
         pools = { health = { maximum = 800 } },
         dying = { time = 2, leaves = BURSTS },
@@ -1099,7 +1113,7 @@ pub const CONTENT: &str = r#"
     -- larvae keep crawling its foot; it breeds none while it is worn.
     define_entity("hive_cocoon", {
         race = "swarm",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 9, supply_provided = 10 },
         pools = { health = { maximum = 800 } },
         dying = { time = 2, leaves = BURSTS },
@@ -1113,7 +1127,7 @@ pub const CONTENT: &str = r#"
     -- takes to grow.
     define_entity("hive", {
         race = "swarm",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 10, supply_provided = 10 },
         pools = { health = { maximum = 1000 } },
         dying = { time = 2, leaves = BURSTS },
@@ -1136,7 +1150,7 @@ pub const CONTENT: &str = r#"
     -- tick; a growth called off gives the larva back.
     define_entity("larva", {
         race = "swarm",
-        location = { occupation = GROUND, size = 1, solidity = "passable" },
+        location = { domain = "ground", size = 1, solidity = "passable" },
         stats = { armor = 10, sight_range = 1 },
         pools = { health = { maximum = 25 } },
         dying = { time = 1 },
@@ -1164,7 +1178,7 @@ pub const CONTENT: &str = r#"
     -- sees at all.
     define_entity("overlord", {
         race = "swarm",
-        location = { occupation = AIR, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "air", size = { 2, 2 }, solidity = "solid" },
         stats = {
             speed = "0.2", turn_rate = 4, pivot_rate = 6, pivot_angle = 90, radius = "1", weight = 6, armor = 1, sight_range = 8, supply_provided = 6,
         },
@@ -1180,7 +1194,7 @@ pub const CONTENT: &str = r#"
     -- the cell it sits on until it opens.
     define_entity("egg", {
         race = "swarm",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = { armor = 10, sight_range = 1 },
         pools = { health = { maximum = 200 } },
         dying = { time = 1 },
@@ -1198,7 +1212,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("drone", {
         race = "swarm",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
@@ -1221,7 +1235,7 @@ pub const CONTENT: &str = r#"
     -- barely sees past itself: the creep is what watches.
     define_entity("tumor", {
         race = "swarm",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "land", size = 1, solidity = "solid" },
         stats = { sight_range = 1 },
         pools = { health = { maximum = 50 } },
         dying = { time = 2 },
@@ -1236,7 +1250,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("spawning_pit", {
         race = "swarm",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 6 },
         pools = { health = { maximum = 500 } },
         dying = { time = 2, leaves = BURSTS },
@@ -1257,7 +1271,7 @@ pub const CONTENT: &str = r#"
     -- A burrow breaks ground on creep, and spreads a little of its own.
     define_entity("burrow", {
         race = "swarm",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 6, load_range = 1, load_period = 2, unload_range = 1, unload_period = 4 },
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
@@ -1286,7 +1300,7 @@ pub const CONTENT: &str = r#"
     -- called off. While it crawls, nobody comes out of it.
     define_entity("burrower", {
         race = "swarm",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
         stats = {
             speed = "0.15", turn_rate = 12, pivot_rate = 12, radius = "1", weight = 6,
             armor = 2,
@@ -1315,7 +1329,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("warren", {
         race = "swarm",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 7, load_range = 1, load_period = 2, unload_range = 1, unload_period = 4 },
         pools = { health = { maximum = 600 } },
         dying = { time = 2, leaves = BURSTS },
@@ -1337,7 +1351,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("tunnel", {
         race = "swarm",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 6, load_range = 1, load_period = 1, build_range = 40 },
         pools = { health = { maximum = 250 } },
         dying = { time = 2 },
@@ -1352,7 +1366,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("swarmling", {
         race = "swarm",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 5, attack_range = 1, acquire_range = 5, attack_period = 4, damage_point = 2,
@@ -1363,7 +1377,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 35, regen = "0.05" } },
         dying = FALLS,
         tags = { "biological" },
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         selection = { priority = 10 },
         field_effects = {
             { field = "creep", of = "anyone", coverage = "any", inside = { {
@@ -1402,7 +1416,7 @@ pub const CONTENT: &str = r#"
         race = "swarm",
         -- Underfoot: a swarmling walks over what has dug in, and nothing is
         -- raised on top of it.
-        location = { occupation = GROUND, size = 1, solidity = "underfoot" },
+        location = { domain = "ground", size = 1, solidity = "underfoot" },
         stats = {
             radius = "0.5", weight = 2,
             sight_range = 6,
@@ -1426,7 +1440,7 @@ pub const CONTENT: &str = r#"
     -- holding the ravager's supply the while.
     define_entity("cocoon", {
         race = "swarm",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = { armor = 3, sight_range = 2 },
         pools = { health = { maximum = 120 } },
         dying = { time = 2 },
@@ -1437,7 +1451,7 @@ pub const CONTENT: &str = r#"
     -- to feed.
     define_entity("ravager", {
         race = "swarm",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.25", turn_rate = 24, pivot_rate = 24, radius = "0.5", weight = 3,
             damage = 12, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
@@ -1449,7 +1463,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 90, regen = "0.05" } },
         dying = FALLS,
         tags = { "biological" },
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         selection = { priority = 12 },
         field_effects = {
             { field = "creep", of = "anyone", coverage = "any", inside = { {
@@ -1475,7 +1489,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("nexus", {
         race = "conclave",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 9, supply_provided = 10 },
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
@@ -1499,7 +1513,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("probe", {
         race = "conclave",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
@@ -1522,7 +1536,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("pylon", {
         race = "conclave",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "land", size = 1, solidity = "solid" },
         stats = { sight_range = 6, supply_provided = 6 },
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
@@ -1540,7 +1554,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("gateway", {
         race = "conclave",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 6 },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
@@ -1568,7 +1582,7 @@ pub const CONTENT: &str = r#"
     -- It turns back into a gateway the same way it became one.
     define_entity("warp_gate", {
         race = "conclave",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 6 },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
@@ -1599,7 +1613,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("photon_cannon", {
         race = "conclave",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "land", size = 1, solidity = "solid" },
         stats = { armor = 1,
             damage = 12, attack_range = 6, acquire_range = 7, attack_period = 20, damage_point = 5,
             sight_range = 8,
@@ -1609,7 +1623,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 120 },
         rise = { time = 80, pools = { health = "initial" } },
         tags = { "building" },
-        attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
+        attack = { targets = GROUND | AIR, projectile = "arrow" },
         field_placement = { POWERED, NOT_ON_CREEP },
         field_effects = { UNPOWERED_IDLES },
         -- The cannon is the conclave's standing detector: a shorter reach
@@ -1621,7 +1635,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("zealot", {
         race = "conclave",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
             damage = 8, attack_range = 1, acquire_range = 5, attack_period = 5, damage_point = 2,
@@ -1633,7 +1647,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 60 } },
         dying = FALLS,
         tags = { "biological" },
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         price = { gold = 100 },
         train_time = 60,
         -- Warped in, it rises from a quarter of its health over four seconds.
@@ -1655,7 +1669,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("stalker", {
         race = "conclave",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
             damage = 10, attack_range = 5, acquire_range = 6, attack_period = 20, damage_point = 4,
@@ -1667,7 +1681,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 80 } },
         dying = FALLS,
         tags = { "mechanical" },
-        attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
+        attack = { targets = GROUND | AIR, projectile = "arrow" },
         price = { gold = 125, wood = 50 },
         train_time = 70,
         rise = { time = 80, pools = { health = { follows_work_from = { share = "0.25" } } } },
@@ -1692,7 +1706,7 @@ pub const CONTENT: &str = r#"
     -- cloak it was born with.
     define_entity("dark_templar", {
         race = "conclave",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
             damage = 20, attack_range = 1, acquire_range = 5, attack_period = 20, damage_point = 6,
@@ -1705,7 +1719,7 @@ pub const CONTENT: &str = r#"
         concealment = "concealed",
         dying = FALLS,
         tags = { "biological" },
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         price = { gold = 125, wood = 50 },
         train_time = 75,
         selection = { priority = 10 },
@@ -1718,7 +1732,7 @@ pub const CONTENT: &str = r#"
     -- observer.
     define_entity("observer", {
         race = "conclave",
-        location = { occupation = AIR, size = 1, solidity = "solid" },
+        location = { domain = "air", size = 1, solidity = "solid" },
         stats = {
             speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
             sight_range = 9,
@@ -1781,7 +1795,7 @@ pub const CONTENT: &str = r#"
     -- concealed, itself excepted, and the veil moves with it.
     define_entity("arbiter", {
         race = "conclave",
-        location = { occupation = AIR, size = 1, solidity = "solid" },
+        location = { domain = "air", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 20, pivot_rate = 20, radius = "0.5", weight = 4,
             armor = 1,
@@ -1813,7 +1827,7 @@ pub const CONTENT: &str = r#"
     -- made its own is ground no ancient will stand in.
     define_entity("wisp", {
         race = "elves",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
@@ -1853,7 +1867,7 @@ pub const CONTENT: &str = r#"
     -- A mine is where it is, so creep under it is no bar, unlike the ancients.
     define_entity("entangled_mine", {
         race = "elves",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 6 },
         pools = { health = { maximum = 600 } },
         dying = { time = 2 },
@@ -1877,7 +1891,7 @@ pub const CONTENT: &str = r#"
         local uprooted = name .. "_uprooted"
         define_entity(name, {
             race = "elves",
-            location = { occupation = GROUND, size = size, solidity = "solid" },
+            location = { domain = "land", size = size, solidity = "solid" },
             stats = rooted.stats,
             pools = rooted.pools,
             dying = { time = 2 },
@@ -1894,7 +1908,7 @@ pub const CONTENT: &str = r#"
         })
         define_entity(uprooted, {
             race = "elves",
-            location = { occupation = GROUND, size = size, solidity = "solid" },
+            location = { domain = "land", size = size, solidity = "solid" },
             stats = walker.stats,
             pools = walker.pools,
             dying = { time = 2 },
@@ -1925,7 +1939,7 @@ pub const CONTENT: &str = r#"
     -- structure with no legs: a well stays where it was dug.
     define_entity("moon_well", {
         race = "elves",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 3, supply_provided = 6 },
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
@@ -1934,13 +1948,13 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         field_placement = { NOT_ON_CREEP, NOT_ON_BLIGHT },
     })
-    -- The war ancient: huntresses rooted, a heavy bite uprooted.
+    -- The war ancient: huntresses and nagas rooted, a heavy bite uprooted.
     ancient("ancient_of_war", { 3, 3 }, {
         stats = { sight_range = 6 },
         pools = { health = { maximum = 500 } },
         price = { gold = 200, wood = 100 },
         rise = { time = 120, pools = { health = "initial" } },
-        trainer = { trains = { "huntress" } },
+        trainer = { trains = { "huntress", "naga" } },
     }, {
         stats = {
             speed = "0.15", turn_rate = 8, pivot_rate = 8, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
@@ -1948,7 +1962,7 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 500 } },
     })
-    -- The tower: rooted it throws at range, over ground and water and into the
+    -- The tower: rooted it throws at range, over the ground layer and into the
     -- air; uprooted it can only bite at what walks up to it.
     -- Rooted, the protector also sees through cloaks: the elves' one detector.
     ancient("ancient_protector", { 2, 2 }, {
@@ -1958,7 +1972,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 300 } },
         price = { gold = 120, wood = 40 },
         rise = { time = 80, pools = { health = "initial" } },
-        attack = { targets = GROUND | WATER | AIR, projectile = "arrow" },
+        attack = { targets = GROUND | AIR, projectile = "arrow" },
         field_sources = {
             { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
@@ -1992,7 +2006,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("huntress", {
         race = "elves",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 9, attack_range = 1, acquire_range = 6, attack_period = 5, damage_point = 2,
@@ -2003,12 +2017,34 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 55 } },
         dying = FALLS,
         tags = { "biological" },
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         price = { gold = 90, wood = 10 },
         train_time = 55,
         selection = { priority = 10 },
         skills = { "ambush" },
         passives = { "shadowmeld" },
+    })
+
+    -- The naga walks the land and swims deep water alike: the one elven body the
+    -- lake does not stop. Its spear reaches what stands on the ground or
+    -- floats, nothing that flies.
+    define_entity("naga", {
+        race = "elves",
+        location = { domain = "amphibious", size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.3", turn_rate = 24, pivot_rate = 24, radius = "0.5", weight = 3,
+            damage = 11, attack_range = 3, acquire_range = 6, attack_period = 14, damage_point = 5,
+            sight_range = 8,
+            supply_cost = 2,
+            cargo_size = 1,
+        },
+        pools = { health = { maximum = 90 } },
+        dying = FALLS,
+        tags = { "biological" },
+        attack = { targets = GROUND, projectile = "arrow" },
+        price = { gold = 120, wood = 30 },
+        train_time = 70,
+        selection = { priority = 10 },
     })
 
     -- ── The Terrans ─────────────────────────────────────────────────────────
@@ -2098,7 +2134,7 @@ pub const CONTENT: &str = r#"
     -- it.
     define_entity("scv", {
         race = "terran",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             repair_speed = "1.0", repair_cost_factor = "0.25", repair_range = 1,
@@ -2140,7 +2176,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("command_center", {
         race = "terran",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 9, supply_provided = 10, build_range = 1 },
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
@@ -2164,7 +2200,7 @@ pub const CONTENT: &str = r#"
     -- the map.
     define_entity("command_center_aloft", {
         race = "terran",
-        location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "air", size = { 3, 3 }, solidity = "solid" },
         stats = {
             speed = "0.12", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12, sight_range = 9, supply_provided = 10,
         },
@@ -2182,7 +2218,7 @@ pub const CONTENT: &str = r#"
     -- it offers no dock, so it leaves nothing behind when it goes.
     define_entity("barracks", {
         race = "terran",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 6 },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
@@ -2199,7 +2235,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("barracks_aloft", {
         race = "terran",
-        location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "air", size = { 3, 3 }, solidity = "solid" },
         stats = {
             speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
         },
@@ -2215,7 +2251,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("factory", {
         race = "terran",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 6, build_range = 1 },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
@@ -2234,7 +2270,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("factory_aloft", {
         race = "terran",
-        location = { occupation = AIR, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "air", size = { 3, 3 }, solidity = "solid" },
         stats = {
             speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
         },
@@ -2254,7 +2290,7 @@ pub const CONTENT: &str = r#"
     -- it and it is theirs.
     define_entity("comsat_station", {
         race = "terran",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 6,
         },
         pools = {
@@ -2277,7 +2313,7 @@ pub const CONTENT: &str = r#"
     -- plain sight for as long as its energy holds.
     define_entity("wraith", {
         race = "terran",
-        location = { occupation = AIR, size = 1, solidity = "solid" },
+        location = { domain = "air", size = 1, solidity = "solid" },
         stats = {
             speed = "0.45", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
             damage = 8, attack_range = 5, acquire_range = 7, attack_period = 12, damage_point = 4,
@@ -2287,7 +2323,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 120 }, energy = { maximum = 200, regen = "0.1", initial = { share = "0.25" } } },
         dying = { time = 2 },
         tags = { "mechanical" },
-        attack = { targets = GROUND | WATER | AIR },
+        attack = { targets = GROUND | AIR },
         price = { gold = 150, wood = 100 },
         train_time = 90,
         skills = { "cloak", "decloak" },
@@ -2295,17 +2331,27 @@ pub const CONTENT: &str = r#"
     })
 
     -- The turret's rack: a gun that bears on its own, the way a tower aims
-    -- without turning its walls, and reaches only the air.
+    -- without turning its walls, and reaches only the air. Its missiles burst
+    -- in the air a cell around the hit, sparing its own side: the burst finds
+    -- whatever can be attacked there — a flier, a grounded gryphon or a tower
+    -- tall enough to be shot out of the sky — and leaves the ground beneath
+    -- alone.
     define_turret("missile_rack", {
         targets = AIR,
         projectile = "arrow",
+        splash = {
+            shape = "circular",
+            bands = { {1, "0.5"} },
+            layers = AIR,
+            friendly_fire = false,
+        },
     })
     -- The missile turret: the terran answer to what flies and to what hides.
     -- It shoots into the air alone, and detects a little short of where it
     -- sees.
     define_entity("missile_turret", {
         race = "terran",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "land", size = 1, solidity = "solid" },
         stats = { armor = 1,
             damage = 12, attack_range = 7, acquire_range = 8, attack_period = 15, damage_point = 5,
             sight_range = 9,
@@ -2330,7 +2376,7 @@ pub const CONTENT: &str = r#"
     -- stands beside it again.
     define_entity("tech_lab", {
         race = "terran",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 5 },
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
@@ -2344,7 +2390,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("supply_depot", {
         race = "terran",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 3, supply_provided = 6 },
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
@@ -2360,7 +2406,7 @@ pub const CONTENT: &str = r#"
     -- the refinery falls.
     define_entity("refinery", {
         race = "terran",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 4 },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
@@ -2378,7 +2424,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("marine", {
         race = "terran",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 8, damage_point = 3,
@@ -2391,7 +2437,7 @@ pub const CONTENT: &str = r#"
         tags = { "biological" },
         -- A rifle: the shot lands the tick it is fired, with nothing to
         -- outrun and nothing to dodge.
-        attack = { targets = GROUND | WATER | AIR },
+        attack = { targets = GROUND | AIR },
         price = { gold = 60 },
         train_time = 45,
         passives = { "combat_drugs" },
@@ -2411,7 +2457,7 @@ pub const CONTENT: &str = r#"
     local function tank(name, extra)
         local def = {
             race = "terran",
-            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
             dying = { time = 2 },
             tags = { "mechanical" },
             selection = { priority = 10 },
@@ -2432,7 +2478,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 160 } },
         -- The gun leaves what it kills: only the planted form shells a body
         -- to nothing, which is what makes planting the answer to raised dead.
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         price = { gold = 150, wood = 100 },
         train_time = 100,
         -- A factory builds tanks with a tech lab docked, and keeps building
@@ -2457,14 +2503,14 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 160 } },
         attack = {
-            targets = GROUND | WATER,
+            targets = GROUND,
             slain = "nothing",
             -- A ring of blast around the hit: half of it one cell out, a
             -- quarter two, and it does not spare its own.
             splash = {
                 shape = "circular",
                 bands = { {1, "0.5"}, {2, "0.25"} },
-                layers = GROUND | WATER,
+                layers = GROUND,
                 friendly_fire = true,
             },
         },
@@ -2512,7 +2558,7 @@ pub const CONTENT: &str = r#"
         } } }
     define_entity("acolyte", {
         race = "undead",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
@@ -2543,7 +2589,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("ghoul", {
         race = "undead",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 8, attack_range = 1, acquire_range = 6, attack_period = 8, damage_point = 4,
@@ -2556,7 +2602,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 80 },
         train_time = 50,
         tags = { "biological" },
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         field_effects = { HEALS_ON_BLIGHT },
         -- A ghoul carrying wood is a ghoul not fighting: a running order is
         -- what keeps it out of a fight it did not pick.
@@ -2570,7 +2616,7 @@ pub const CONTENT: &str = r#"
     -- falls apart.
     define_entity("skeleton", {
         race = "undead",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 7, attack_range = 1, acquire_range = 6, attack_period = 14, damage_point = 6,
@@ -2580,7 +2626,7 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 50 } },
         dying = { time = 2 },
-        attack = { targets = GROUND | WATER },
+        attack = { targets = GROUND },
         field_effects = { HEALS_ON_BLIGHT },
     })
 
@@ -2659,7 +2705,7 @@ pub const CONTENT: &str = r#"
     })
     define_entity("necromancer", {
         race = "undead",
-        location = { occupation = GROUND, size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, solidity = "solid" },
         stats = {
             speed = "0.28", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 5, attack_range = 4, acquire_range = 6, attack_period = 20, damage_point = 8,
@@ -2672,7 +2718,7 @@ pub const CONTENT: &str = r#"
         price = { gold = 100 },
         train_time = 60,
         tags = { "biological" },
-        attack = { targets = GROUND | WATER, projectile = "arrow" },
+        attack = { targets = GROUND, projectile = "arrow" },
         skills = { "raise_dead", "grave_gate", "homeward" },
         passives = { "composed" },
         field_effects = { BOUND_TO_BLIGHT },
@@ -2685,7 +2731,7 @@ pub const CONTENT: &str = r#"
         local pools = { health = { maximum = health } }
         local def = {
             race = "undead",
-            location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+            location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
             stats = stats,
             pools = pools,
             dying = { time = 2 },
@@ -2708,7 +2754,7 @@ pub const CONTENT: &str = r#"
             -- its growth finishes rather than when it starts.
             define_entity(rising, {
                 race = "undead",
-                location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+                location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
                 stats = stats,
                 pools = pools,
                 dying = { time = 2 },
@@ -2735,7 +2781,7 @@ pub const CONTENT: &str = r#"
           damage = 18, attack_range = 8, acquire_range = 9, attack_period = 22, damage_point = 9 },
         { tags = { "building", "grown_hall" },
           price = { gold = 650 }, rise = { time = 420, pools = { health = "initial" } },
-          attack = { targets = GROUND | WATER | AIR, projectile = "arrow" } })
+          attack = { targets = GROUND | AIR, projectile = "arrow" } })
 
     -- Raised over a gold seam, the haunted mine is the mine from then on: it
     -- takes the gold that was left, seats five acolytes round its rim, and
@@ -2743,7 +2789,7 @@ pub const CONTENT: &str = r#"
     -- where the gold is, so it needs no blight — and makes its own.
     define_entity("haunted_mine", {
         race = "undead",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 6 },
         pools = { health = { maximum = 600 } },
         dying = { time = 2 },
@@ -2766,7 +2812,7 @@ pub const CONTENT: &str = r#"
     -- answers everything; the nerubian one is the heavier gun, and flat.
     define_entity("ziggurat", {
         race = "undead",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 6, supply_provided = 10 },
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
@@ -2790,7 +2836,7 @@ pub const CONTENT: &str = r#"
     local function tower(name, health, stats, attack, price, rise_time, field_sources)
         define_entity(name, {
             race = "undead",
-            location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
             stats = stats,
             pools = { health = { maximum = health } },
             dying = { time = 2 },
@@ -2807,20 +2853,20 @@ pub const CONTENT: &str = r#"
     tower("spirit_tower", 400,
         { sight_range = 8, supply_provided = 10,
           damage = 14, attack_range = 7, acquire_range = 8, attack_period = 18, damage_point = 7 },
-        { targets = GROUND | WATER | AIR, projectile = "arrow" },
+        { targets = GROUND | AIR, projectile = "arrow" },
         { gold = 180, wood = 30 }, 170,
         { { field = "blight", radius = 4, growth = "instant", while_rising = "nothing", while_disabled = "full" },
           { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" } })
     tower("nerubian_tower", 500,
         { sight_range = 8, supply_provided = 10,
           damage = 22, attack_range = 6, acquire_range = 7, attack_period = 24, damage_point = 10 },
-        { targets = GROUND | WATER, projectile = "cannonball" },
+        { targets = GROUND, projectile = "cannonball" },
         { gold = 200, wood = 70 }, 170,
         blights(4))
 
     define_entity("crypt", {
         race = "undead",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 6 },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
@@ -2836,7 +2882,7 @@ pub const CONTENT: &str = r#"
     -- named for come from the field.
     define_entity("graveyard", {
         race = "undead",
-        location = { occupation = GROUND, size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
         stats = { sight_range = 5 },
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
@@ -2849,7 +2895,7 @@ pub const CONTENT: &str = r#"
 
     define_entity("temple_of_the_damned", {
         race = "undead",
-        location = { occupation = GROUND, size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
         stats = { sight_range = 6 },
         pools = { health = { maximum = 450 } },
         dying = { time = 2 },

@@ -382,7 +382,12 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("gunner")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_sight_range(12)
                 .with_pool(Pool::health(40))
                 .with_bonus_damage_vs([("armored", 12u32)])
@@ -408,7 +413,12 @@ fn app() -> App {
         // A wide, stout target, for where a shot at a footprint is aimed.
         registry.register(
             EntityTypeDef::new("keep")
-                .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(300)),
         );
         let lob = registry.register_projectile(
@@ -417,7 +427,12 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("sieger")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_sight_range(12)
                 .with_pool(Pool::health(40))
                 .with_attack(
@@ -434,10 +449,16 @@ fn app() -> App {
                     2,
                 ),
         );
-        registry.register(utils::walker("runner", utils::GROUND).with_pool(Pool::health(60)));
+        registry
+            .register(utils::walker("runner", utils::GROUND_DOMAIN).with_pool(Pool::health(60)));
         registry.register(
             EntityTypeDef::new("tank")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_sight_range(12)
                 .with_pool(Pool::health(100))
                 .with_armor(6)
@@ -445,14 +466,24 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("dummy")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100)),
         );
         // On the ground, attacked only in the air.
-        assert_eq!(registry.register_layer(utils::AIR_LAYER), utils::AIR);
+        utils::register_air(&mut registry);
         registry.register(
             EntityTypeDef::new("skimmer")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_targetable(utils::AIR)
                 .with_pool(Pool::health(100)),
         );

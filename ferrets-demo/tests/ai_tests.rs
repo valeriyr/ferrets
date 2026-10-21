@@ -448,7 +448,7 @@ fn ai_builds_economy_and_army() {
 
     // The mustered wave marched on the idle player across the map — through
     // a river ford or around the lake — so the army traverses the large map
-    // instead of stalling at the chokepoints.
+    // instead of stalling at the choke points.
     let crossed = world
         .query::<(&EntityInfoComponent, &OwnerComponent, &LocationComponent)>()
         .iter(world)

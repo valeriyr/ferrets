@@ -2,7 +2,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::{layer_mask::LayerMask, nav_grid::NavGrid};
+use crate::{mover_shape::MoverShape, nav_grid::NavGrid};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 
 /// Controls how the BFS expands when it encounters a blocked cell.
@@ -23,9 +23,10 @@ pub enum Expansion {
 /// What ground a placement needs under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Footing {
-    /// Cells nothing else holds: what a footprint claiming its ground needs.
+    /// Cells on its terrains nothing else holds: what a footprint claiming its
+    /// ground needs.
     Free,
-    /// Any cell the terrain allows, whoever is standing there: what a footprint
+    /// Any cell on its terrains, whoever is standing there: what a footprint
     /// that shares its ground needs.
     Shared,
 }
@@ -41,9 +42,9 @@ const DIRECTIONS: [(i32, i32); 8] = [
     (1, 1),
 ];
 
-/// Finds at most `max_amount` placements for a `spawn_size` footprint near the
-/// rectangle at `around`, none of them overlapping another, searching outward
-/// ring by ring to `max_radius`.
+/// Finds at most `max_amount` placements for `shape` near the rectangle at
+/// `around`, none of them overlapping another, searching outward ring by ring
+/// to `max_radius`.
 ///
 /// `footing` says what counts as a placement: ground nobody holds, or ground
 /// the terrain merely allows.
@@ -55,14 +56,12 @@ const DIRECTIONS: [(i32, i32); 8] = [
 /// would otherwise start from.
 pub fn find_placements_near(
     grid: &NavGrid,
-    layer_mask: impl Into<LayerMask>,
+    shape: MoverShape,
     around: CellRect,
-    spawn_size: CellSize,
     max_radius: u32,
     max_amount: usize,
     footing: Footing,
 ) -> Vec<CellPos> {
-    let layer_mask = layer_mask.into();
     let mut found: Vec<CellPos> = Vec::with_capacity(max_amount);
     if max_amount == 0 {
         return found;
@@ -71,13 +70,13 @@ pub fn find_placements_near(
         grid,
         around,
         max_radius,
-        |cell| (from_middle(around, cell, spawn_size), cell.y, cell.x),
+        |cell| (from_middle(around, cell, shape.size), cell.y, cell.x),
         |candidate| {
-            let rect = CellRect::new(candidate, spawn_size);
-            if fits(grid, layer_mask, candidate, spawn_size, footing)
+            let rect = CellRect::new(candidate, shape.size);
+            if fits(grid, shape, candidate, footing)
                 && !found
                     .iter()
-                    .any(|&taken| CellRect::new(taken, spawn_size).intersects(rect))
+                    .any(|&taken| CellRect::new(taken, shape.size).intersects(rect))
             {
                 found.push(candidate);
             }
@@ -91,22 +90,20 @@ pub fn find_placements_near(
     found
 }
 
-/// Finds the nearest placement for a `spawn_size` footprint near the rectangle
-/// at `around`, searching outward ring by ring to `max_radius`; within a ring
+/// Finds the nearest placement for `shape` near the rectangle at `around`,
+/// searching outward ring by ring to `max_radius`; within a ring
 /// the ground closest to `toward` comes first, then the order
 /// [`find_placements_near`] keeps.
 pub fn find_placement_near_toward(
     grid: &NavGrid,
-    layer_mask: impl Into<LayerMask>,
+    shape: MoverShape,
     around: CellRect,
-    spawn_size: CellSize,
     max_radius: u32,
     footing: Footing,
     toward: CellRect,
 ) -> Option<CellPos> {
-    let layer_mask = layer_mask.into();
-    find_placement_near_toward_where(grid, around, spawn_size, max_radius, toward, |cell| {
-        fits(grid, layer_mask, cell, spawn_size, footing)
+    find_placement_near_toward_where(grid, around, shape.size, max_radius, toward, |cell| {
+        fits(grid, shape, cell, footing)
     })
 }
 
@@ -147,34 +144,31 @@ pub fn find_placement_near_toward_where(
     found
 }
 
-/// Finds the nearest placement for a `spawn_size` footprint near the rectangle
-/// at `around`, searching outward ring by ring to `max_radius`.
+/// Finds the nearest placement for `shape` near the rectangle at `around`,
+/// searching outward ring by ring to `max_radius`.
 pub fn find_placement_near(
     grid: &NavGrid,
-    layer_mask: impl Into<LayerMask>,
+    shape: MoverShape,
     around: CellRect,
-    spawn_size: CellSize,
     max_radius: u32,
     footing: Footing,
 ) -> Option<CellPos> {
-    find_placements_near(grid, layer_mask, around, spawn_size, max_radius, 1, footing)
+    find_placements_near(grid, shape, around, max_radius, 1, footing)
         .into_iter()
         .next()
 }
 
-/// Finds the nearest passable position to `around` using BFS.
+/// Finds the nearest cell to `around` a single-cell `shape` fits on, using BFS.
 ///
-/// Returns `around` itself if it is already passable.
-/// Returns `None` if no passable position exists reachable under `expansion`.
+/// Returns `around` itself if the shape already fits there.
+/// Returns `None` if no such cell exists reachable under `expansion`.
 pub fn find_nearest_free_pos(
     grid: &NavGrid,
-    layer_mask: impl Into<LayerMask>,
+    shape: MoverShape,
     around: CellPos,
     expansion: Expansion,
 ) -> Option<CellPos> {
-    let layer_mask = layer_mask.into();
-
-    if grid.is_passable_by(layer_mask, around) {
+    if grid.fits(around, shape) {
         return Some(around);
     }
 
@@ -188,10 +182,7 @@ pub fn find_nearest_free_pos(
     let h = grid.height() as i32;
 
     while let Some(pos) = queue.pop_front() {
-        if expansion == Expansion::ThroughPassable
-            && grid.is_occupied_by(layer_mask, pos)
-            && pos != around
-        {
+        if expansion == Expansion::ThroughPassable && !grid.fits(pos, shape) && pos != around {
             continue;
         }
 
@@ -205,7 +196,7 @@ pub fn find_nearest_free_pos(
             if !visited.insert(neighbor) {
                 continue;
             }
-            if grid.is_passable_by(layer_mask, neighbor) {
+            if grid.fits(neighbor, shape) {
                 return Some(neighbor);
             }
             queue.push_back(neighbor);
@@ -223,18 +214,11 @@ enum Walk {
     Stop,
 }
 
-/// Whether a `spawn_size` footprint anchored at `candidate` has the ground
-/// `footing` asks for.
-fn fits(
-    grid: &NavGrid,
-    layer_mask: LayerMask,
-    candidate: CellPos,
-    spawn_size: CellSize,
-    footing: Footing,
-) -> bool {
+/// Whether `shape` anchored at `candidate` has the ground `footing` asks for.
+fn fits(grid: &NavGrid, shape: MoverShape, candidate: CellPos, footing: Footing) -> bool {
     match footing {
-        Footing::Free => grid.is_footprint_passable_by(layer_mask, candidate, spawn_size),
-        Footing::Shared => grid.is_footprint_terrain_passable_by(layer_mask, candidate, spawn_size),
+        Footing::Free => grid.fits(candidate, shape),
+        Footing::Shared => grid.fits_terrain(candidate, shape.terrains, shape.size),
     }
 }
 

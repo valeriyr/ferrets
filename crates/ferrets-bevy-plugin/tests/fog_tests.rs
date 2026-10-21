@@ -621,7 +621,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
-            utils::walker("scout", utils::GROUND)
+            utils::walker("scout", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_sight_range(6)
@@ -630,7 +630,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_train_time(10),
         );
         registry.register(
-            utils::walker("sniper", utils::GROUND)
+            utils::walker("sniper", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(30))
                 .with_dying(1, [])
                 .with_attack(utils::weapon(utils::GROUND), 10, 8, 8, 2, 1)
@@ -638,14 +638,24 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("keep")
-                .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(200))
                 .with_dying(1, [])
                 .with_sight_range(2),
         );
         registry.register(
             EntityTypeDef::new("dummy")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_sight_range(3),
@@ -654,7 +664,12 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         // its owner sees near it comes from the units standing around.
         registry.register(
             EntityTypeDef::new("post")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_trainer(["scout"]),
@@ -683,7 +698,12 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("station")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
@@ -713,7 +733,12 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("observatory")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)

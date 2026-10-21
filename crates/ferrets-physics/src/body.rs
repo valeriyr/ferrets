@@ -20,10 +20,9 @@ pub struct Body {
     /// How strongly the body resists displacement, relative to what it meets.
     /// Only the ratio between two bodies' weights matters, never the scale.
     pub weight: FixedU64,
-    /// The layers the body occupies; bodies with disjoint masks pass
-    /// through each other — including an empty mask, which touches nothing
-    /// at all.
-    pub mask: LayerMask,
+    /// The layers the body occupies; bodies on disjoint layers pass through
+    /// each other — including one on no layer, which touches nothing at all.
+    pub layers: LayerMask,
     /// Where the body is walking this tick — the offset toward its current
     /// waypoint — or `None` at rest. Contacts consult it for the swerving
     /// traffic rule.

@@ -2,13 +2,25 @@
 
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
+use ferrets_pathfinder::{
+    layer_id::LayerId, layer_mask::LayerMask, mover_shape::MoverShape, terrain_id::TerrainId,
+    terrain_mask::TerrainMask,
+};
 use ferrets_physics::body::Body;
 
 /// The layer every test body occupies unless a test says otherwise.
 pub const GROUND: LayerId = LayerId::new(1);
 /// A layer disjoint from [`GROUND`], for bodies that pass each other.
 pub const AIR: LayerId = LayerId::new(2);
+/// The terrain every test grid is made of.
+pub const LAND: TerrainId = TerrainId::new(1);
+/// A second terrain, for cells a land body may not overlap.
+pub const WATER: TerrainId = TerrainId::new(2);
+
+/// A one-cell body over land on [`GROUND`].
+pub fn ground_shape() -> MoverShape {
+    MoverShape::point(TerrainMask::from(LAND), GROUND)
+}
 
 /// A cell coordinate written as decimal digits. Fixed-point throughout: the
 /// value is the one the digits name, with no float in the way of it.
@@ -37,7 +49,7 @@ pub fn resting(x: &str, y: &str) -> Body {
         size: CellSize::ONE,
         radius: cells("0.5"),
         weight: FixedU64::ONE,
-        mask: LayerMask::from(GROUND),
+        layers: LayerMask::from(GROUND),
         heading: None,
     }
 }
@@ -70,7 +82,7 @@ pub fn walking(x: &str, y: &str, toward_x: &str, toward_y: &str) -> Body {
 /// A half-cell-radius body at rest on the [`AIR`] layer.
 pub fn flying(x: &str, y: &str) -> Body {
     Body {
-        mask: LayerMask::from(AIR),
+        layers: LayerMask::from(AIR),
         ..resting(x, y)
     }
 }

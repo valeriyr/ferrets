@@ -1,28 +1,34 @@
 //! The live [`Map`]: start points, and building from [`MapData`] — the grid
-//! registers the content's layer vocabulary, and per-cell terrain seeds which
-//! layers each cell blocks.
+//! registers the content's layer vocabulary and takes each cell's terrain.
 
 mod utils;
 
 use ferrets_content::{
+    domain::{DomainDef, DomainId},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    location::{LocationDef, Solidity},
+    location::Solidity,
     pool::{Pool, PoolInitial},
     registry::ContentRegistry,
+    terrains::Terrains,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::{
+    layer_mask::LayerMask,
     mover_shape::MoverShape,
     nav_grid::{LayerId, NavGrid},
+    terrain_id::TerrainId,
+    terrain_mask::TerrainMask,
 };
 use ferrets_simulation::{
     components::location::LocationComponent,
     map::Map,
     map_data::{MapData, Placement},
     movement_model::MovementModel,
-    occupancy::OccupancyClass,
+    occupancy::{GridMark, OccupancyClass},
 };
 
 //
@@ -35,7 +41,7 @@ fn start_point_indexes_by_player() {
         "test",
         Projection::Isometric,
         MovementModel::Cell,
-        NavGrid::new(8, 8),
+        grid(8, 8),
         vec![Some(CellPos::new(1, 2)), None, Some(CellPos::new(5, 6))],
     );
 
@@ -55,7 +61,7 @@ fn contains_cells_inside_and_not_past_edges() {
         "test",
         Projection::Isometric,
         MovementModel::Cell,
-        NavGrid::new(8, 6),
+        grid(8, 6),
         Vec::new(),
     );
 
@@ -75,7 +81,7 @@ fn new_map_serves_no_mover() {
         "test",
         Projection::Isometric,
         MovementModel::Cell,
-        NavGrid::new(8, 2),
+        grid(8, 2),
         vec![],
     );
     assert_eq!(map.hierarchy().shapes().count(), 0);
@@ -89,7 +95,7 @@ fn map_serves_each_mover_shape_once() {
     let mut registry = walker_registry();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(GROUND_LAYER, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_movement(
                 utils::fixed("0.5"),
                 utils::fixed("0.5"),
@@ -100,7 +106,12 @@ fn map_serves_each_mover_shape_once() {
     );
     registry.register(
         EntityTypeDef::new("cart")
-            .with_location(GROUND_LAYER, CellSize::new(2, 2), Solidity::Solid)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::new(2, 2),
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_movement(
                 utils::fixed("0.5"),
                 utils::fixed("0.5"),
@@ -110,9 +121,10 @@ fn map_serves_each_mover_shape_once() {
             ),
     );
     registry.register(EntityTypeDef::new("hut").with_location(
-        GROUND_LAYER,
+        WALKER_DOMAIN,
         CellSize::new(3, 3),
         Solidity::Solid,
+        GROUND_LAYER,
     ));
 
     map.serve_movers(&registry);
@@ -120,21 +132,71 @@ fn map_serves_each_mover_shape_once() {
     // In name order — cart, runner, walker — each shape kept the first time.
     assert_eq!(
         map.hierarchy().shapes().collect::<Vec<_>>(),
+        vec![shape(CellSize::new(2, 2)), ground_shape()]
+    );
+}
+
+#[test]
+fn map_serves_mover_shape_per_terrains_and_occupied_layers() {
+    // Three 1×1 movers on the ground layer: the walker over land, a boat over
+    // deep water, and a tall walker over land that occupies the air too.
+    // Each plans through different cells, so each gets its own abstraction.
+    let mut registry = walker_registry();
+    let air = registry.register_layer("air");
+    let mut nav_grid = grid(8, 2);
+    nav_grid.add_layer(air);
+    let mut map = Map::new(
+        "test",
+        Projection::Isometric,
+        MovementModel::Cell,
+        nav_grid,
+        vec![],
+    );
+    let deep_water = registry.register_terrain("deep_water");
+    let naval = registry.register_domain(
+        "naval",
+        DomainDef::new(GROUND_LAYER, Terrains::Only(deep_water.into())),
+    );
+    for (name, domain, occupies) in [
+        ("boat", naval, LayerMask::from(GROUND_LAYER)),
+        ("tall_walker", WALKER_DOMAIN, GROUND_LAYER | air),
+    ] {
+        registry.register(
+            EntityTypeDef::new(name)
+                .with_location(domain, CellSize::ONE, Solidity::Solid, occupies)
+                .with_movement(
+                    utils::fixed("0.5"),
+                    utils::fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                ),
+        );
+    }
+
+    map.serve_movers(&registry);
+
+    // In name order — boat, tall_walker, walker.
+    assert_eq!(
+        map.hierarchy().shapes().collect::<Vec<_>>(),
         vec![
-            MoverShape::new(GROUND_LAYER, CellSize::new(2, 2)),
+            MoverShape::point(deep_water.into(), GROUND_LAYER),
+            MoverShape::point(TerrainMask::from(LAND), GROUND_LAYER | air),
             ground_shape(),
         ]
     );
 }
 
 #[test]
-#[should_panic(expected = "map 'test' serves no hierarchy for mover 'walker'")]
+#[should_panic(
+    expected = "map 'test' serves no hierarchy for mover 'walker' (terrains 0b1, layers 0b1 at 1x1)"
+)]
 fn map_serving_no_mover_refuses_content_that_moves() {
     let map = Map::new(
         "test",
         Projection::Isometric,
         MovementModel::Cell,
-        NavGrid::new(8, 2),
+        grid(8, 2),
         vec![],
     );
     map.assert_serves_movers(&walker_registry());
@@ -144,10 +206,10 @@ fn map_serving_no_mover_refuses_content_that_moves() {
 fn placed_footprint_reaches_hierarchy_after_refresh() {
     // A 3×2 wall splits an 8×2 map once placed, refreshed, and only then.
     let mut map = wall_test_map();
-    let wall = LocationDef::new(GROUND_LAYER, CellSize::new(3, 2), Solidity::Solid);
+    let wall = shape(CellSize::new(3, 2));
     let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
 
-    map.place_entity(&location, &wall, OccupancyClass::Static);
+    map.place(mark(&location, wall, OccupancyClass::Static));
     assert!(
         map.hierarchy()
             .same_region(CellPos::new(0, 0), ground_shape(), CellPos::new(7, 0)),
@@ -160,7 +222,7 @@ fn placed_footprint_reaches_hierarchy_after_refresh() {
             .same_region(CellPos::new(0, 0), ground_shape(), CellPos::new(7, 0))
     );
 
-    map.displace_entity(&location, &wall, OccupancyClass::Static);
+    map.displace(mark(&location, wall, OccupancyClass::Static));
     map.refresh_hierarchy();
     assert!(
         map.hierarchy()
@@ -178,9 +240,12 @@ fn footprint_step_only_writes_cells_that_change_hands() {
     // column is released and the leading one taken, and the overlap is never
     // touched — which is what lets one-claimant-per-cell hold through a crossing.
     let mut map = wall_test_map();
-    let unit = LocationDef::new(GROUND_LAYER, CellSize::new(2, 2), Solidity::Solid);
     let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
-    map.place_entity(&location, &unit, OccupancyClass::Claim);
+    map.place(mark(
+        &location,
+        shape(CellSize::new(2, 2)),
+        OccupancyClass::Claim,
+    ));
 
     map.step_claim(
         GROUND_LAYER.into(),
@@ -214,42 +279,43 @@ fn footprint_step_only_writes_cells_that_change_hands() {
 #[test]
 fn footprint_step_is_blocked_by_what_lies_ahead_only() {
     let mut map = wall_test_map();
-    let unit = LocationDef::new(GROUND_LAYER, CellSize::new(2, 2), Solidity::Solid);
-    let size = CellSize::new(2, 2);
+    let unit = shape(CellSize::new(2, 2));
     let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
-    map.place_entity(&location, &unit, OccupancyClass::Claim);
+    map.place(mark(&location, unit, OccupancyClass::Claim));
 
     // Its own claim must not read as a blockage, or a wide mover could never
     // take a step that keeps most of its footprint where it was.
-    assert!(map.can_step_footprint(
-        GROUND_LAYER.into(),
-        size,
-        CellPos::new(2, 0),
-        CellPos::new(3, 0)
-    ));
+    assert!(map.can_step_footprint(unit, CellPos::new(2, 0), CellPos::new(3, 0)));
 
     // A wall on the leading column does block it.
-    let wall = LocationDef::new(GROUND_LAYER, CellSize::new(1, 2), Solidity::Solid);
-    map.place_entity(
+    map.place(mark(
         &LocationComponent::new(world_pos(4, 0), Facing::SOUTH),
-        &wall,
+        shape(CellSize::new(1, 2)),
         OccupancyClass::Static,
-    );
-    assert!(!map.can_step_footprint(
-        GROUND_LAYER.into(),
-        size,
-        CellPos::new(2, 0),
-        CellPos::new(3, 0)
     ));
+    assert!(!map.can_step_footprint(unit, CellPos::new(2, 0), CellPos::new(3, 0)));
+}
+
+#[test]
+fn footprint_step_is_blocked_by_terrain_off_its_shape() {
+    let registry = lake_registry();
+    let map = Map::from_data(&lake_map(), &registry);
+    let unit = MoverShape::point(TerrainMask::from(LAND), GROUND_LAYER);
+
+    assert!(map.can_step_footprint(unit, CellPos::new(0, 0), CellPos::new(1, 0)));
+    assert!(
+        !map.can_step_footprint(unit, CellPos::new(0, 0), CellPos::new(1, 1)),
+        "(1,1) is deep water, which a land shape may not enter"
+    );
 }
 
 #[test]
 fn claimed_footprint_never_reaches_hierarchy() {
     let mut map = wall_test_map();
-    let unit = LocationDef::new(GROUND_LAYER, CellSize::new(3, 2), Solidity::Solid);
+    let unit = shape(CellSize::new(3, 2));
     let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
 
-    map.place_entity(&location, &unit, OccupancyClass::Claim);
+    map.place(mark(&location, unit, OccupancyClass::Claim));
     map.refresh_hierarchy();
 
     assert!(
@@ -270,16 +336,15 @@ fn claimed_footprint_never_reaches_hierarchy() {
 #[should_panic(expected = "entity type 'runner' moves but defines no positive radius")]
 fn continuous_map_rejects_mover_without_radius() {
     let mut registry = lake_registry();
-    let ground = registry.layer("ground").unwrap();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
 
-    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
     data.set_movement_model(MovementModel::Continuous);
 
     Map::from_data(&data, &registry);
@@ -291,10 +356,9 @@ fn continuous_map_rejects_mover_without_radius() {
 )]
 fn continuous_map_rejects_radius_beyond_footprint() {
     let mut registry = lake_registry();
-    let ground = registry.layer("ground").unwrap();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_movement(
                 FixedU64::from_num(0.5),
                 FixedU64::from_num(0.75),
@@ -304,7 +368,7 @@ fn continuous_map_rejects_radius_beyond_footprint() {
             ),
     );
 
-    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
     data.set_movement_model(MovementModel::Continuous);
 
     Map::from_data(&data, &registry);
@@ -313,10 +377,9 @@ fn continuous_map_rejects_radius_beyond_footprint() {
 #[test]
 fn continuous_map_accepts_radius_at_half_footprint() {
     let mut registry = lake_registry();
-    let ground = registry.layer("ground").unwrap();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_movement(
                 FixedU64::from_num(0.5),
                 FixedU64::from_num(0.5),
@@ -326,7 +389,7 @@ fn continuous_map_accepts_radius_at_half_footprint() {
             ),
     );
 
-    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
     data.set_movement_model(MovementModel::Continuous);
 
     Map::from_data(&data, &registry);
@@ -336,19 +399,18 @@ fn continuous_map_accepts_radius_at_half_footprint() {
 #[should_panic(expected = "entity type 'runner' moves but defines no weight")]
 fn continuous_map_rejects_mover_without_weight() {
     let mut registry = lake_registry();
-    let ground = registry.layer("ground").unwrap();
     // Stated stat by stat, as scripted content states them — the movement
     // builder cannot express a mover missing one of the three.
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::RADIUS, FixedU64::from_num(0.5)),
     );
 
-    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
     data.set_movement_model(MovementModel::Continuous);
 
     Map::from_data(&data, &registry);
@@ -359,10 +421,9 @@ fn continuous_map_rejects_mover_without_weight() {
 #[test]
 fn continuous_map_accepts_weightless_mover() {
     let mut registry = lake_registry();
-    let ground = registry.layer("ground").unwrap();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_movement(
                 FixedU64::from_num(0.5),
                 FixedU64::from_num(0.5),
@@ -372,7 +433,7 @@ fn continuous_map_accepts_weightless_mover() {
             ),
     );
 
-    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
     data.set_movement_model(MovementModel::Continuous);
 
     Map::from_data(&data, &registry);
@@ -381,16 +442,15 @@ fn continuous_map_accepts_weightless_mover() {
 #[test]
 fn cell_map_accepts_mover_without_weight() {
     let mut registry = lake_registry();
-    let ground = registry.layer("ground").unwrap();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
 
-    let data = MapData::new("pond", Projection::Isometric, 4, 4);
+    let data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
 
     Map::from_data(&data, &registry);
 }
@@ -398,23 +458,22 @@ fn cell_map_accepts_mover_without_weight() {
 #[test]
 fn cell_map_accepts_mover_without_radius() {
     let mut registry = lake_registry();
-    let ground = registry.layer("ground").unwrap();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
 
-    let data = MapData::new("pond", Projection::Isometric, 4, 4);
+    let data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
 
     Map::from_data(&data, &registry);
 }
 
 #[test]
 fn from_data_carries_movement_model() {
-    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
     data.set_movement_model(MovementModel::Continuous);
 
     let map = Map::from_data(&data, &lake_registry());
@@ -427,112 +486,64 @@ fn from_data_carries_movement_model() {
 //
 
 #[test]
-fn terrain_blocks_layers_it_does_not_pass() {
+fn from_data_gives_each_cell_its_terrain() {
     let registry = lake_registry();
     let map = Map::from_data(&lake_map(), &registry);
 
-    let ground = registry.layer("ground").unwrap();
-    let water = registry.layer("water").unwrap();
-
-    // The lake cell floats ships and blocks walkers; grass is the inverse.
-    let lake = CellPos::new(1, 1);
-    assert!(!map.nav_grid().is_passable(ground, lake));
-    assert!(map.nav_grid().is_passable(water, lake));
-
-    let grass = CellPos::new(0, 0);
-    assert!(map.nav_grid().is_passable(ground, grass));
-    assert!(!map.nav_grid().is_passable(water, grass));
+    assert_eq!(map.nav_grid().terrain(CellPos::new(1, 1)), Some(DEEP_WATER));
+    assert_eq!(map.nav_grid().terrain(CellPos::new(0, 0)), Some(LAND));
+    assert_eq!(map.nav_grid().terrain(CellPos::new(3, 3)), Some(LAND));
 }
 
 #[test]
-fn map_without_terrain_opens_every_layer_everywhere() {
-    let data = MapData::new("pond", Projection::Isometric, 4, 4);
-    let registry = lake_registry();
-    let map = Map::from_data(&data, &registry);
-
-    for y in 0..data.height() {
-        for x in 0..data.width() {
-            let cell = CellPos::new(x, y);
-            for (name, layer) in registry.layers() {
-                assert!(
-                    map.nav_grid().is_passable(layer, cell),
-                    "cell ({x}, {y}) must be open on layer '{name}'"
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn terrain_query_reports_layers_each_cell_blocks() {
+fn shape_fits_only_cells_on_its_terrains() {
     let registry = lake_registry();
     let map = Map::from_data(&lake_map(), &registry);
-    let ground = registry.layer("ground").unwrap();
-    let water = registry.layer("water").unwrap();
+    let walker = MoverShape::point(TerrainMask::from(LAND), GROUND_LAYER);
+    let boat = MoverShape::point(DEEP_WATER.into(), GROUND_LAYER);
 
+    // The lake cell floats boats and refuses walkers; land is the inverse.
     let lake = CellPos::new(1, 1);
-    assert!(!map.nav_grid().is_terrain_passable_by(ground, lake));
-    assert!(map.nav_grid().is_terrain_passable_by(water, lake));
+    assert!(!map.nav_grid().fits(lake, walker));
+    assert!(map.nav_grid().fits(lake, boat));
 
-    let grass = CellPos::new(0, 0);
-    assert!(map.nav_grid().is_terrain_passable_by(ground, grass));
-    assert!(!map.nav_grid().is_terrain_passable_by(water, grass));
+    let land = CellPos::new(0, 0);
+    assert!(map.nav_grid().fits(land, walker));
+    assert!(!map.nav_grid().fits(land, boat));
 }
 
 #[test]
-fn terrain_query_ignores_what_stands_on_cell() {
+fn standing_footprint_leaves_cell_terrain_alone() {
     let registry = lake_registry();
     let mut map = Map::from_data(&lake_map(), &registry);
-    let ground = registry.layer("ground").unwrap();
-    let grass = CellPos::new(0, 0);
+    let land = CellPos::new(0, 0);
 
-    map.set_static_occupied(ground, grass, true);
+    map.set_static_occupied(GROUND_LAYER, land, true);
 
     assert!(
-        !map.nav_grid().is_passable(ground, grass),
+        !map.nav_grid().fits(land, ground_shape()),
         "the footprint blocks walkers"
     );
     assert!(
-        map.nav_grid().is_terrain_passable_by(ground, grass),
-        "the terrain under it still passes them"
+        map.nav_grid()
+            .fits_terrain(land, TerrainMask::from(LAND), CellSize::ONE),
+        "the terrain under it still takes them"
     );
-}
-
-#[test]
-fn terrain_query_passes_every_layer_on_map_without_terrain() {
-    let data = MapData::new("pond", Projection::Isometric, 4, 4);
-    let registry = lake_registry();
-    let map = Map::from_data(&data, &registry);
-
-    for y in 0..data.height() {
-        for x in 0..data.width() {
-            let cell = CellPos::new(x, y);
-            for (name, layer) in registry.layers() {
-                assert!(
-                    map.nav_grid().is_terrain_passable_by(layer, cell),
-                    "cell ({x}, {y}) terrain must pass layer '{name}'"
-                );
-            }
-        }
-    }
 }
 
 #[test]
 #[should_panic(expected = "placement 'corpse' names remains, which only a death may leave")]
 fn placement_of_remains_panics() {
-    let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    registry.register_terrain("grass", ground);
+    let mut registry = walker_registry();
     registry.register_tag("remains");
     registry.register(
         EntityTypeDef::new("corpse")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_tags(["remains"])
             .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
     );
 
-    let mut data = MapData::new("field", Projection::Isometric, 8, 8);
-    data.fill_terrain("grass");
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");
     data.add_placement(Placement {
         type_name: "corpse".to_string(),
         cell: (2, 2),
@@ -553,11 +564,8 @@ fn placement_naming_unregistered_pool_panics() {
 #[test]
 #[should_panic(expected = "placement 'ghost' names the unregistered pool 'mana'")]
 fn placement_of_unregistered_type_naming_unregistered_pool_panics() {
-    let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    registry.register_terrain("grass", ground);
-    let mut data = MapData::new("field", Projection::Isometric, 8, 8);
-    data.fill_terrain("grass");
+    let registry = walker_registry();
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");
     data.add_placement(Placement {
         type_name: "ghost".to_string(),
         cell: (2, 2),
@@ -615,14 +623,9 @@ fn placement_starting_health_empty_panics() {
 }
 
 #[test]
-#[should_panic(expected = "map 'pond' uses unregistered terrain 'water'")]
+#[should_panic(expected = "map 'pond' uses unregistered terrain 'deep_water'")]
 fn unregistered_terrain_panics() {
-    let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    registry.register_layer("water");
-    registry.register_terrain("grass", ground);
-
-    Map::from_data(&lake_map(), &registry);
+    Map::from_data(&lake_map(), &walker_registry());
 }
 
 //
@@ -632,9 +635,12 @@ fn unregistered_terrain_panics() {
 #[test]
 fn taken_claim_frees_its_cells_and_restores_exactly() {
     let mut map = wall_test_map();
-    let unit = LocationDef::new(GROUND_LAYER, CellSize::new(2, 2), Solidity::Solid);
     let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
-    map.place_entity(&location, &unit, OccupancyClass::Claim);
+    map.place(mark(
+        &location,
+        shape(CellSize::new(2, 2)),
+        OccupancyClass::Claim,
+    ));
 
     let held = map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
 
@@ -656,9 +662,9 @@ fn taken_claim_reports_only_cells_that_were_held() {
     // bodies: taking must release and report only what was held, so
     // restoring cannot mint claims out of thin air.
     let mut map = continuous_test_map();
-    let unit = LocationDef::new(GROUND_LAYER, CellSize::new(1, 2), Solidity::Solid);
+    let unit = shape(CellSize::new(1, 2));
     let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
-    map.place_entity(&location, &unit, OccupancyClass::Claim);
+    map.place(mark(&location, unit, OccupancyClass::Claim));
 
     let held = map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
 
@@ -672,9 +678,9 @@ fn taken_claim_reports_only_cells_that_were_held() {
 )]
 fn taking_partially_claimed_rect_panics_under_cell_model() {
     let mut map = wall_test_map();
-    let unit = LocationDef::new(GROUND_LAYER, CellSize::new(1, 2), Solidity::Solid);
+    let unit = shape(CellSize::new(1, 2));
     let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
-    map.place_entity(&location, &unit, OccupancyClass::Claim);
+    map.place(mark(&location, unit, OccupancyClass::Claim));
 
     map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
 }
@@ -684,9 +690,9 @@ fn taking_partially_claimed_rect_panics_under_cell_model() {
 #[should_panic(expected = "restoring a taken claim must find its cells free")]
 fn restoring_over_standing_claim_panics() {
     let mut map = wall_test_map();
-    let unit = LocationDef::new(GROUND_LAYER, CellSize::ONE, Solidity::Solid);
+    let unit = shape(CellSize::ONE);
     let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
-    map.place_entity(&location, &unit, OccupancyClass::Claim);
+    map.place(mark(&location, unit, OccupancyClass::Claim));
 
     map.restore_claim(GROUND_LAYER.into(), &[CellPos::new(2, 0)]);
 }
@@ -711,9 +717,9 @@ fn releasing_unclaimed_cells_panics() {
 fn rebuilt_claims_stamp_footprints_and_reassert_reservations() {
     let mut map = continuous_test_map();
     // A claim from the previous tick vanishes with the wipe.
-    let unit = LocationDef::new(GROUND_LAYER, CellSize::ONE, Solidity::Solid);
+    let unit = shape(CellSize::ONE);
     let location = LocationComponent::new(world_pos(0, 0), Facing::SOUTH);
-    map.place_entity(&location, &unit, OccupancyClass::Claim);
+    map.place(mark(&location, unit, OccupancyClass::Claim));
 
     map.rebuild_claims(
         &[(GROUND_LAYER.into(), CellSize::new(2, 1), CellPos::new(3, 0))],
@@ -755,10 +761,10 @@ fn static_write_blocks_and_frees_cell() {
     let cell = CellPos::new(3, 1);
 
     map.set_static_occupied(GROUND_LAYER, cell, true);
-    assert!(!map.nav_grid().is_passable(GROUND_LAYER, cell));
+    assert!(map.nav_grid().is_occupied_by(GROUND_LAYER, cell));
 
     map.set_static_occupied(GROUND_LAYER, cell, false);
-    assert!(map.nav_grid().is_passable(GROUND_LAYER, cell));
+    assert!(!map.nav_grid().is_occupied_by(GROUND_LAYER, cell));
 }
 
 #[test]
@@ -767,9 +773,9 @@ fn static_write_lands_under_mover_claim() {
     // cell says nothing about its static bit, so blocking claimed ground is
     // a legal first write, not a double-block.
     let mut map = wall_test_map();
-    let unit = LocationDef::new(GROUND_LAYER, CellSize::ONE, Solidity::Solid);
+    let unit = shape(CellSize::ONE);
     let location = LocationComponent::new(world_pos(3, 1), Facing::SOUTH);
-    map.place_entity(&location, &unit, OccupancyClass::Claim);
+    map.place(mark(&location, unit, OccupancyClass::Claim));
 
     let cell = CellPos::new(3, 1);
     map.set_static_occupied(GROUND_LAYER, cell, true);
@@ -796,35 +802,60 @@ fn static_write_of_state_cell_already_holds_panics() {
 
 /// The ground layer every hierarchy test uses.
 const GROUND_LAYER: LayerId = LayerId::new(1);
+/// The terrain the test maps are made of.
+const LAND: TerrainId = TerrainId::new(1);
+/// The lake's terrain, registered second.
+const DEEP_WATER: TerrainId = TerrainId::new(2);
+/// The domain [`land_registry`] declares: the ground layer over land.
+const WALKER_DOMAIN: DomainId = DomainId::new(0);
+
+/// What a solid body of `shape` standing at `location` marks on the plane
+/// `class` selects.
+fn mark(location: &LocationComponent, shape: MoverShape, class: OccupancyClass) -> GridMark {
+    GridMark {
+        footprint: CellRect::new(CellPos::from(location.position), shape.size),
+        layers: shape.layers,
+        class,
+    }
+}
+
+/// A `size` shape over land on the ground layer.
+fn shape(size: CellSize) -> MoverShape {
+    MoverShape::new(TerrainMask::from(LAND), GROUND_LAYER, size)
+}
 
 /// The single-cell ground mover whose abstraction the test maps carry.
 fn ground_shape() -> MoverShape {
-    MoverShape::point(GROUND_LAYER)
+    shape(CellSize::ONE)
+}
+
+/// A `width × height` land grid with the ground layer registered.
+fn grid(width: u32, height: u32) -> NavGrid {
+    let mut nav_grid = NavGrid::new(width, height, |_| LAND);
+    nav_grid.add_layer(GROUND_LAYER);
+    nav_grid
 }
 
 /// An 8×2 map whose only cut is whatever the test places, with a hierarchy
 /// for the single-cell ground mover.
 fn wall_test_map() -> Map {
-    let mut nav_grid = NavGrid::new(8, 2);
-    nav_grid.add_layer(GROUND_LAYER);
     let mut map = Map::new(
         "test",
         Projection::Isometric,
         MovementModel::Cell,
-        nav_grid,
+        grid(8, 2),
         vec![],
     );
     map.serve_movers(&walker_registry());
     map
 }
 
-/// A registry whose one type is a single-cell ground mover.
+/// A [`land_registry`] whose one type is a single-cell ground mover.
 fn walker_registry() -> ContentRegistry {
-    let mut registry = ContentRegistry::default();
-    assert_eq!(registry.register_layer("ground"), GROUND_LAYER);
+    let mut registry = land_registry();
     registry.register(
         EntityTypeDef::new("walker")
-            .with_location(GROUND_LAYER, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_movement(
                 utils::fixed("0.5"),
                 utils::fixed("0.5"),
@@ -836,16 +867,30 @@ fn walker_registry() -> ContentRegistry {
     registry
 }
 
+/// A registry declaring the ground layer, the land terrain and the
+/// [`WALKER_DOMAIN`] over it.
+fn land_registry() -> ContentRegistry {
+    let mut registry = ContentRegistry::default();
+    assert_eq!(registry.register_layer("ground"), GROUND_LAYER);
+    assert_eq!(registry.register_terrain("land"), LAND);
+    assert_eq!(
+        registry.register_domain(
+            "ground",
+            DomainDef::new(GROUND_LAYER, Terrains::Only(LAND.into()))
+        ),
+        WALKER_DOMAIN
+    );
+    registry
+}
+
 /// An 8×2 map under the continuous model, whose claim plane is a rebuilt
 /// summary rather than law.
 fn continuous_test_map() -> Map {
-    let mut nav_grid = NavGrid::new(8, 2);
-    nav_grid.add_layer(GROUND_LAYER);
     Map::new(
         "test",
         Projection::Isometric,
         MovementModel::Continuous,
-        nav_grid,
+        grid(8, 2),
         vec![],
     )
 }
@@ -854,36 +899,29 @@ fn world_pos(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
 }
 
-/// A registry declaring ground/water layers and grass/water terrains.
+/// A [`land_registry`] that also knows the deep-water terrain.
 fn lake_registry() -> ContentRegistry {
-    let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    let water = registry.register_layer("water");
-    registry.register_terrain("grass", ground);
-    registry.register_terrain("water", water);
+    let mut registry = land_registry();
+    assert_eq!(registry.register_terrain("deep_water"), DEEP_WATER);
     registry
 }
 
-/// A 4×4 grass map with one water cell at (1, 1).
+/// A 4×4 land map with one deep-water cell at (1, 1).
 fn lake_map() -> MapData {
-    let mut data = MapData::new("pond", Projection::Isometric, 4, 4);
-    data.fill_terrain("grass");
-    data.set_terrain((1, 1), "water");
+    let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
+    data.set_terrain((1, 1), "deep_water");
     data
 }
 
 /// Builds a map placing a post of 100 health with `pools` started as named.
 fn place_post_with(pools: Vec<(String, PoolInitial)>) -> Map {
-    let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    registry.register_terrain("grass", ground);
+    let mut registry = land_registry();
     registry.register(
         EntityTypeDef::new("post")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_pool(Pool::health(100)),
     );
-    let mut data = MapData::new("field", Projection::Isometric, 8, 8);
-    data.fill_terrain("grass");
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");
     data.add_placement(Placement {
         type_name: "post".to_string(),
         cell: (2, 2),

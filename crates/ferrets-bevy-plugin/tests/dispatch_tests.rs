@@ -168,13 +168,18 @@ fn repair_dispatch_app() -> App {
         registry.register_resource("gold");
         registry.register(
             EntityTypeDef::new("warehouse")
-                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_tags(["building"])
                 .with_resource_storage(["gold"]),
         );
         registry.register(
-            utils::walker("handyman", utils::GROUND)
+            utils::walker("handyman", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(

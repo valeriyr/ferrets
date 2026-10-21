@@ -66,7 +66,7 @@ use crate::{
     ground,
     map::Map,
     movement_model::{self, MovementModel},
-    occupancy::OccupancyClass,
+    occupancy::{GridMark, OccupancyClass},
     order::Order,
     rally, requirements,
     session::player_id::PlayerId,
@@ -281,18 +281,24 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
     orders::requires_operating(world, entity)?;
 
     // An attached entity holds no cells: before it changes it steps onto
-    // ground that takes the form it wears next, the nearest to its berth.
+    // ground that takes the form it wears next, the nearest to its berth, on
+    // terrain its own form takes too, so a change that ends early leaves it
+    // standing where its own domain admits it.
     let step_out = if entity_def::attached(world, entity) {
         let Some(worn) = worn_next(world, &transition) else {
             return Err(Refusal::Incapable);
         };
+        let registry = world.resource::<ContentRegistry>();
+        let mut shape = entity_def::mover_shape(registry, &worn);
+        shape.terrains = shape.terrains & entity_def::mover_shape(registry, &from).terrains;
         let berth = body::anchor(entity_def::position(world, entity));
         match spawn::cell_back_beside(
             world,
             entity,
             Beside::Footprint(CellRect::new(berth, from.size())),
             Lean::Nothing,
-            &worn,
+            shape,
+            worn.solidity(),
         ) {
             Some(cell) => Some(cell),
             None => return Err(Refusal::NoRoom),
@@ -409,11 +415,11 @@ fn begin(
     );
     let reservation = reservation.map(|(anchor, to)| MorphReservation {
         cells: world.resource_mut::<Map>().reserve_claim(
-            to.occupation(),
+            to.occupies(),
             body::anchor(anchor),
             to.size(),
         ),
-        mask: to.occupation(),
+        layers: to.occupies(),
     });
     cost::pay(
         world,
@@ -921,11 +927,17 @@ fn reoccupy(
     let new_class = OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id));
     // Unchanged presence — the same cells on the same plane, the same way —
     // has nothing to swap; a nearby landing may still move.
-    let unchanged = from.occupation() == to.occupation()
+    let unchanged = from.occupies() == to.occupies()
         && from.size() == to.size()
         && old_class == new_class
         && from.solidity() == to.solidity()
         && landing != Landing::Nearby;
+    // The same marks on ground the new form may also stand on: a form over
+    // other terrains is judged on its own, whatever it marks.
+    let same_ground = unchanged && {
+        let registry = world.resource::<ContentRegistry>();
+        entity_def::mover_shape(registry, &from) == entity_def::mover_shape(registry, &to)
+    };
 
     let facing = world
         .entity(entity)
@@ -943,7 +955,7 @@ fn reoccupy(
         Landing::Revalidated => {
             let placed = LocationComponent::new(anchor, facing);
             let fits = allowed(world, anchor)
-                && (unchanged
+                && (same_ground
                     || ground::can_place(
                         world,
                         &placed,
@@ -961,13 +973,15 @@ fn reoccupy(
             // Only a mover lands nearby (the registry refuses the placement
             // for a static form), so the grid's answer is the whole answer:
             // what stands underfoot never refuses a mover.
+            let standing_mark = entity_def::grid_mark_of(&standing, from, old_class);
+            let to_shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &to);
             let mut map = world.resource_mut::<Map>();
-            let own = lift_standing_presence(&mut map, &standing, &from, old_class);
+            let own = lift_standing_presence(&mut map, standing_mark);
             let around = CellRect::new(body::anchor(position), from.size());
             let found = map
-                .find_placement_near(around.origin, around.size, &to)
+                .find_placement_near(around.origin, around.size, to_shape, to.solidity())
                 .map(FixedUVec2::from);
-            restore_standing_presence(&mut map, &standing, &from, old_class, &own);
+            restore_standing_presence(&mut map, standing_mark, &own);
             let anchor = found?;
             if !allowed(world, anchor) {
                 return None;
@@ -981,8 +995,15 @@ fn reoccupy(
     }
 
     let mut map = world.resource_mut::<Map>();
-    lift_standing_presence(&mut map, &standing, &from, old_class);
-    map.place_entity(&LocationComponent::new(anchor, facing), &to, new_class);
+    lift_standing_presence(
+        &mut map,
+        entity_def::grid_mark_of(&standing, from, old_class),
+    );
+    map.place_if_some(entity_def::grid_mark_of(
+        &LocationComponent::new(anchor, facing),
+        to,
+        new_class,
+    ));
     Some(anchor)
 }
 
@@ -1148,7 +1169,7 @@ fn release_reservation(world: &mut World, morph: &MorphComponent) {
     };
     world
         .resource_mut::<Map>()
-        .release_claim(reservation.mask, &reservation.cells);
+        .release_claim(reservation.layers, &reservation.cells);
 }
 
 //
@@ -1272,44 +1293,32 @@ fn settled(
     }
 }
 
-/// Takes the entity's standing presence off the grid ahead of testing or
-/// taking its destination, returning the claim cells actually lifted so
-/// [`restore_standing_presence`] can put back exactly those.
-fn lift_standing_presence(
-    map: &mut Map,
-    standing: &LocationComponent,
-    from: &LocationDef,
-    class: OccupancyClass,
-) -> Vec<CellPos> {
-    match class {
+/// Takes the entity's standing presence — `standing`, or nothing for a body
+/// that marks no cells — off the grid, returning the claim cells actually
+/// lifted.
+fn lift_standing_presence(map: &mut Map, standing: Option<GridMark>) -> Vec<CellPos> {
+    let Some(mark) = standing else {
+        return Vec::new();
+    };
+    match mark.class {
         OccupancyClass::Static => {
-            map.displace_entity(standing, from, class);
+            map.displace(mark);
             Vec::new()
         }
         OccupancyClass::Claim => {
-            if !from.solidity().claims_cells() {
-                return Vec::new();
-            }
-            map.take_claim(
-                from.occupation(),
-                body::anchor(standing.position),
-                from.size(),
-            )
+            map.take_claim(mark.layers, mark.footprint.origin, mark.footprint.size)
         }
     }
 }
 
 /// Puts back what [`lift_standing_presence`] took.
-fn restore_standing_presence(
-    map: &mut Map,
-    standing: &LocationComponent,
-    from: &LocationDef,
-    class: OccupancyClass,
-    own: &[CellPos],
-) {
-    match class {
-        OccupancyClass::Static => map.place_entity(standing, from, class),
-        OccupancyClass::Claim => map.restore_claim(from.occupation(), own),
+fn restore_standing_presence(map: &mut Map, standing: Option<GridMark>, own: &[CellPos]) {
+    let Some(mark) = standing else {
+        return;
+    };
+    match mark.class {
+        OccupancyClass::Static => map.place(mark),
+        OccupancyClass::Claim => map.restore_claim(mark.layers, own),
     }
 }
 

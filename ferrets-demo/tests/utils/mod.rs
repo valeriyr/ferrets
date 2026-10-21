@@ -113,7 +113,7 @@ pub fn scenario_app(model: MovementModel) -> App {
 ///
 /// Two seats are occupied and on no team, so slots `0` and `1` are hostile to
 /// each other and a test can stage a fight by choosing owners. The built-in
-/// mission's map is 32×32 and all grass, so anything about water, rivers, fords
+/// mission's map is 32×32 and all land, so anything about water, rivers, fords
 /// or two sides has to be tested here instead.
 pub fn demo_map_app(model: MovementModel) -> App {
     demo_map_app_as(LocalRole::Player(0), model)

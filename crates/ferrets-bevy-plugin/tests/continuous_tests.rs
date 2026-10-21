@@ -83,6 +83,57 @@ fn overlapping_bodies_push_apart() {
 }
 
 #[test]
+fn pushing_never_commits_onto_terrain_off_its_domain() {
+    // The crowd of the test below, of landlubbers, against a column of water
+    // rather than a wall: their domain takes land alone, so the water is the
+    // same barrier, in planning and in every shove.
+    let water: Vec<(u32, u32)> = (2..9).map(|y| (8, y)).collect();
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &water, |_, _| {});
+
+    let landlubbers: Vec<_> = [(2, 4), (3, 5), (2, 6), (4, 5), (3, 4)]
+        .iter()
+        .map(|&(x, y)| utils::create_owned(&mut app, "landlubber", x, y, 0))
+        .collect();
+    for (_, id) in &landlubbers {
+        utils::select(&mut app, *id);
+        utils::push_command(
+            &mut app,
+            PlayerCommand::Move {
+                target: utils::pos(7, 5),
+                flush: true,
+            },
+        );
+    }
+
+    utils::run_ticks(&mut app, 300);
+
+    // The settle of the wall test, cell for cell, and no circle over the
+    // water.
+    let world = app.world_mut();
+    let cells: Vec<CellPos> = landlubbers
+        .iter()
+        .map(|(landlubber, _)| body::anchor(utils::position_of(world, *landlubber)))
+        .collect();
+    assert_eq!(
+        cells,
+        vec![
+            CellPos::new(7, 5),
+            CellPos::new(7, 4),
+            CellPos::new(7, 6),
+            CellPos::new(7, 2),
+            CellPos::new(7, 3),
+        ]
+    );
+    // Each rests flush against the water: at x = 7 it reaches to 7 + 1 = 8,
+    // the water's edge.
+    let edges: Vec<FixedU64> = landlubbers
+        .iter()
+        .map(|(landlubber, _)| utils::position_of(world, *landlubber).x)
+        .collect();
+    assert_eq!(edges, vec![FixedU64::from_num(7); 5]);
+}
+
+#[test]
 fn pushing_never_commits_into_walls() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
@@ -162,10 +213,10 @@ fn pushing_never_commits_into_walls() {
                     continue;
                 }
                 assert!(
-                    world
+                    !world
                         .resource::<Map>()
                         .nav_grid()
-                        .is_statically_passable_by(utils::GROUND, CellPos::new(x, y)),
+                        .is_statically_occupied_by(utils::GROUND, CellPos::new(x, y)),
                     "body at {position:?} overlaps wall cell ({x}, {y})"
                 );
             }

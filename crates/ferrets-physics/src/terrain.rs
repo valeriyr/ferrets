@@ -1,24 +1,23 @@
 //! Bodies against standing terrain: what a circle may overlap, and how a
 //! displacement commits without entering what it may not.
 
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::NavGrid};
+use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid};
 
 use crate::body;
 
-/// Whether a body of `size` anchored at `position` overlaps only statically
-/// passable cells.
+/// Whether a body of `shape` anchored at `position` overlaps only cells
+/// statically clear for it.
 pub fn body_fits(
     grid: &NavGrid,
-    mask: LayerMask,
+    shape: MoverShape,
     position: FixedUVec2,
-    size: CellSize,
     radius: FixedU64,
 ) -> bool {
-    body::overlapped_cells(position, size, radius)
+    body::overlapped_cells(position, shape.size, radius)
         .into_iter()
-        .all(|cell| grid.is_statically_passable_by(mask, cell))
+        .all(|cell| grid.cell_fits_statically(cell, shape.terrains, shape.layers))
 }
 
 /// Commits a desired position against the static plane: the desired point
@@ -38,20 +37,22 @@ pub fn body_fits(
 /// it already clips it moves freely, which is accepted over freezing.
 pub fn slide_toward(
     grid: &NavGrid,
-    mask: LayerMask,
+    shape: MoverShape,
     position: FixedUVec2,
-    size: CellSize,
     desired: FixedUVec2,
     radius: FixedU64,
 ) -> FixedUVec2 {
-    let clipped: Vec<CellPos> = body::overlapped_cells(position, size, radius)
+    let clipped: Vec<CellPos> = body::overlapped_cells(position, shape.size, radius)
         .into_iter()
-        .filter(|&cell| !grid.is_statically_passable_by(mask, cell))
+        .filter(|&cell| !grid.cell_fits_statically(cell, shape.terrains, shape.layers))
         .collect();
     let fits = |candidate: FixedUVec2| {
-        body::overlapped_cells(candidate, size, radius)
+        body::overlapped_cells(candidate, shape.size, radius)
             .into_iter()
-            .all(|cell| grid.is_statically_passable_by(mask, cell) || clipped.contains(&cell))
+            .all(|cell| {
+                grid.cell_fits_statically(cell, shape.terrains, shape.layers)
+                    || clipped.contains(&cell)
+            })
     };
 
     let along_x = FixedUVec2::new(desired.x, position.y);

@@ -3,12 +3,14 @@
 
 mod utils;
 
-use bevy::prelude::App;
+use bevy::prelude::{App, World};
 use ferrets_content::player_stats::PlayerStatId;
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{rise, train::TrainQueueComponent},
+    movement_model::MovementModel,
     player_stats::PlayerStats,
     resources::PlayerResources,
     simulation_id::SimulationId,
@@ -69,6 +71,47 @@ fn train_spawns_units_and_deducts_cost() {
     for soldier in utils::owned_of_type(world, "soldier", 0) {
         utils::assert_adjacent_to_footprint(world, soldier, barracks);
     }
+}
+
+#[test]
+fn trained_unit_stands_only_on_terrain_its_domain_takes() {
+    // A 2×2 barracks at (10,10) in a ring of water but for (9,10). The
+    // soldier's domain takes every terrain, so it takes the ring's first cell:
+    // the eight cells beside the footprint's sides all sit 1² + 3² = 10
+    // half-cells² from its middle, and the tie goes to the lowest row, then
+    // column — (10,9). The landlubber's domain takes land alone: (9,10).
+    let ring: Vec<(u32, u32)> = (9..=12)
+        .flat_map(|y| (9..=12).map(move |x| (x, y)))
+        .filter(|&(x, y)| !(10..=11).contains(&x) || !(10..=11).contains(&y))
+        .filter(|&cell| cell != (9, 10))
+        .collect();
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &ring, |registry, _| {
+        let barracks = registry
+            .entity("barracks")
+            .expect("the orders content declares a barracks")
+            .clone();
+        let mut camp = barracks.with_trainer(["soldier", "landlubber"]);
+        camp.name = "camp".to_string();
+        registry.register(camp);
+    });
+    let world = app.world_mut();
+    let (_, camp_id) = utils::create_entity(world, "camp", utils::pos(10, 10), Some(0)).unwrap();
+    world.resource_mut::<PlayerResources>().add(0, "gold", 60);
+
+    for type_name in ["soldier", "landlubber"] {
+        utils::push_command(
+            &mut app,
+            PlayerCommand::TrainEntity {
+                trainer: camp_id,
+                type_name: type_name.into(),
+            },
+        );
+    }
+    utils::run_ticks(&mut app, 30);
+
+    let world = app.world_mut();
+    assert_eq!(cells_of(world, "soldier"), [CellPos::new(10, 9)]);
+    assert_eq!(cells_of(world, "landlubber"), [CellPos::new(9, 10)]);
 }
 
 #[test]
@@ -322,6 +365,14 @@ fn cancel_train_releases_supply_of_dropped_entry() {
 //
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
+
+/// The cells player 0's units of `type_name` stand on.
+fn cells_of(world: &mut World, type_name: &str) -> Vec<CellPos> {
+    utils::owned_of_type(world, type_name, 0)
+        .into_iter()
+        .map(|unit| utils::cell_of(world, unit))
+        .collect()
+}
 
 /// Queues one soldier on `trainer`.
 fn queue_soldier(app: &mut App, trainer: SimulationId) {

@@ -120,7 +120,7 @@ fn odd_growth_keeps_middle_under_continuous_model() {
 
 #[test]
 fn unrooting_swaps_static_footprint_for_claim() {
-    // Same occupation, same size — only the plane changes: the shrine's
+    // Same layers occupied, same size — only the plane changes: the shrine's
     // static footprint must come off the grid and the golem's claim go on,
     // or the ghost of the building walls its own unit in forever.
     let mut app = utils::morph_app(MovementModel::Cell);
@@ -135,7 +135,7 @@ fn unrooting_swaps_static_footprint_for_claim() {
     for cell in [(10, 10), (11, 10), (10, 11), (11, 11)] {
         let cell = CellPos::new(cell.0, cell.1);
         assert!(
-            grid.is_statically_passable_by(utils::GROUND, cell),
+            !grid.is_statically_occupied_by(utils::GROUND, cell),
             "the shrine's static footprint survived its unrooting at {cell:?}"
         );
         assert!(
@@ -592,7 +592,7 @@ fn rooting_puts_static_footprint_back() {
     for cell in [(10, 10), (11, 10), (10, 11), (11, 11)] {
         let cell = CellPos::new(cell.0, cell.1);
         assert!(
-            !grid.is_statically_passable_by(utils::GROUND, cell),
+            grid.is_statically_occupied_by(utils::GROUND, cell),
             "the shrine stands on the static plane at {cell:?}"
         );
         assert!(
@@ -739,6 +739,118 @@ fn burrowed_form_revalidated_in_place_is_not_refused_by_its_own_footprint() {
     assert_eq!(type_name_of(&app, mole), "shrew");
 }
 
+#[test]
+fn change_into_form_of_same_marks_is_refused_over_terrain_it_does_not_take() {
+    // The wader's domain takes every terrain, the dryling's land alone; both
+    // claim one cell of the ground layer, so the change moves nothing on the
+    // grid — but judged as it lands, the dryling may not stand on the water
+    // the wader stands on, and the change fizzles there.
+    let mut app = wading_app();
+    let (afloat, _) = utils::create_owned(&mut app, "wader", 10, 10, 0);
+    let (ashore, _) = utils::create_owned(&mut app, "wader", 4, 4, 0);
+
+    utils::order_morph(&mut app, afloat, "dryling");
+    utils::order_morph(&mut app, ashore, "dryling");
+    utils::run_ticks(&mut app, 6);
+
+    assert_eq!(type_name_of(&app, afloat), "wader");
+    assert_eq!(type_name_of(&app, ashore), "dryling");
+}
+
+#[test]
+fn change_into_static_form_is_refused_over_terrain_it_does_not_take() {
+    let mut app = wading_app();
+    let (afloat, _) = utils::create_owned(&mut app, "wader", 10, 10, 0);
+
+    utils::order_morph(&mut app, afloat, "hut");
+    utils::run_ticks(&mut app, 6);
+
+    assert_eq!(type_name_of(&app, afloat), "wader");
+}
+
+#[test]
+fn change_landing_nearby_stands_only_on_terrain_new_form_takes() {
+    // Set down nearby, the settler lands on the nearest land, never on the
+    // water around the wader.
+    let mut app = wading_app();
+    let (afloat, _) = utils::create_owned(&mut app, "wader", 10, 10, 0);
+
+    utils::order_morph(&mut app, afloat, "settler");
+    utils::run_ticks(&mut app, 6);
+
+    // The first ring around (10,10) is all water; of the second, the cells
+    // straight out — (10,8), (8,10), (12,10), (10,12) — lie nearest, two
+    // cells off, and the tie goes to the lowest row: (10,8).
+    assert_eq!(type_name_of(&app, afloat), "settler");
+    assert_eq!(utils::cell_of(app.world(), afloat), CellPos::new(10, 8));
+}
+
+#[test]
+fn canceled_change_of_berthed_worker_leaves_it_on_land_it_takes() {
+    // A dry sylph, its domain taking land alone, sits in the berth of a shaft
+    // house at (10,10) ringed by water but for (9,11), and is told to change
+    // into a form that takes water too. It leaves the berth for the one cell
+    // of land in the ring, (9,11); canceled, the dry sylph stays there.
+    let water = [
+        (9, 9),
+        (10, 9),
+        (11, 9),
+        (9, 10),
+        (11, 10),
+        (10, 11),
+        (11, 11),
+    ];
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &water, |registry, dry| {
+        let sylph = registry
+            .entity("sylph")
+            .expect("the orders content declares a sylph")
+            .clone();
+        let mut dry_sylph =
+            utils::in_domain(sylph.clone(), dry).with_morphs([MorphTransition::new(
+                "wet_sylph",
+                MorphCourse::direct(MorphInterrupted::Reverts),
+                Quantity::Constant(10),
+                MorphPlacement::Revalidate,
+                MorphCancel::Refundable,
+                MorphReason::Change,
+                Vec::new(),
+                Vec::new(),
+                [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+            )]);
+        dry_sylph.name = "dry_sylph".to_string();
+        registry.register(dry_sylph);
+        let mut wet_sylph = sylph;
+        wet_sylph.name = "wet_sylph".to_string();
+        registry.register(wet_sylph);
+    });
+    let (house, house_id) = utils::create_owned(&mut app, "shaft_house", 10, 10, 0);
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(house)
+        .unwrap()
+        .amount = 500;
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "dry_sylph", 8, 12, 0);
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: house_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 4);
+    assert!(entity_def::attached(app.world(), sylph));
+
+    utils::command_morph(&mut app, sylph_id, "wet_sylph");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(!entity_def::attached(app.world(), sylph));
+    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(9, 11));
+
+    utils::soft_cancel_orders(app.world_mut(), sylph);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(type_name_of(&app, sylph), "dry_sylph");
+    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(9, 11));
+}
+
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
@@ -755,7 +867,12 @@ fn underfoot_app() -> App {
         registry.register_resource("gold");
         registry.register(
             EntityTypeDef::new("mole")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Underfoot,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_morphs([
                     change("vole", MorphPlacement::Reserve, Vec::new()),
@@ -764,16 +881,26 @@ fn underfoot_app() -> App {
         );
         registry.register(
             EntityTypeDef::new("vole")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Underfoot,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20)),
         );
         registry.register(
             EntityTypeDef::new("shrew")
-                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Underfoot)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Underfoot,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20)),
         );
         registry.register(
-            utils::walker("digger", utils::GROUND)
+            utils::walker("digger", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(30))
                 .with_dying(2, [])
                 .with_morphs([change(
@@ -784,7 +911,12 @@ fn underfoot_app() -> App {
         );
         registry.register(
             EntityTypeDef::new("den")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(2, []),
         );
@@ -818,4 +950,39 @@ fn type_name_of(app: &bevy::prelude::App, entity: bevy::prelude::Entity) -> Stri
         .expect("a live entity carries its info")
         .type_name()
         .to_string()
+}
+
+/// [`utils::dry_orders_app`] with a `wader` — the orders soldier, its domain
+/// taking every terrain — standing in a 3×3 pool of water at (9,9)..(11,11),
+/// that changes into forms whose domain takes dry land alone: a `dryling`,
+/// the landlubber judged as it lands; a `settler`, the same set down nearby;
+/// and a static `hut`, judged as it lands.
+fn wading_app() -> App {
+    utils::dry_orders_app(
+        MovementModel::Cell,
+        &utils::water_pool(),
+        |registry, dry| {
+            let soldier = registry
+                .entity("soldier")
+                .expect("the orders content declares a soldier")
+                .clone();
+            let mut wader = soldier.clone().with_morphs([
+                change("dryling", MorphPlacement::Revalidate, Vec::new()),
+                change("settler", MorphPlacement::Nearby, Vec::new()),
+                change("hut", MorphPlacement::Revalidate, Vec::new()),
+            ]);
+            wader.name = "wader".to_string();
+            registry.register(wader);
+            for name in ["dryling", "settler"] {
+                let mut form = utils::in_domain(soldier.clone(), dry);
+                form.name = name.to_string();
+                registry.register(form);
+            }
+            registry.register(
+                EntityTypeDef::new("hut")
+                    .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+                    .with_pool(Pool::health(30)),
+            );
+        },
+    )
 }

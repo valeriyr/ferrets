@@ -573,7 +573,12 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("mage")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_rise(
                     4,
                     utils::rise_initial_pools(&[PoolId::HEALTH, PoolId::ENERGY]),
@@ -602,13 +607,19 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("totem")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50)),
         );
         registry.register(EntityTypeDef::new("banner").with_location(
-            utils::GROUND,
+            utils::GROUND_DOMAIN,
             CellSize::ONE,
             Solidity::Solid,
+            utils::GROUND,
         ));
     }
     app.world_mut().resource::<ContentRegistry>().validate();

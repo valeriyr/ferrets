@@ -1279,9 +1279,12 @@ fn hover_each<C: Component>(app: &mut App) -> Vec<String> {
 /// sight at least 99 and sight at least 1; standing idle; 40 ticks idle; and
 /// 200 ticks unhurt.
 fn register_totem(app: &mut App) {
-    let ground = {
+    let (land, ground) = {
         let registry = app.world().resource::<ContentRegistry>();
-        registry.layer("ground").expect("the demo declares ground")
+        (
+            registry.domain("land").expect("the demo declares land"),
+            registry.layer("ground").expect("the demo declares ground"),
+        )
     };
     let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
     let frenzy_ritual = registry
@@ -1289,7 +1292,7 @@ fn register_totem(app: &mut App) {
         .expect("the demo content defines the frenzy ritual");
     registry.register(
         EntityTypeDef::new("totem")
-            .with_location(ground, CellSize::ONE, Solidity::Solid)
+            .with_location(land, CellSize::ONE, Solidity::Solid, ground)
             .with_pool(Pool::health(100))
             .with_pool(Pool::energy(40))
             .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(5))

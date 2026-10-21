@@ -1,4 +1,4 @@
-//! Demo map: a 96×96 grass field split into four quadrants by rivers, with a
+//! Demo map: a 96×96 field of land split into four quadrants by rivers, with a
 //! start point in each corner and a boss lake in the center.
 //!
 //! Cells are `(x, y)` with `x` right and `y` down. Start points are indexed
@@ -17,12 +17,14 @@
 //! y=95+---------------------|---------------------+
 //! ```
 //!
-//! `#` start/base, `$` gold mine, `~` the lake, `F` the boss sea fortress, `|`/`-`
-//! the rivers, `=` their fords — the three-cell gaps that make each quadrant
-//! border a chokepoint. Each corner also has a small tree grove. The mines and
-//! groves are neutral map placements; the fortress and its ships belong to the
-//! boss slot; each lobby slot's base is spawned by the game for its occupant.
-//! The camera opens framed on the local player's start point.
+//! `#` start/base, `$` gold mine, `~` the lake's shallow rim, `≈` its deep
+//! water, `F` the boss sea fortress, `|`/`-` the rivers — deep water between
+//! shallow banks, so only what swims crosses them — and `=` their fords, the
+//! five-cell gaps that make each quadrant border a choke point. Each corner
+//! also has a small tree grove. The mines and groves are neutral map
+//! placements; the fortress and its ships belong to the boss slot; each lobby
+//! slot's base is spawned by the game for its occupant. The camera opens
+//! framed on the local player's start point.
 
 use ferrets_content::pool::PoolInitial;
 use ferrets_geometry::projection::Projection;
@@ -41,7 +43,6 @@ pub const NAME: &str = "demo";
 
 /// The demo's navigation layers, by content name.
 pub const GROUND: &str = "ground";
-pub const WATER: &str = "water";
 pub const AIR: &str = "air";
 
 /// The slot id of the boss — the environment AI holding the lake. The map's
@@ -51,18 +52,23 @@ pub const BOSS: PlayerId = 4;
 const WIDTH: u32 = 96;
 const HEIGHT: u32 = 96;
 
-/// The lake: a circle of water terrain in the map center.
+/// The lake: a circle in the map center, deep water within a shallow rim.
 const LAKE_CENTER: (u32, u32) = (48, 48);
 const LAKE_RADIUS_SQ: i64 = 81;
+/// The squared radius within which the lake is deep water rather than shallow.
+const DEEP_RADIUS_SQ: i64 = 49;
 
-/// The rivers: one-cell water lines along the map's middle axes, from each
-/// edge to the lake, each broken by a three-cell ford.
+/// The rivers: deep water along the map's middle axes, from each edge into the
+/// lake's deep water, between shallow banks, each arm broken by a five-cell
+/// ford.
 const RIVER_AXIS: u32 = 48;
+/// How many cells of shallow bank flank a river's deep water on each side.
+const RIVER_BANK: u32 = 1;
 /// The fords: the spans left open in the near-edge and far-edge river arms.
-const FORD_NEAR: (u32, u32) = (18, 20);
-const FORD_FAR: (u32, u32) = (75, 77);
+const FORD_NEAR: (u32, u32) = (17, 21);
+const FORD_FAR: (u32, u32) = (74, 78);
 
-/// The boss fortress footprint anchor (3×3, roughly centered in the lake).
+/// The boss fortress footprint anchor (5×5, centered on the lake's middle).
 const FORTRESS: (u32, u32) = (46, 46);
 /// Boss ship cells, spread around the fortress on open water.
 const SHIPS: [(u32, u32); 3] = [(44, 50), (52, 46), (50, 52)];
@@ -105,21 +111,7 @@ const TREES: &[(u32, u32)] = &[
 
 /// Returns `true` if the cell lies within the lake.
 pub fn in_lake(x: u32, y: u32) -> bool {
-    let dx = x as i64 - LAKE_CENTER.0 as i64;
-    let dy = y as i64 - LAKE_CENTER.1 as i64;
-    dx * dx + dy * dy <= LAKE_RADIUS_SQ
-}
-
-/// Returns `true` if the cell lies on a river: the middle axes outside the
-/// lake, minus the fords.
-fn in_river(x: u32, y: u32) -> bool {
-    if in_lake(x, y) {
-        return false;
-    }
-    let ford = |along: u32| {
-        (FORD_NEAR.0..=FORD_NEAR.1).contains(&along) || (FORD_FAR.0..=FORD_FAR.1).contains(&along)
-    };
-    (x == RIVER_AXIS && !ford(y)) || (y == RIVER_AXIS && !ford(x))
+    from_lake_center(x, y) <= LAKE_RADIUS_SQ
 }
 
 /// Looks up a map this game knows by name. The session names its map — like
@@ -138,16 +130,19 @@ pub fn opened(session: &GameSession, scenario: Option<&CurrentScenario>) -> Opti
     }
 }
 
-/// The demo map as data: the grass field with its central lake, the corner
+/// The demo map as data: the field of land with its central lake, the corner
 /// start points, the neutral mines and groves, and the boss fleet.
 pub fn data() -> MapData {
-    let mut data = MapData::new(NAME, Projection::Isometric, WIDTH, HEIGHT);
+    let mut data = MapData::new(NAME, Projection::Isometric, WIDTH, HEIGHT, "land");
 
-    data.fill_terrain("grass");
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
-            if in_lake(x, y) || in_river(x, y) {
-                data.set_terrain((x, y), "water");
+            // The lake's deep water and the rivers' meet: a river's deep
+            // channel runs on through the lake's shallow rim.
+            match lake_water(x, y).max(river_water(x, y)) {
+                Water::Deep => data.set_terrain((x, y), "deep_water"),
+                Water::Shallow => data.set_terrain((x, y), "shallow_water"),
+                Water::Dry => {}
             }
         }
     }
@@ -208,4 +203,53 @@ pub fn build() -> Map {
     let registry = ferrets_script::content::load(&LuaEngine, content::CONTENT)
         .expect("demo content must load");
     Map::from_data(&data(), &registry)
+}
+
+/// How deep the water over a cell is, shallowest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Water {
+    /// No water: the cell is land.
+    Dry,
+    /// Shallow water.
+    Shallow,
+    /// Deep water.
+    Deep,
+}
+
+/// The squared distance of a cell from the lake's center.
+fn from_lake_center(x: u32, y: u32) -> i64 {
+    let dx = x as i64 - LAKE_CENTER.0 as i64;
+    let dy = y as i64 - LAKE_CENTER.1 as i64;
+    dx * dx + dy * dy
+}
+
+/// The water the lake gives the cell: deep in its middle, shallow on its rim.
+fn lake_water(x: u32, y: u32) -> Water {
+    if from_lake_center(x, y) <= DEEP_RADIUS_SQ {
+        Water::Deep
+    } else if in_lake(x, y) {
+        Water::Shallow
+    } else {
+        Water::Dry
+    }
+}
+
+/// The water a river gives the cell: deep on a middle axis, shallow on its
+/// banks, and none on a ford or beyond the banks.
+fn river_water(x: u32, y: u32) -> Water {
+    let ford = |along: u32| {
+        (FORD_NEAR.0..=FORD_NEAR.1).contains(&along) || (FORD_FAR.0..=FORD_FAR.1).contains(&along)
+    };
+    // How far the cell lies across each arm: from the vertical arm's axis
+    // where the column is not a ford row, and from the horizontal arm's axis
+    // where the row is not a ford column.
+    let across = [
+        (!ford(y)).then(|| x.abs_diff(RIVER_AXIS)),
+        (!ford(x)).then(|| y.abs_diff(RIVER_AXIS)),
+    ];
+    match across.into_iter().flatten().min() {
+        Some(0) => Water::Deep,
+        Some(distance) if distance <= RIVER_BANK => Water::Shallow,
+        Some(_) | None => Water::Dry,
+    }
 }

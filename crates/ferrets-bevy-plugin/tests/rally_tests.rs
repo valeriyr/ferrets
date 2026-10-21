@@ -285,7 +285,12 @@ fn rally_app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("hall")
-                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_sight_range(8)
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])

@@ -99,7 +99,7 @@ fn route_threads_through_only_gap() {
     let mut grid = utils::grid(16, 8);
     for y in 0..8 {
         if y != 6 {
-            grid.set_occupied(utils::GROUND, utils::nav(7, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(7, y), true);
         }
     }
     let hierarchy = utils::build_ground(&grid, 4);
@@ -357,7 +357,7 @@ fn occupied_goal_with_stop_distance_reaches_adjacent_cell() {
     // A statically occupied goal cell (a building) with stop distance 1:
     // the route ends on a neighboring cell without repair.
     let mut grid = utils::grid(16, 4);
-    grid.set_occupied(utils::GROUND, utils::nav(14, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(14, 2), true);
     let hierarchy = utils::build_ground(&grid, 4);
 
     let cells = walk(
@@ -418,7 +418,7 @@ fn refine_fails_when_crossing_gets_walled() {
 
     // Wall the far side of the next crossing after the plan was made.
     let next = *path.corridor.last().unwrap();
-    grid.set_occupied(utils::GROUND, next.to, true);
+    grid.set_occupied_by(utils::GROUND, next.to, true);
     hierarchy.mark_dirty(next.to);
     hierarchy.refresh(&grid);
 
@@ -454,7 +454,7 @@ fn replanning_after_refresh_avoids_new_wall() {
     // A wall with one gap at the bottom lands mid-game; the warm cost cache
     // must not leak the old open routes.
     for y in 0..7 {
-        grid.set_occupied(utils::GROUND, utils::nav(8, y), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(8, y), true);
         hierarchy.mark_dirty(utils::nav(8, y));
     }
     hierarchy.refresh(&grid);
@@ -526,7 +526,7 @@ fn wide_route_threads_gap_it_fits() {
     let mut grid = utils::grid(16, 8);
     for y in 0..8 {
         if y != 3 && y != 4 {
-            grid.set_occupied(utils::GROUND, utils::nav(7, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(7, y), true);
         }
     }
     let wide = utils::square_on_ground(2);
@@ -571,7 +571,7 @@ fn wide_goal_repairs_where_only_narrow_fits() {
     // slips in, but the wide body's region ends outside — its goal repairs
     // to the shore while the narrow one's does not.
     let mut grid = utils::hollow_ring_grid(12, utils::nav(6, 4), 2);
-    grid.set_occupied(utils::GROUND, utils::nav(6, 2), false);
+    grid.set_occupied_by(utils::GROUND, utils::nav(6, 2), false);
     let narrow = utils::on_ground();
     let wide = utils::square_on_ground(2);
     let hierarchy = utils::build_for(&grid, 4, &[narrow, wide]);
@@ -628,7 +628,7 @@ fn ranged_goal_is_reached_by_edge_from_foreign_cluster() {
     // walk ends on the near side of the wall.
     let mut grid = utils::grid(16, 8);
     for y in 0..8 {
-        grid.set_occupied(utils::GROUND, utils::nav(8, y), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(8, y), true);
     }
     let wide = utils::square_on_ground(2);
     let hierarchy = utils::build_for(&grid, 4, &[wide]);
@@ -699,8 +699,8 @@ fn refine_fails_when_crossing_no_longer_fits_wide_shape() {
     // must not.
     let next = *path.corridor.last().unwrap();
     let blocked = utils::nav(next.to.x + 1, next.to.y);
-    grid.set_occupied(utils::GROUND, blocked, true);
-    assert!(grid.is_statically_passable_by(utils::GROUND, next.to));
+    grid.set_occupied_by(utils::GROUND, blocked, true);
+    assert!(!grid.is_statically_occupied_by(utils::GROUND, next.to));
     hierarchy.mark_dirty(blocked);
     hierarchy.refresh(&grid);
 

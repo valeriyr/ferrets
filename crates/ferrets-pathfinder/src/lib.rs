@@ -9,3 +9,5 @@ pub mod mover_profile;
 pub mod mover_shape;
 pub mod nav_grid;
 pub mod search;
+pub mod terrain_id;
+pub mod terrain_mask;

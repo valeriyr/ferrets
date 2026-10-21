@@ -93,9 +93,8 @@ pub struct CurrentScenario(pub Scenario);
 /// and train three archers (240 gold) without harvesting, so the objective is
 /// the point rather than the economy.
 pub fn builtin_mission(projection: Projection, movement_model: MovementModel) -> Scenario {
-    let mut map = MapData::new("build_army", projection, 32, 32);
+    let mut map = MapData::new("build_army", projection, 32, 32, "land");
     map.set_movement_model(movement_model);
-    map.fill_terrain("grass");
     map.add_player_slot(START);
 
     // The mission's authored base, plus a gold mine within reach and a small

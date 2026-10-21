@@ -54,7 +54,7 @@ use ferrets_content::{
     turret::TurretStats,
     warp::WarperDef,
 };
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_pathfinder::{layer_mask::LayerMask, mover_shape::MoverShape};
 
 /// Returns the [`SimulationId`] `entity` was spawned with.
 ///
@@ -477,9 +477,22 @@ pub fn grid_mark_of(
 ) -> Option<GridMark> {
     def.solidity().claims_cells().then(|| GridMark {
         footprint: CellRect::new(body::anchor(location.position), def.size()),
-        layers: def.occupation(),
+        layers: def.occupies(),
         class,
     })
+}
+
+/// The shape a body of `location_def` stands and routes with: its domain's
+/// terrains, the layers it occupies, and its size.
+pub fn mover_shape(registry: &ContentRegistry, location_def: &LocationDef) -> MoverShape {
+    MoverShape::new(
+        registry
+            .domain_def(location_def.domain())
+            .terrains()
+            .mask(registry),
+        location_def.occupies(),
+        location_def.size(),
+    )
 }
 
 /// Returns where `entity` stands.

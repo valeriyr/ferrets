@@ -80,12 +80,9 @@ struct IntraKey {
 
 /// The abstraction of one mover shape over the grid.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LayerHierarchy {
+struct ShapeHierarchy {
     /// The mover shape this abstraction serves; a cell counts as passable when
-    /// the shape's whole footprint anchored there is statically free on every
-    /// layer of its mask. Two footprint sizes on the same layers therefore need
-    /// separate abstractions — a wide mover's map genuinely has fewer ways
-    /// through it.
+    /// the shape's whole footprint anchored there is statically clear for it.
     shape: MoverShape,
     /// Each border's transitions, keyed per border so one border re-derives
     /// without touching the rest. Borders without entrances hold no entry.
@@ -119,7 +116,7 @@ pub struct NavHierarchy {
     /// Grid height in cells.
     height: u32,
     /// One abstraction per mover shape, in the order the shapes were given.
-    layers: Vec<LayerHierarchy>,
+    abstractions: Vec<ShapeHierarchy>,
     /// Borders whose entrances must be re-derived at the next refresh.
     dirty_borders: BTreeSet<BorderKey>,
     /// Clusters whose interior pathability changed since the last refresh;
@@ -145,7 +142,7 @@ impl PartialEq for NavHierarchy {
         self.cluster_size == other.cluster_size
             && self.width == other.width
             && self.height == other.height
-            && self.layers == other.layers
+            && self.abstractions == other.abstractions
             && self.dirty_borders == other.dirty_borders
             && self.dirty_clusters == other.dirty_clusters
             && self.dirty == other.dirty
@@ -160,7 +157,7 @@ impl Clone for NavHierarchy {
             cluster_size: self.cluster_size,
             width: self.width,
             height: self.height,
-            layers: self.layers.clone(),
+            abstractions: self.abstractions.clone(),
             dirty_borders: self.dirty_borders.clone(),
             dirty_clusters: self.dirty_clusters.clone(),
             dirty: self.dirty,
@@ -177,16 +174,16 @@ impl NavHierarchy {
     pub fn build(grid: &NavGrid, cluster_size: u32, shapes: &[MoverShape]) -> Self {
         assert!(cluster_size > 0, "cluster size must be greater than 0");
 
-        let layers = shapes
+        let abstractions = shapes
             .iter()
-            .map(|&shape| LayerHierarchy::build(grid, cluster_size, shape))
+            .map(|&shape| ShapeHierarchy::build(grid, cluster_size, shape))
             .collect();
 
         Self {
             cluster_size,
             width: grid.width(),
             height: grid.height(),
-            layers,
+            abstractions,
             dirty_borders: BTreeSet::new(),
             dirty_clusters: BTreeSet::new(),
             dirty: false,
@@ -209,12 +206,15 @@ impl NavHierarchy {
         // whose footprint covers the cell dirties its own borders and cluster,
         // or a wide shape's transitions would go stale from changes landing
         // just past a border.
-        let (reach_x, reach_y) = self.layers.iter().fold((0, 0), |(x, y), layer| {
-            (
-                x.max(layer.shape.size.width - 1),
-                y.max(layer.shape.size.height - 1),
-            )
-        });
+        let (reach_x, reach_y) = self
+            .abstractions
+            .iter()
+            .fold((0, 0), |(x, y), abstraction| {
+                (
+                    x.max(abstraction.shape.size.width - 1),
+                    y.max(abstraction.shape.size.height - 1),
+                )
+            });
         for dy in 0..=reach_y {
             for dx in 0..=reach_x {
                 if let (Some(x), Some(y)) = (cell.x.checked_sub(dx), cell.y.checked_sub(dy)) {
@@ -261,18 +261,19 @@ impl NavHierarchy {
             return;
         }
 
-        for layer in &mut self.layers {
+        for abstraction in &mut self.abstractions {
             for &border in &self.dirty_borders {
-                let entrance = border_transitions(grid, layer.shape, self.cluster_size, border);
+                let entrance =
+                    border_transitions(grid, abstraction.shape, self.cluster_size, border);
                 if entrance.is_empty() {
-                    layer.transitions.remove(&border);
+                    abstraction.transitions.remove(&border);
                 } else {
-                    layer.transitions.insert(border, entrance);
+                    abstraction.transitions.insert(border, entrance);
                 }
             }
-            let (regions, region_count) = flood_regions(grid, layer.shape);
-            layer.regions = regions;
-            layer.region_count = region_count;
+            let (regions, region_count) = flood_regions(grid, abstraction.shape);
+            abstraction.regions = regions;
+            abstraction.region_count = region_count;
         }
 
         self.intra_costs
@@ -316,13 +317,13 @@ impl NavHierarchy {
         shape: MoverShape,
         cluster: ClusterPos,
     ) -> Vec<(CellPos, Transition)> {
-        let layer = self.layer(shape);
+        let abstraction = self.abstraction(shape);
         let mut sides = Vec::new();
 
         // The cluster's own right/down borders hold its `a` sides; the left
         // and upper neighbors' borders hold its `b` sides.
         let mut collect = |border: BorderKey, take_a: bool| {
-            if let Some(transitions) = layer.transitions.get(&border) {
+            if let Some(transitions) = abstraction.transitions.get(&border) {
                 for &transition in transitions {
                     let side = if take_a { transition.a } else { transition.b };
                     sides.push((side, transition));
@@ -393,7 +394,11 @@ impl NavHierarchy {
     ///
     /// Panics if no hierarchy was built for the shape.
     pub fn transitions(&self, shape: MoverShape) -> impl Iterator<Item = Transition> {
-        self.layer(shape).transitions.values().flatten().copied()
+        self.abstraction(shape)
+            .transitions
+            .values()
+            .flatten()
+            .copied()
     }
 
     /// Returns the connectivity region of `cell` for the given mover shape, or
@@ -404,7 +409,7 @@ impl NavHierarchy {
         if cell.x >= self.width || cell.y >= self.height {
             return None;
         }
-        let region = self.layer(shape).regions[(cell.y * self.width + cell.x) as usize];
+        let region = self.abstraction(shape).regions[(cell.y * self.width + cell.x) as usize];
         (region != NO_REGION).then_some(region)
     }
 
@@ -423,34 +428,38 @@ impl NavHierarchy {
     ///
     /// Panics if no hierarchy was built for the shape.
     pub fn region_count(&self, shape: MoverShape) -> u32 {
-        self.layer(shape).region_count
+        self.abstraction(shape).region_count
     }
 
     /// Returns `true` when an abstraction was built for the given mover shape.
     pub fn serves(&self, shape: MoverShape) -> bool {
-        self.layers.iter().any(|layer| layer.shape == shape)
+        self.abstractions
+            .iter()
+            .any(|abstraction| abstraction.shape == shape)
     }
 
     /// Every mover shape this hierarchy serves, in the order they were given.
     pub fn shapes(&self) -> impl Iterator<Item = MoverShape> {
-        self.layers.iter().map(|layer| layer.shape)
+        self.abstractions
+            .iter()
+            .map(|abstraction| abstraction.shape)
     }
 
     /// The abstraction serving `shape`.
-    fn layer(&self, shape: MoverShape) -> &LayerHierarchy {
-        self.layers
+    fn abstraction(&self, shape: MoverShape) -> &ShapeHierarchy {
+        self.abstractions
             .iter()
-            .find(|layer| layer.shape == shape)
+            .find(|abstraction| abstraction.shape == shape)
             .unwrap_or_else(|| {
                 panic!(
-                    "no hierarchy built for shape {} at {}x{}",
-                    shape.mask, shape.size.width, shape.size.height
+                    "no hierarchy built for shape on terrains {} and layers {} at {}x{}",
+                    shape.terrains, shape.layers, shape.size.width, shape.size.height
                 )
             })
     }
 }
 
-impl LayerHierarchy {
+impl ShapeHierarchy {
     /// Builds one shape's abstraction from the grid's current static
     /// occupancy.
     fn build(grid: &NavGrid, cluster_size: u32, shape: MoverShape) -> Self {

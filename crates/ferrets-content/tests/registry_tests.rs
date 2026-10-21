@@ -17,6 +17,7 @@ use ferrets_content::{
     concealment::Concealment,
     cost::Cost,
     detection::Detection,
+    domain::{DomainDef, DomainId},
     dying::{Bequest, DeathKind, DyingDef, LeftBy},
     entity_buffs::{EntityBuffDef, EntityBuffId, Interruption, Lasting},
     entity_effect::EntityEffect,
@@ -25,7 +26,7 @@ use ferrets_content::{
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
-        FieldId, FieldLayer, FieldPlacement, FieldSourceDef, FieldVision,
+        FieldId, FieldPlacement, FieldSourceDef, FieldVision,
     },
     gateway::{Doors, Joins},
     kinds::{Kind, Kinds},
@@ -58,6 +59,7 @@ use ferrets_content::{
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp},
     tags,
+    terrains::Terrains,
     transport::{PassengerConduct, PassengerFate},
     tunnel::{OtherEndLost, Passage, TunnelDef},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
@@ -65,8 +67,9 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
-use utils::GROUND;
+use ferrets_pathfinder::{
+    layer_id::LayerId, layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask,
+};
 
 //
 // ─── Identity ─────────────────────────────────────────────────────────────────
@@ -76,8 +79,8 @@ use utils::GROUND;
 #[should_panic(expected = "entity type 'worker' is already registered")]
 fn register_rejects_duplicate_type() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND));
-    registry.register(utils::standing("worker", GROUND));
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN));
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN));
 }
 
 //
@@ -94,7 +97,7 @@ fn register_rejects_missing_location() {
 fn register_accepts_square_multi_cell_mover() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::sized("gryphon", GROUND, CellSize::new(2, 2)).with_movement(
+        utils::sized("gryphon", utils::GROUND_DOMAIN, CellSize::new(2, 2)).with_movement(
             FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::ONE,
@@ -112,7 +115,7 @@ fn register_rejects_oblong_mover() {
     // whether the footprint turns with the mover.
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::sized("wagon", GROUND, CellSize::new(2, 3)).with_movement(
+        utils::sized("wagon", utils::GROUND_DOMAIN, CellSize::new(2, 3)).with_movement(
             FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::ONE,
@@ -126,7 +129,11 @@ fn register_rejects_oblong_mover() {
 fn register_accepts_oblong_footprint_on_something_that_cannot_move() {
     // Only movers are constrained: a 3x2 wall is a perfectly good building.
     let mut registry = utils::ground_registry();
-    registry.register(utils::sized("wall", GROUND, CellSize::new(3, 2)));
+    registry.register(utils::sized(
+        "wall",
+        utils::GROUND_DOMAIN,
+        CellSize::new(3, 2),
+    ));
 }
 
 //
@@ -136,13 +143,13 @@ fn register_accepts_oblong_footprint_on_something_that_cannot_move() {
 #[test]
 fn register_accepts_definitions_without_resources() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND));
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN));
 }
 
 #[test]
 fn register_accepts_registered_resource_kinds() {
     gold_registry_with(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_price([("gold", 10)])
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_source("gold", DepletionPolicy::Destroy)
@@ -171,7 +178,7 @@ fn validate_rejects_source_harvesting_itself_from_inside() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_resource_carrier([(
@@ -194,39 +201,44 @@ fn validate_rejects_source_harvesting_itself_from_inside() {
 #[test]
 #[should_panic(expected = "unregistered resource kind 'wood' in its price")]
 fn register_rejects_unknown_price_kind() {
-    gold_registry_with(utils::standing("worker", GROUND).with_price([("wood", 10)]));
+    gold_registry_with(utils::standing("worker", utils::GROUND_DOMAIN).with_price([("wood", 10)]));
 }
 
 #[test]
 #[should_panic(expected = "unregistered resource kind 'wood' in its resource source")]
 fn register_rejects_unknown_source_kind() {
     gold_registry_with(
-        utils::standing("worker", GROUND).with_resource_source("wood", DepletionPolicy::Destroy),
+        utils::standing("worker", utils::GROUND_DOMAIN)
+            .with_resource_source("wood", DepletionPolicy::Destroy),
     );
 }
 
 #[test]
 #[should_panic(expected = "unregistered resource kind 'wood' in its resource carrier")]
 fn register_rejects_unknown_carrier_kind() {
-    gold_registry_with(utils::standing("worker", GROUND).with_resource_carrier([(
-        "wood",
-        HarvestData::new(
-            5,
-            5,
-            2,
-            WorkPresence::Present {
-                crew: CrewLimit::ONE,
-            },
-            Banking::Carried,
-            Kinds::Any,
-        ),
-    )]));
+    gold_registry_with(
+        utils::standing("worker", utils::GROUND_DOMAIN).with_resource_carrier([(
+            "wood",
+            HarvestData::new(
+                5,
+                5,
+                2,
+                WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                },
+                Banking::Carried,
+                Kinds::Any,
+            ),
+        )]),
+    );
 }
 
 #[test]
 #[should_panic(expected = "unregistered resource kind 'wood' in its resource storage")]
 fn register_rejects_unknown_storage_kind() {
-    gold_registry_with(utils::standing("worker", GROUND).with_resource_storage(["gold", "wood"]));
+    gold_registry_with(
+        utils::standing("worker", utils::GROUND_DOMAIN).with_resource_storage(["gold", "wood"]),
+    );
 }
 
 #[test]
@@ -246,12 +258,16 @@ fn empty_resource_kind_panics() {
 fn validate_accepts_registered_production_catalogues() {
     let mut registry = utils::ground_registry();
 
-    registry.register(utils::standing("soldier", GROUND).with_train_time(4));
-    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_rise(6, []));
-    registry
-        .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["soldier"]));
+    registry.register(utils::standing("soldier", utils::GROUND_DOMAIN).with_train_time(4));
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::sized("depot", utils::GROUND_DOMAIN, CellSize::new(2, 2)).with_rise(6, []),
+    );
+    registry.register(
+        utils::sized("barracks", utils::GROUND_DOMAIN, CellSize::new(2, 2))
+            .with_trainer(["soldier"]),
+    );
+    registry.register(
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["depot"],
@@ -273,7 +289,7 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::sized("depot", GROUND, CellSize::new(2, 2))
+        utils::sized("depot", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_rise(6, [])
             .with_berths([(
                 "rim",
@@ -281,12 +297,12 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
             )]),
     );
     registry.register(
-        utils::sized("vein", GROUND, CellSize::new(2, 2))
+        utils::sized("vein", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_berths([("rim", BerthGroup::new([point("0.5", "0.5")], 1))]),
     );
     registry.register(
-        utils::standing("sprite", GROUND)
+        utils::standing("sprite", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_builder(
@@ -324,9 +340,11 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
 )]
 fn validate_rejects_builder_attaching_to_group_its_site_lacks() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::sized("depot", GROUND, CellSize::new(2, 2)).with_rise(6, []));
     registry.register(
-        utils::standing("sprite", GROUND)
+        utils::sized("depot", utils::GROUND_DOMAIN, CellSize::new(2, 2)).with_rise(6, []),
+    );
+    registry.register(
+        utils::standing("sprite", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["depot"],
@@ -347,10 +365,11 @@ fn validate_rejects_carrier_attaching_to_group_no_source_offers() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+        utils::standing("mine", utils::GROUND_DOMAIN)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("sprite", GROUND)
+        utils::standing("sprite", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_carrier([(
                 "gold",
@@ -372,11 +391,11 @@ fn validate_accepts_overbuilding_of_matching_source() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::sized("mine", GROUND, CellSize::new(2, 2))
+        utils::sized("mine", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::sized("shaft_house", GROUND, CellSize::new(2, 2))
+        utils::sized("shaft_house", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
@@ -392,10 +411,11 @@ fn validate_rejects_overbuilding_source_of_another_size() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+        utils::standing("mine", utils::GROUND_DOMAIN)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::sized("shaft_house", GROUND, CellSize::new(2, 2))
+        utils::sized("shaft_house", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
@@ -411,10 +431,11 @@ fn validate_rejects_overbuilding_by_type_that_is_not_source_itself() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+        utils::standing("mine", utils::GROUND_DOMAIN)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("shaft_house", GROUND)
+        utils::standing("shaft_house", utils::GROUND_DOMAIN)
             .with_rise(6, [])
             .with_overbuilds("mine"),
     );
@@ -427,7 +448,7 @@ fn validate_rejects_overbuilding_unregistered_type() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("shaft_house", GROUND)
+        utils::standing("shaft_house", utils::GROUND_DOMAIN)
             .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("seam"),
@@ -442,9 +463,9 @@ fn validate_rejects_overbuilding_unregistered_type() {
 fn validate_rejects_overbuilding_type_that_is_no_source() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
-    registry.register(utils::standing("boulder", GROUND));
+    registry.register(utils::standing("boulder", utils::GROUND_DOMAIN));
     registry.register(
-        utils::standing("shaft_house", GROUND)
+        utils::standing("shaft_house", utils::GROUND_DOMAIN)
             .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("boulder"),
@@ -461,10 +482,11 @@ fn validate_rejects_overbuilding_source_of_another_kind() {
     registry.register_resource("gold");
     registry.register_resource("wood");
     registry.register(
-        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+        utils::standing("mine", utils::GROUND_DOMAIN)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("shaft_house", GROUND)
+        utils::standing("shaft_house", utils::GROUND_DOMAIN)
             .with_rise(6, [])
             .with_resource_source("wood", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
@@ -480,11 +502,67 @@ fn validate_rejects_overbuilding_source_on_other_layers() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     let air = registry.register_layer("air");
+    let aloft = registry.register_domain("aloft", DomainDef::new(air, Terrains::Any));
     registry.register(
-        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+        utils::standing("mine", utils::GROUND_DOMAIN)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("shaft_house", air)
+        EntityTypeDef::new("shaft_house")
+            .with_location(aloft, CellSize::ONE, Solidity::Solid, air)
+            .with_rise(6, [])
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_overbuilds("mine"),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'shaft_house' overbuilds 'mine', whose domain takes terrain its own refuses"
+)]
+fn validate_rejects_overbuilding_source_on_terrain_overbuilder_refuses() {
+    // The mine's domain takes land and water; the shaft house's land alone.
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register_terrain("water");
+    let land = registry.terrain("land").unwrap();
+    let dry = registry.register_domain(
+        "dry",
+        DomainDef::new(utils::GROUND, Terrains::Only(land.into())),
+    );
+    registry.register(
+        utils::standing("mine", utils::GROUND_DOMAIN)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        EntityTypeDef::new("shaft_house")
+            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_rise(6, [])
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_overbuilds("mine"),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_overbuilding_source_on_fewer_terrains() {
+    // The mine's domain takes land alone; the shaft house's land and water.
+    let mut registry = utils::ground_registry();
+    registry.register_resource("gold");
+    registry.register_terrain("water");
+    let land = registry.terrain("land").unwrap();
+    let dry = registry.register_domain(
+        "dry",
+        DomainDef::new(utils::GROUND, Terrains::Only(land.into())),
+    );
+    registry.register(
+        EntityTypeDef::new("mine")
+            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
+    );
+    registry.register(
+        utils::standing("shaft_house", utils::GROUND_DOMAIN)
             .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
@@ -499,11 +577,16 @@ fn validate_rejects_overbuilding_source_standing_underfoot() {
     registry.register_resource("gold");
     registry.register(
         EntityTypeDef::new("mine")
-            .with_location(GROUND, CellSize::ONE, Solidity::Underfoot)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Underfoot,
+                utils::GROUND,
+            )
             .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("shaft_house", GROUND)
+        utils::standing("shaft_house", utils::GROUND_DOMAIN)
             .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
@@ -516,10 +599,11 @@ fn validate_accepts_overbuilding_type_that_never_rises() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("mine", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+        utils::standing("mine", utils::GROUND_DOMAIN)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("shaft_house", GROUND)
+        utils::standing("shaft_house", utils::GROUND_DOMAIN)
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
     );
@@ -533,12 +617,12 @@ fn validate_accepts_production_cycle() {
     // accepts because it checks against the complete registry.
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::sized("town_hall", GROUND, CellSize::new(2, 2))
+        utils::sized("town_hall", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_rise(6, [])
             .with_trainer(["worker"]),
     );
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_train_time(4)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -558,8 +642,9 @@ fn validate_accepts_production_cycle() {
 )]
 fn validate_rejects_unknown_trained_type() {
     let mut registry = utils::ground_registry();
-    registry
-        .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["ghost"]));
+    registry.register(
+        utils::sized("barracks", utils::GROUND_DOMAIN, CellSize::new(2, 2)).with_trainer(["ghost"]),
+    );
     registry.validate();
 }
 
@@ -567,8 +652,8 @@ fn validate_rejects_unknown_trained_type() {
 #[should_panic(expected = "entity type 'relay' warps in 'recruit', which declares no rise")]
 fn validate_rejects_warped_unit_that_never_rises() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("recruit", GROUND).with_train_time(10));
-    registry.register(utils::standing("relay", GROUND).with_warper(
+    registry.register(utils::standing("recruit", utils::GROUND_DOMAIN).with_train_time(10));
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
         ["recruit"],
         Vec::new(),
         Landing::Sighted,
@@ -582,8 +667,8 @@ fn validate_rejects_warped_unit_that_never_rises() {
 )]
 fn validate_rejects_warped_unit_without_train_time() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("recruit", GROUND).with_rise(10, Vec::new()));
-    registry.register(utils::standing("relay", GROUND).with_warper(
+    registry.register(utils::standing("recruit", utils::GROUND_DOMAIN).with_rise(10, Vec::new()));
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
         ["recruit"],
         Vec::new(),
         Landing::Sighted,
@@ -595,11 +680,11 @@ fn validate_rejects_warped_unit_without_train_time() {
 fn validate_accepts_warped_unit_that_rises() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("recruit", GROUND)
+        utils::standing("recruit", utils::GROUND_DOMAIN)
             .with_train_time(10)
             .with_rise(10, Vec::new()),
     );
-    registry.register(utils::standing("relay", GROUND).with_warper(
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
         ["recruit"],
         Vec::new(),
         Landing::Sighted,
@@ -617,7 +702,7 @@ fn validate_rejects_warp_into_field_warped_unit_may_not_stand_on() {
     registry.register(
         rising_recruit().with_field_placement([FieldPlacement::Forbids { field: power }]),
     );
-    registry.register(utils::standing("relay", GROUND).with_warper(
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
         ["recruit"],
         vec![powered(power)],
         Landing::Sighted,
@@ -633,7 +718,7 @@ fn validate_rejects_warp_outside_field_warped_unit_must_stand_on() {
     let mut registry = utils::ground_registry();
     let power = register_power(&mut registry);
     registry.register(rising_recruit().with_field_placement([powered(power)]));
-    registry.register(utils::standing("relay", GROUND).with_warper(
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
         ["recruit"],
         vec![FieldPlacement::Forbids { field: power }],
         Landing::Sighted,
@@ -646,7 +731,7 @@ fn validate_accepts_warp_into_field_warped_unit_must_stand_on() {
     let mut registry = utils::ground_registry();
     let power = register_power(&mut registry);
     registry.register(rising_recruit().with_field_placement([powered(power)]));
-    registry.register(utils::standing("relay", GROUND).with_warper(
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
         ["recruit"],
         vec![powered(power)],
         Landing::Sighted,
@@ -675,7 +760,7 @@ fn register_rejects_warp_both_requiring_and_forbidding_field() {
     let mut registry = utils::ground_registry();
     let power = register_power(&mut registry);
     registry.register(rising_recruit());
-    registry.register(utils::standing("relay", GROUND).with_warper(
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
         ["recruit"],
         vec![powered(power), FieldPlacement::Forbids { field: power }],
         Landing::Sighted,
@@ -688,13 +773,13 @@ fn validate_rejects_warped_annex() {
     let mut registry = utils::ground_registry();
     registry.register(primary(["lookout"]));
     registry.register(
-        utils::standing("lookout", GROUND)
+        utils::standing("lookout", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(10))
             .with_train_time(10)
             .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(standing_annex(), AnnexClaim::Bound),
     );
-    registry.register(utils::standing("relay", GROUND).with_warper(
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
         ["lookout"],
         Vec::new(),
         Landing::Sighted,
@@ -709,7 +794,7 @@ fn register_rejects_warp_within_foreign_field() {
     // A handle minted by another registry, which this one never registered.
     let foreign = register_power(&mut utils::ground_registry());
     registry.register(rising_recruit());
-    registry.register(utils::standing("relay", GROUND).with_warper(
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
         ["recruit"],
         vec![powered(foreign)],
         Landing::Sighted,
@@ -721,7 +806,7 @@ fn register_rejects_warp_within_foreign_field() {
 fn register_rejects_rising_summon_of_annex() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("lookout", GROUND)
+        utils::standing("lookout", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(10))
             .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(standing_annex(), AnnexClaim::Bound),
@@ -797,12 +882,12 @@ fn register_rejects_summon_outside_field_summoned_type_must_stand_on() {
 fn validate_accepts_type_that_both_trains_and_warps() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("recruit", GROUND)
+        utils::standing("recruit", utils::GROUND_DOMAIN)
             .with_train_time(10)
             .with_rise(10, Vec::new()),
     );
     registry.register(
-        utils::standing("relay", GROUND)
+        utils::standing("relay", utils::GROUND_DOMAIN)
             .with_trainer(["recruit"])
             .with_warper(["recruit"], Vec::new(), Landing::Sighted),
     );
@@ -813,7 +898,7 @@ fn validate_accepts_type_that_both_trains_and_warps() {
 #[should_panic(expected = "skill 'raise_mound' summons 'mound' rising, but it declares no rise")]
 fn register_rejects_rising_summon_of_type_that_never_rises() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("mound", GROUND));
+    registry.register(utils::standing("mound", utils::GROUND_DOMAIN));
     let mound = registry.type_id("mound").expect("just registered");
     registry.register_skill(
         "raise_mound",
@@ -841,12 +926,15 @@ fn register_rejects_rising_summon_of_type_that_never_rises() {
 fn validate_rejects_untrainable_trained_type() {
     let mut registry = utils::ground_registry();
     registry.register(EntityTypeDef::new("statue").with_location(
-        GROUND,
+        utils::GROUND_DOMAIN,
         CellSize::ONE,
         Solidity::Solid,
+        utils::GROUND,
     ));
-    registry
-        .register(utils::sized("barracks", GROUND, CellSize::new(2, 2)).with_trainer(["statue"]));
+    registry.register(
+        utils::sized("barracks", utils::GROUND_DOMAIN, CellSize::new(2, 2))
+            .with_trainer(["statue"]),
+    );
     registry.validate();
 }
 
@@ -857,7 +945,7 @@ fn validate_rejects_untrainable_trained_type() {
 fn validate_rejects_unknown_built_type() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["nexus"],
@@ -874,12 +962,13 @@ fn validate_rejects_unknown_built_type() {
 fn validate_rejects_built_type_that_never_rises() {
     let mut registry = utils::ground_registry();
     registry.register(EntityTypeDef::new("statue").with_location(
-        GROUND,
+        utils::GROUND_DOMAIN,
         CellSize::ONE,
         Solidity::Solid,
+        utils::GROUND,
     ));
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
                 ["statue"],
@@ -901,7 +990,9 @@ fn register_accepts_terminating_decay_chains() {
 
     registry.register(remains("bones", 200));
     registry.register(remains("corpse", 600).with_leaves(utils::leaves("bones")));
-    registry.register(utils::standing("soldier", GROUND).with_dying(3, utils::leaves("corpse")));
+    registry.register(
+        utils::standing("soldier", utils::GROUND_DOMAIN).with_dying(3, utils::leaves("corpse")),
+    );
     registry.validate();
 }
 
@@ -909,8 +1000,8 @@ fn register_accepts_terminating_decay_chains() {
 fn register_accepts_death_that_leaves_standing_units() {
     let mut registry = utils::ground_registry();
 
-    registry.register(utils::standing("broodling", GROUND));
-    registry.register(utils::standing("hive", GROUND).with_dying(
+    registry.register(utils::standing("broodling", utils::GROUND_DOMAIN));
+    registry.register(utils::standing("hive", utils::GROUND_DOMAIN).with_dying(
         2,
         [Bequest::new(
             "broodling",
@@ -925,7 +1016,9 @@ fn register_accepts_death_that_leaves_standing_units() {
 #[should_panic(expected = "entity type 'soldier' leaves 'ghost', which is not registered")]
 fn validate_rejects_leaving_unregistered_type() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("soldier", GROUND).with_dying(3, utils::leaves("ghost")));
+    registry.register(
+        utils::standing("soldier", utils::GROUND_DOMAIN).with_dying(3, utils::leaves("ghost")),
+    );
     registry.validate();
 }
 
@@ -938,7 +1031,7 @@ fn register_rejects_remains_with_live_gameplay_data() {
     registry.register(
         remains("bones", 200)
             .with_pool(Pool::health(10))
-            .with_attack(utils::weapon(GROUND), 1, 1, 1, 2, 1),
+            .with_attack(utils::weapon(utils::GROUND), 1, 1, 1, 2, 1),
     );
 }
 
@@ -946,7 +1039,7 @@ fn register_rejects_remains_with_live_gameplay_data() {
 #[should_panic(expected = "entity type 'bones' is remains but carries no lifetime")]
 fn register_rejects_remains_that_never_go_away() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("bones", GROUND).with_tags(["remains"]));
+    registry.register(utils::standing("bones", utils::GROUND_DOMAIN).with_tags(["remains"]));
 }
 
 #[test]
@@ -980,7 +1073,9 @@ fn validate_rejects_transition_into_remains() {
     // Only a death leaves a body: a unit that could simply turn into one
     // would lay remains nothing died for.
     registry.register(remains("corpse", 600));
-    registry.register(utils::standing("soldier", GROUND).with_morphs([morph_into("corpse")]));
+    registry.register(
+        utils::standing("soldier", utils::GROUND_DOMAIN).with_morphs([morph_into("corpse")]),
+    );
     registry.validate();
 }
 
@@ -990,9 +1085,10 @@ fn validate_rejects_transition_wearing_remains() {
     let mut registry = utils::ground_registry();
 
     registry.register(remains("corpse", 600));
-    registry.register(utils::standing("hatchling", GROUND).with_pool(Pool::health(30)));
+    registry
+        .register(utils::standing("hatchling", utils::GROUND_DOMAIN).with_pool(Pool::health(30)));
     registry.register(
-        utils::standing("larva", GROUND)
+        utils::standing("larva", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_morphs([morph_through("corpse", "hatchling")]),
     );
@@ -1018,14 +1114,14 @@ fn validate_rejects_decay_chain_that_comes_back_round() {
 fn register_accepts_registered_race() {
     let mut registry = utils::ground_registry();
     registry.register_race("human");
-    registry.register(utils::standing("worker", GROUND).with_race("human"));
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_race("human"));
 }
 
 #[test]
 #[should_panic(expected = "belongs to unregistered race 'orc'")]
 fn register_rejects_unregistered_race() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND).with_race("orc"));
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_race("orc"));
 }
 
 //
@@ -1036,14 +1132,14 @@ fn register_rejects_unregistered_race() {
 fn register_accepts_registered_tag() {
     let mut registry = utils::ground_registry();
     registry.register_tag("flying");
-    registry.register(utils::standing("worker", GROUND).with_tags(["flying"]));
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_tags(["flying"]));
 }
 
 #[test]
 #[should_panic(expected = "references unregistered tag 'flying'")]
 fn register_rejects_unregistered_tag() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND).with_tags(["flying"]));
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_tags(["flying"]));
 }
 
 #[test]
@@ -1057,7 +1153,7 @@ fn reserved_building_tag_is_registered_by_default() {
     let mut registry = utils::ground_registry();
     assert!(registry.has_tag(tags::BUILDING));
     // Undeclared by content, yet an entity may carry it.
-    registry.register(utils::standing("worker", GROUND).with_tags([tags::BUILDING]));
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_tags([tags::BUILDING]));
 }
 
 //
@@ -1104,35 +1200,35 @@ fn register_layer_rejects_exhausted_ids() {
 }
 
 #[test]
-#[should_panic(expected = "entity type 'worker' occupies unregistered layers")]
-fn register_rejects_unregistered_occupation_layer() {
-    ContentRegistry::default().register(utils::standing("worker", GROUND));
-}
-
-#[test]
-fn register_accepts_occupation_of_several_registered_layers() {
-    let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    let air = registry.register_layer("air");
-    registry.register(EntityTypeDef::new("griffon_rider").with_location(
-        ground | air,
-        CellSize::ONE,
-        Solidity::Solid,
-    ));
-
-    let location = registry.entity("griffon_rider").unwrap().location.unwrap();
-    assert_eq!(location.occupation(), ground | air);
+#[should_panic(expected = "entity type 'worker' is in a domain this registry never minted")]
+fn register_rejects_domain_registry_never_minted() {
+    ContentRegistry::default().register(utils::standing("worker", utils::GROUND_DOMAIN));
 }
 
 #[test]
 #[should_panic(expected = "entity type 'griffon_rider' occupies unregistered layers")]
-fn register_rejects_occupation_mixing_in_unregistered_layer() {
-    let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
+fn register_rejects_occupied_mask_mixing_in_unregistered_layer() {
+    let mut registry = utils::ground_registry();
     registry.register(EntityTypeDef::new("griffon_rider").with_location(
-        ground | LayerId::new(2),
+        utils::GROUND_DOMAIN,
         CellSize::ONE,
         Solidity::Solid,
+        utils::GROUND | LayerId::new(2),
+    ));
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'gryphon' occupies layers 0b10 without layer 1, its domain's"
+)]
+fn register_rejects_occupied_mask_leaving_out_domain_layer() {
+    let mut registry = utils::ground_registry();
+    let air = registry.register_layer("air");
+    registry.register(EntityTypeDef::new("gryphon").with_location(
+        utils::GROUND_DOMAIN,
+        CellSize::ONE,
+        Solidity::Solid,
+        air,
     ));
 }
 
@@ -1141,103 +1237,107 @@ fn register_rejects_occupation_mixing_in_unregistered_layer() {
 //
 
 #[test]
-fn register_terrain_accepts_registered_layer_masks() {
+fn register_terrain_assigns_bits_in_registration_order() {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    let water = registry.register_layer("water");
-    registry.register_terrain("grass", ground);
-    registry.register_terrain("shore", ground | water);
 
-    assert_eq!(registry.terrain("grass"), Some(ground.into()));
-    assert_eq!(registry.terrain("shore"), Some(ground | water));
-    assert!(registry.has_terrain("grass"));
-    assert!(!registry.has_terrain("water"));
+    assert_eq!(registry.register_terrain("land"), TerrainId::new(1));
+    assert_eq!(
+        registry.register_terrain("shallow_water"),
+        TerrainId::new(2)
+    );
+    assert_eq!(registry.register_terrain("deep_water"), TerrainId::new(4));
+    assert_eq!(registry.terrain("shallow_water"), Some(TerrainId::new(2)));
+    assert!(registry.has_terrain("land"));
+    assert!(!registry.has_terrain("lava"));
+    assert_eq!(*registry.registered_terrains(), 0b111);
 }
 
 #[test]
-fn register_terrain_accepts_impassable_terrain() {
-    let mut registry = ContentRegistry::default();
-    registry.register_layer("ground");
-    registry.register_terrain("void", LayerMask::EMPTY);
-
-    assert_eq!(registry.terrain("void"), Some(LayerMask::EMPTY));
-}
-
-#[test]
-#[should_panic(expected = "terrain 'water' passes unregistered layers")]
-fn register_terrain_rejects_unregistered_layer() {
-    let mut registry = ContentRegistry::default();
-    registry.register_layer("ground");
-    registry.register_terrain("water", LayerId::new(2));
-}
-
-#[test]
-#[should_panic(expected = "terrain 'grass' is already registered")]
+#[should_panic(expected = "terrain 'land' is already registered")]
 fn register_terrain_rejects_duplicate_name() {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    registry.register_terrain("grass", ground);
-    registry.register_terrain("grass", ground);
+    registry.register_terrain("land");
+    registry.register_terrain("land");
 }
 
 #[test]
 #[should_panic(expected = "terrain name must not be empty")]
 fn empty_terrain_name_panics() {
-    ContentRegistry::default().register_terrain("", LayerMask::EMPTY);
+    ContentRegistry::default().register_terrain("");
 }
 
 #[test]
-fn validate_accepts_mover_whose_layers_one_terrain_passes_together() {
+#[should_panic(expected = "all 32 terrain ids are already assigned")]
+fn register_terrain_rejects_exhausted_ids() {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    let water = registry.register_layer("water");
-    registry.register_terrain("grass", ground);
-    registry.register_terrain("water", water);
-    // A shore terrain passes both, so a shore mover has somewhere to stand.
-    registry.register_terrain("shallows", ground | water);
-    registry.register(utils::standing("barge", ground | water).with_movement(
-        FixedU64::ONE,
-        FixedU64::from_num(0.5),
-        FixedU64::ONE,
-        FixedU64::from_num(360),
-        FixedU64::from_num(360),
-    ));
+    for n in 0..=32 {
+        registry.register_terrain(format!("terrain_{n}"));
+    }
+}
 
-    registry.validate();
+//
+// ─── Domains ──────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn domain_terrains_resolve_any_to_every_registered_terrain() {
+    let mut registry = utils::ground_registry();
+    let water = registry.register_terrain("deep_water");
+    let land = registry.terrain("land").unwrap();
+    let naval = registry.register_domain(
+        "naval",
+        DomainDef::new(utils::GROUND, Terrains::Only(water.into())),
+    );
+
+    let terrains = |domain| registry.domain_def(domain).terrains().mask(&registry);
+    // The ground registry's `ground` is domain 0, so `naval` is 1.
+    assert_eq!(naval, DomainId::new(1));
+    assert_eq!(registry.domain("naval"), Some(naval));
+    assert_eq!(terrains(naval), TerrainMask::from(water));
+    assert_eq!(
+        terrains(utils::GROUND_DOMAIN),
+        TerrainMask::from(land) | water,
+        "a domain over any terrain stands on every registered one"
+    );
 }
 
 #[test]
-#[should_panic(expected = "entity type 'barge' moves on layers")]
-fn validate_rejects_mover_no_terrain_passes_together() {
-    let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    let water = registry.register_layer("water");
-    registry.register_terrain("grass", ground);
-    registry.register_terrain("water", water);
-    // Occupation is conjunctive, so this asks for terrain passing ground *and*
-    // water — which is a shore, and no terrain here is one.
-    registry.register(utils::standing("barge", ground | water).with_movement(
-        FixedU64::ONE,
-        FixedU64::from_num(0.5),
-        FixedU64::ONE,
-        FixedU64::from_num(360),
-        FixedU64::from_num(360),
-    ));
-
-    registry.validate();
+#[should_panic(expected = "domain name must not be empty")]
+fn empty_domain_name_panics() {
+    utils::ground_registry().register_domain("", DomainDef::new(utils::GROUND, Terrains::Any));
 }
 
 #[test]
-fn validate_ignores_layers_of_things_that_cannot_move() {
-    let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
-    let air = registry.register_layer("air");
-    registry.register_terrain("grass", ground);
-    // A tall building occupies ground and air at once and never moves, so no
-    // terrain has to pass the pair for it to stand where it was placed.
-    registry.register(utils::sized("tower", ground | air, CellSize::new(2, 2)));
+#[should_panic(expected = "domain 'ground' is already registered")]
+fn register_domain_rejects_duplicate_name() {
+    let mut registry = utils::ground_registry();
+    registry.register_domain("ground", DomainDef::new(utils::GROUND, Terrains::Any));
+}
 
-    registry.validate();
+#[test]
+#[should_panic(expected = "domain 'aloft' is in unregistered layer 2")]
+fn register_domain_rejects_unregistered_layer() {
+    let mut registry = utils::ground_registry();
+    registry.register_domain("aloft", DomainDef::new(LayerId::new(2), Terrains::Any));
+}
+
+#[test]
+#[should_panic(expected = "a domain over no terrain holds nothing; declare it over \"any\"")]
+fn domain_over_no_terrain_panics() {
+    DomainDef::new(utils::GROUND, Terrains::Only(TerrainMask::EMPTY));
+}
+
+#[test]
+#[should_panic(expected = "domain 'naval' names unregistered terrains 0b10")]
+fn register_domain_rejects_unregistered_terrain() {
+    let mut registry = utils::ground_registry();
+    registry.register_domain(
+        "naval",
+        DomainDef::new(
+            utils::GROUND,
+            Terrains::Only(TerrainMask::from(TerrainId::new(2))),
+        ),
+    );
 }
 
 //
@@ -1248,13 +1348,15 @@ fn validate_ignores_layers_of_things_that_cannot_move() {
 #[should_panic(expected = "has a non-positive speed stat")]
 fn register_rejects_non_positive_speed() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND).with_movement(
-        FixedU64::ZERO,
-        FixedU64::from_num(0.5),
-        FixedU64::ONE,
-        FixedU64::from_num(360),
-        FixedU64::from_num(360),
-    ));
+    registry.register(
+        utils::standing("worker", utils::GROUND_DOMAIN).with_movement(
+            FixedU64::ZERO,
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
+        ),
+    );
 }
 
 #[test]
@@ -1262,7 +1364,8 @@ fn register_rejects_non_positive_speed() {
 fn register_rejects_non_positive_supply_provided() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND).with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::ZERO),
+        utils::standing("worker", utils::GROUND_DOMAIN)
+            .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::ZERO),
     );
 }
 
@@ -1271,7 +1374,8 @@ fn register_rejects_non_positive_supply_provided() {
 fn register_rejects_non_positive_supply_cost() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND).with_stat(EntityStatId::SUPPLY_COST, FixedU64::ZERO),
+        utils::standing("worker", utils::GROUND_DOMAIN)
+            .with_stat(EntityStatId::SUPPLY_COST, FixedU64::ZERO),
     );
 }
 
@@ -1282,9 +1386,9 @@ fn register_rejects_aim_rate_without_turret() {
     // to shoot it is a rate its author believes in and nothing applies.
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("gunner", GROUND)
+        utils::standing("gunner", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(3))
-            .with_attack(utils::weapon(GROUND), 10, 1, 1, 2, 1),
+            .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 2, 1),
     );
 }
 
@@ -1293,7 +1397,8 @@ fn register_rejects_aim_rate_without_turret() {
 fn register_rejects_attack_arc_without_weapon() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND).with_stat(EntityStatId::ATTACK_ARC, FixedU64::from_num(60)),
+        utils::standing("wall", utils::GROUND_DOMAIN)
+            .with_stat(EntityStatId::ATTACK_ARC, FixedU64::from_num(60)),
     );
 }
 
@@ -1302,7 +1407,7 @@ fn register_rejects_attack_arc_without_weapon() {
 fn register_rejects_pivot_angle_without_movement() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("keep", GROUND)
+        utils::standing("keep", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::PIVOT_ANGLE, FixedU64::from_num(90)),
     );
 }
@@ -1311,8 +1416,8 @@ fn register_rejects_pivot_angle_without_movement() {
 #[should_panic(expected = "has attack_range below its minimum of 1")]
 fn register_rejects_zero_attack_range() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND).with_attack(
-        utils::weapon(GROUND),
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_attack(
+        utils::weapon(utils::GROUND),
         10,
         0,
         1,
@@ -1325,8 +1430,8 @@ fn register_rejects_zero_attack_range() {
 #[should_panic(expected = "has attack_period below its minimum of 1")]
 fn register_rejects_zero_attack_period() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND).with_attack(
-        utils::weapon(GROUND),
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_attack(
+        utils::weapon(utils::GROUND),
         10,
         1,
         1,
@@ -1339,8 +1444,8 @@ fn register_rejects_zero_attack_period() {
 #[should_panic(expected = "has damage_point below its minimum of 1")]
 fn register_rejects_zero_damage_point() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND).with_attack(
-        utils::weapon(GROUND),
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_attack(
+        utils::weapon(utils::GROUND),
         10,
         1,
         1,
@@ -1369,7 +1474,7 @@ fn register_rejects_energy_costed_skill_without_energy_pool() {
         },
     );
     registry.register(
-        utils::standing("caster", GROUND)
+        utils::standing("caster", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_skills([jolt]),
     );
@@ -1394,7 +1499,7 @@ fn register_accepts_free_skill_without_energy_pool() {
         },
     );
     registry.register(
-        utils::standing("caster", GROUND)
+        utils::standing("caster", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_skills([shout]),
     );
@@ -1444,7 +1549,7 @@ fn register_accepts_resource_costed_skill_without_pools() {
         },
     );
     registry.register(
-        utils::standing("caster", GROUND)
+        utils::standing("caster", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_skills([rally]),
     );
@@ -1470,7 +1575,7 @@ fn register_rejects_health_costed_skill_without_health_pool() {
             requires: Vec::new(),
         },
     );
-    registry.register(utils::standing("caster", GROUND).with_skills([rite]));
+    registry.register(utils::standing("caster", utils::GROUND_DOMAIN).with_skills([rite]));
 }
 
 #[test]
@@ -1480,7 +1585,7 @@ fn register_rejects_fractional_attack_period() {
     // so this would truncate to a phase the counter never reaches.
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(0.5)),
     );
 }
@@ -1489,8 +1594,8 @@ fn register_rejects_fractional_attack_period() {
 #[should_panic(expected = "has a damage_point beyond its attack_period")]
 fn register_rejects_damage_point_beyond_attack_period() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND).with_attack(
-        utils::weapon(GROUND),
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_attack(
+        utils::weapon(utils::GROUND),
         10,
         1,
         1,
@@ -1504,7 +1609,7 @@ fn register_rejects_damage_point_beyond_attack_period() {
 fn register_rejects_weapon_numbers_without_weapon() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("archer", GROUND)
+        utils::standing("archer", utils::GROUND_DOMAIN)
             // Stat by stat rather than through `with_attack`, which cannot state
             // a weapon's numbers without the weapon — the very thing under test.
             .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5))
@@ -1520,9 +1625,9 @@ fn register_rejects_weapon_numbers_without_weapon() {
 fn register_rejects_weapon_without_its_numbers() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("scarecrow", GROUND)
+        utils::standing("scarecrow", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(10))
-            .with_attack_def(GROUND, Delivery::Instant, None, Slain::Remains),
+            .with_attack_def(utils::GROUND, Delivery::Instant, None, Slain::Remains),
     );
 }
 
@@ -1533,7 +1638,8 @@ fn register_rejects_weapon_without_its_numbers() {
 fn validate_rejects_pool_stat_without_its_pool() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND).with_stat(EntityStatId::HEALTH_REGEN, utils::fixed("0.5")),
+        utils::standing("wall", utils::GROUND_DOMAIN)
+            .with_stat(EntityStatId::HEALTH_REGEN, utils::fixed("0.5")),
     );
     registry.validate();
 }
@@ -1542,7 +1648,7 @@ fn validate_rejects_pool_stat_without_its_pool() {
 #[should_panic(expected = "entity type 'wall' declares the health pool with a maximum of 0")]
 fn register_rejects_pool_with_zero_maximum() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("wall", GROUND).with_pool(Pool::health(0)));
+    registry.register(utils::standing("wall", utils::GROUND_DOMAIN).with_pool(Pool::health(0)));
 }
 
 #[test]
@@ -1552,7 +1658,7 @@ fn register_rejects_pool_with_zero_maximum() {
 fn register_rejects_initial_share_above_whole() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(health_starting(PoolInitial::Share(utils::fixed("1.5")))),
     );
 }
@@ -1563,9 +1669,11 @@ fn register_rejects_initial_share_above_whole() {
 )]
 fn register_rejects_initial_amount_above_maximum() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("wall", GROUND).with_pool(health_starting(
-        PoolInitial::Amount(FixedU64::from_num(150)),
-    )));
+    registry.register(
+        utils::standing("wall", utils::GROUND_DOMAIN).with_pool(health_starting(
+            PoolInitial::Amount(FixedU64::from_num(150)),
+        )),
+    );
 }
 
 #[test]
@@ -1573,7 +1681,7 @@ fn register_rejects_initial_amount_above_maximum() {
 fn register_rejects_health_starting_empty() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(health_starting(PoolInitial::Amount(FixedU64::ZERO))),
     );
 }
@@ -1583,7 +1691,7 @@ fn register_rejects_health_starting_empty() {
 fn register_rejects_health_following_work_from_empty() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_rise(
                 4,
@@ -1602,7 +1710,7 @@ fn register_rejects_health_following_work_from_empty() {
 fn register_rejects_rise_naming_undeclared_pool() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_rise(
                 4,
@@ -1618,7 +1726,7 @@ fn register_rejects_rise_naming_undeclared_pool() {
 fn register_rejects_rise_leaving_pool_unsaid() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_pool(Pool::energy(50))
             .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH])),
@@ -1632,7 +1740,7 @@ fn register_rejects_rise_leaving_pool_unsaid() {
 fn register_rejects_rise_share_above_whole() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_rise(
                 4,
@@ -1651,7 +1759,7 @@ fn register_rejects_rise_share_above_whole() {
 fn register_rejects_rise_amount_above_maximum() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_rise(
                 4,
@@ -1670,7 +1778,7 @@ fn register_rejects_rise_amount_above_maximum() {
 fn register_rejects_rise_from_whole_share() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_rise(
                 4,
@@ -1689,7 +1797,7 @@ fn register_rejects_rise_from_whole_share() {
 fn register_rejects_rise_from_whole_amount() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_rise(
                 4,
@@ -1706,7 +1814,7 @@ fn register_rejects_rise_from_whole_amount() {
 fn register_rejects_health_gained_on_risen() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_rise(4, [(PoolId::HEALTH, RisePool::GainedOnRisen)]),
     );
@@ -1716,7 +1824,7 @@ fn register_rejects_health_gained_on_risen() {
 fn register_accepts_energy_gained_on_risen() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_pool(Pool::energy(50))
             .with_rise(
@@ -1738,7 +1846,7 @@ fn register_accepts_energy_gained_on_risen() {
 fn register_accepts_energy_starting_empty() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wall", GROUND)
+        utils::standing("wall", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_pool(Pool::builtin(
                 PoolId::ENERGY,
@@ -1762,7 +1870,7 @@ fn register_accepts_energy_starting_empty() {
 fn register_rejects_repair_speed_without_capability() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE),
     );
@@ -1772,12 +1880,14 @@ fn register_rejects_repair_speed_without_capability() {
 #[should_panic(expected = "can build but is missing build_range")]
 fn register_rejects_builder_without_reach() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("worker", GROUND).with_builder(
-        ["depot"],
-        BuilderAttendance::Crew(WorkPresence::Hidden {
-            crew: CrewLimit::ONE,
-        }),
-    ));
+    registry.register(
+        utils::standing("worker", utils::GROUND_DOMAIN).with_builder(
+            ["depot"],
+            BuilderAttendance::Crew(WorkPresence::Hidden {
+                crew: CrewLimit::ONE,
+            }),
+        ),
+    );
 }
 
 #[test]
@@ -1785,26 +1895,29 @@ fn register_rejects_builder_without_reach() {
 fn register_rejects_build_range_without_capability() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("soldier", GROUND).with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE),
+        utils::standing("soldier", utils::GROUND_DOMAIN)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE),
     );
 }
 
 #[test]
 #[should_panic(expected = "can carry resources but is missing harvest_range")]
 fn register_rejects_carrier_without_reach() {
-    gold_registry_with(utils::standing("worker", GROUND).with_resource_carrier([(
-        "gold",
-        HarvestData::new(
-            5,
-            5,
-            2,
-            WorkPresence::Present {
-                crew: CrewLimit::ONE,
-            },
-            Banking::Carried,
-            Kinds::Any,
-        ),
-    )]));
+    gold_registry_with(
+        utils::standing("worker", utils::GROUND_DOMAIN).with_resource_carrier([(
+            "gold",
+            HarvestData::new(
+                5,
+                5,
+                2,
+                WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                },
+                Banking::Carried,
+                Kinds::Any,
+            ),
+        )]),
+    );
 }
 
 #[test]
@@ -1812,7 +1925,8 @@ fn register_rejects_carrier_without_reach() {
 fn register_rejects_harvest_range_without_capability() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("soldier", GROUND).with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE),
+        utils::standing("soldier", utils::GROUND_DOMAIN)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE),
     );
 }
 
@@ -1821,9 +1935,9 @@ fn register_rejects_harvest_range_without_capability() {
 fn register_rejects_attacker_without_weapon_stats() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5))
-            .with_attack_def(GROUND, Delivery::Instant, None, Slain::Remains),
+            .with_attack_def(utils::GROUND, Delivery::Instant, None, Slain::Remains),
     );
 }
 
@@ -1837,7 +1951,7 @@ fn register_rejects_transporter_without_reach() {
     let mut registry = utils::ground_registry();
     registry.register_tag("infantry");
     registry.register(
-        utils::standing("wagon", GROUND)
+        utils::standing("wagon", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
             .with_transporter(
                 Kinds::tags(["infantry"]),
@@ -1854,7 +1968,7 @@ fn register_rejects_zero_cargo_capacity() {
     let mut registry = utils::ground_registry();
     registry.register_tag("infantry");
     registry.register(
-        utils::standing("wagon", GROUND)
+        utils::standing("wagon", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::ZERO)
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
             .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
@@ -1875,7 +1989,7 @@ fn register_rejects_transporter_without_capacity() {
     let mut registry = utils::ground_registry();
     registry.register_tag("infantry");
     registry.register(
-        utils::standing("wagon", GROUND)
+        utils::standing("wagon", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
             .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
             .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
@@ -1894,7 +2008,7 @@ fn register_rejects_transporter_without_capacity() {
 fn register_rejects_transport_stat_without_capability() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("soldier", GROUND)
+        utils::standing("soldier", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::from_num(2)),
     );
 }
@@ -1905,7 +2019,7 @@ fn register_rejects_transportable_transporter() {
     let mut registry = utils::ground_registry();
     registry.register_tag("infantry");
     registry.register(
-        utils::standing("wagon", GROUND)
+        utils::standing("wagon", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
             .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
@@ -1926,7 +2040,7 @@ fn register_rejects_transportable_transporter() {
 fn validate_rejects_unresolved_carries_entry() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wagon", GROUND)
+        utils::standing("wagon", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
             .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
@@ -1946,7 +2060,7 @@ fn validate_rejects_unresolved_carries_entry() {
 fn validate_accepts_carries_entry_registered_later() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("wagon", GROUND)
+        utils::standing("wagon", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
             .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
@@ -1960,7 +2074,8 @@ fn validate_accepts_carries_entry_registered_later() {
             ),
     );
     registry.register(
-        utils::standing("footman", GROUND).with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+        utils::standing("footman", utils::GROUND_DOMAIN)
+            .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
     );
     registry.validate();
 }
@@ -2371,7 +2486,9 @@ fn validate_accepts_change_of_form_into_gateway() {
         Joins::Network(warren),
         Doors::Both,
     ))));
-    registry.register(utils::standing("pupa", GROUND).with_morphs([morph_into("burrow")]));
+    registry.register(
+        utils::standing("pupa", utils::GROUND_DOMAIN).with_morphs([morph_into("burrow")]),
+    );
     registry.validate();
 }
 
@@ -2442,7 +2559,7 @@ fn register_rejects_content_stat_below_its_floor() {
     // The fold would raise it on the first tick, so the authored number is one
     // the type never actually has.
     registry.register(
-        utils::standing("priest", GROUND)
+        utils::standing("priest", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_stat(ritual_time, FixedU64::ZERO),
     );
@@ -2549,7 +2666,7 @@ fn register_rejects_type_declaring_player_cast_skill() {
     let haste = haste_buff(&mut registry);
     let war_cry = registry.register_skill("war_cry", player_cast(haste));
     registry.register(
-        utils::standing("caster", GROUND)
+        utils::standing("caster", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_skills([war_cry]),
     );
@@ -2564,7 +2681,7 @@ fn register_rejects_type_declaring_player_cast_skill() {
 fn validate_rejects_self_repairer_mending_from_inside() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("medic", GROUND)
+        utils::standing("medic", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -2587,7 +2704,7 @@ fn validate_rejects_self_repairer_mending_from_inside() {
 fn validate_rejects_self_repairer_seated_on_itself() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("medic", GROUND)
+        utils::standing("medic", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -2608,7 +2725,7 @@ fn validate_rejects_self_repairer_seated_on_itself() {
 fn register_rejects_repairer_without_repair_speed() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_repairer(
                 Kinds::tags(["building"]),
@@ -2628,7 +2745,7 @@ fn register_rejects_repairer_without_repair_speed() {
 fn register_rejects_repairer_without_reach() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_repairer(
@@ -2651,7 +2768,7 @@ fn validate_accepts_repairer_mending_its_own_kind() {
     // A filter is settled once everything is registered, so a mechanic may
     // mend mechanics — and anything declared after it.
     registry.register(
-        utils::standing("mechanic", GROUND)
+        utils::standing("mechanic", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -2666,7 +2783,7 @@ fn validate_accepts_repairer_mending_its_own_kind() {
                 None,
             ),
     );
-    registry.register(utils::standing("tank", GROUND).with_pool(Pool::health(40)));
+    registry.register(utils::standing("tank", utils::GROUND_DOMAIN).with_pool(Pool::health(40)));
 
     registry.validate();
 }
@@ -2678,7 +2795,7 @@ fn validate_rejects_repairer_mending_unknown_tag() {
     // have had to declare itself.
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -2701,7 +2818,7 @@ fn validate_rejects_repairer_mending_unknown_tag() {
 fn register_rejects_pro_rata_repair_without_factor() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("worker", GROUND)
+        utils::standing("worker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -2724,7 +2841,7 @@ fn register_rejects_energy_paid_repair_without_pool() {
     let mut registry = utils::ground_registry();
     registry.register_tag("biological");
     registry.register(
-        utils::standing("medic", GROUND)
+        utils::standing("medic", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
             .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
@@ -2761,7 +2878,7 @@ fn repairer_rejects_non_positive_flat_rate() {
 fn register_rejects_repair_ratio_without_production_time() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("monolith", GROUND)
+        utils::standing("monolith", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_repair_ratio(FixedU64::ONE),
     );
@@ -2849,7 +2966,8 @@ fn register_rejects_unregistered_hosted_research() {
         "smithing",
         ResearchDef::new(Price::new(), 10, None, Vec::new()),
     );
-    utils::ground_registry().register(utils::standing("lab", GROUND).with_researcher([research]));
+    utils::ground_registry()
+        .register(utils::standing("lab", utils::GROUND_DOMAIN).with_researcher([research]));
 }
 
 #[test]
@@ -2860,7 +2978,12 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
     let mut registry = utils::ground_registry();
     registry.register(
         EntityTypeDef::new("keep")
-            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::new(2, 2),
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -2873,7 +2996,12 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
     );
     registry.register(
         EntityTypeDef::new("lookout")
-            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(10))
             .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(
@@ -2894,7 +3022,12 @@ fn validate_rejects_fading_annex_without_health_pool() {
     registry.register_tag("building");
     registry.register(
         EntityTypeDef::new("keep")
-            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::new(2, 2),
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -2907,7 +3040,12 @@ fn validate_rejects_fading_annex_without_health_pool() {
     );
     registry.register(
         EntityTypeDef::new("mast")
-            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_rise(4, [])
             .with_annex(
                 AloneConduct::Standing {
@@ -2928,10 +3066,11 @@ fn validate_rejects_crew_limit_of_nobody() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("seam", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+        utils::standing("seam", utils::GROUND_DOMAIN)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("miner", GROUND)
+        utils::standing("miner", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_carrier([(
                 "gold",
@@ -2957,10 +3096,11 @@ fn validate_rejects_harvest_source_list_that_names_nobody() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("seam", GROUND).with_resource_source("gold", DepletionPolicy::Destroy),
+        utils::standing("seam", utils::GROUND_DOMAIN)
+            .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("miner", GROUND)
+        utils::standing("miner", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_carrier([(
                 "gold",
@@ -2987,7 +3127,7 @@ fn validate_rejects_dock_taking_unregistered_type() {
     // The builder catalogue is sound, so `validate_builds` has nothing to say
     // and the dock's own unregistered name is what is left to catch.
     registry.register(
-        utils::sized("keep", GROUND, CellSize::new(2, 2))
+        utils::sized("keep", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -3025,7 +3165,7 @@ fn validate_rejects_harvest_source_that_is_not_registered() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("miner", GROUND)
+        utils::standing("miner", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_carrier([(
                 "gold",
@@ -3053,10 +3193,11 @@ fn validate_rejects_harvest_source_of_another_kind() {
     registry.register_resource("gold");
     registry.register_resource("wood");
     registry.register(
-        utils::standing("grove", GROUND).with_resource_source("wood", DepletionPolicy::Destroy),
+        utils::standing("grove", utils::GROUND_DOMAIN)
+            .with_resource_source("wood", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("miner", GROUND)
+        utils::standing("miner", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
             .with_resource_carrier([(
                 "gold",
@@ -3081,7 +3222,7 @@ fn validate_accepts_dock_that_takes_any_annex() {
     // A filter that names nobody in particular takes whatever is an annex,
     // and what it sweeps in besides goes on standing where it stands.
     registry.register(
-        utils::sized("keep", GROUND, CellSize::new(2, 2))
+        utils::sized("keep", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -3093,7 +3234,7 @@ fn validate_accepts_dock_that_takes_any_annex() {
             .with_docks([(CellPos::new(2, 0), Kinds::Any)]),
     );
     registry.register(annex("lab", CellSize::ONE));
-    registry.register(utils::standing("runner", GROUND).with_pool(Pool::health(10)));
+    registry.register(utils::standing("runner", utils::GROUND_DOMAIN).with_pool(Pool::health(10)));
 
     registry.validate();
 }
@@ -3104,7 +3245,7 @@ fn validate_rejects_dock_that_names_no_annex() {
     let mut registry = utils::ground_registry();
     registry.register_tag("workshop");
     registry.register(
-        utils::sized("keep", GROUND, CellSize::new(2, 2))
+        utils::sized("keep", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -3126,7 +3267,7 @@ fn validate_rejects_dock_that_takes_type_that_is_no_annex() {
     let mut registry = utils::ground_registry();
     registry.register(primary(["runner"]));
     registry.register(
-        utils::standing("runner", GROUND)
+        utils::standing("runner", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(10))
             .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH])),
     );
@@ -3138,7 +3279,7 @@ fn validate_rejects_dock_that_takes_type_that_is_no_annex() {
 fn validate_rejects_dock_inside_its_primarys_own_footprint() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::sized("keep", GROUND, CellSize::new(2, 2))
+        utils::sized("keep", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -3158,7 +3299,7 @@ fn validate_rejects_dock_inside_its_primarys_own_footprint() {
 fn validate_rejects_dock_whose_primary_cannot_raise_what_it_takes() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::sized("keep", GROUND, CellSize::new(2, 2))
+        utils::sized("keep", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_pool(Pool::health(100))
             .with_docks([(CellPos::new(2, 0), Kinds::types(["lookout"]))]),
     );
@@ -3171,7 +3312,7 @@ fn validate_rejects_dock_whose_primary_cannot_raise_what_it_takes() {
 fn validate_rejects_two_docks_on_one_cell() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::sized("keep", GROUND, CellSize::new(2, 2))
+        utils::sized("keep", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -3196,7 +3337,7 @@ fn validate_rejects_two_docks_on_one_cell() {
 fn validate_rejects_docks_whose_annexes_would_stand_on_each_other() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::sized("keep", GROUND, CellSize::new(2, 2))
+        utils::sized("keep", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -3224,7 +3365,12 @@ fn validate_rejects_annex_that_does_not_claim_its_cells() {
     registry.register(primary(["lookout"]));
     registry.register(
         EntityTypeDef::new("lookout")
-            .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Passable,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(10))
             .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(standing_annex(), AnnexClaim::Bound),
@@ -3238,7 +3384,7 @@ fn validate_rejects_annex_without_health() {
     let mut registry = utils::ground_registry();
     registry.register(primary(["lookout"]));
     registry.register(
-        utils::standing("lookout", GROUND)
+        utils::standing("lookout", utils::GROUND_DOMAIN)
             .with_rise(4, [])
             .with_annex(standing_annex(), AnnexClaim::Bound),
     );
@@ -3253,7 +3399,7 @@ fn validate_rejects_annex_that_never_rises() {
     // and registered ahead of the annex it would be `validate_builds` that
     // spoke first.
     registry.register(
-        utils::standing("lookout", GROUND)
+        utils::standing("lookout", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(10))
             .with_annex(standing_annex(), AnnexClaim::Bound),
     );
@@ -3274,7 +3420,12 @@ fn validate_rejects_docks_on_type_that_moves() {
     let mut registry = utils::ground_registry();
     registry.register(
         EntityTypeDef::new("walking_keep")
-            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::new(2, 2),
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_movement(
                 FixedU64::from_num(0.5),
                 FixedU64::from_num(0.5),
@@ -3294,7 +3445,12 @@ fn validate_rejects_docks_on_type_that_moves() {
     );
     registry.register(
         EntityTypeDef::new("lookout")
-            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(10))
             .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(
@@ -3330,13 +3486,15 @@ fn validate_accepts_type_tag_and_research_requirements() {
     );
     // The knight's requirements name a type registered after it, the reserved
     // "building" tag, and a research.
-    registry.register(utils::standing("knight", GROUND).with_requires([
-        Requirement::EntityType("lab".to_string()),
-        Requirement::Tag(tags::BUILDING.to_string()),
-        Requirement::Research(smithing),
-    ]));
     registry.register(
-        utils::standing("lab", GROUND)
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([
+            Requirement::EntityType("lab".to_string()),
+            Requirement::Tag(tags::BUILDING.to_string()),
+            Requirement::Research(smithing),
+        ]),
+    );
+    registry.register(
+        utils::standing("lab", utils::GROUND_DOMAIN)
             .with_researcher([smithing])
             .with_tags([tags::BUILDING]),
     );
@@ -3350,7 +3508,7 @@ fn validate_accepts_type_tag_and_research_requirements() {
 fn validate_rejects_unknown_requirement() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("knight", GROUND)
+        utils::standing("knight", utils::GROUND_DOMAIN)
             .with_requires([Requirement::EntityType("chapel".to_string())]),
     );
     registry.validate();
@@ -3364,12 +3522,14 @@ fn validate_rejects_ambiguous_requirement() {
     let mut registry = utils::ground_registry();
     registry.register_tag("forge");
     registry.register(EntityTypeDef::new("forge").with_location(
-        GROUND,
+        utils::GROUND_DOMAIN,
         CellSize::ONE,
         Solidity::Solid,
+        utils::GROUND,
     ));
     registry.register(
-        utils::standing("knight", GROUND).with_requires([Requirement::Tag("forge".to_string())]),
+        utils::standing("knight", utils::GROUND_DOMAIN)
+            .with_requires([Requirement::Tag("forge".to_string())]),
     );
     registry.validate();
 }
@@ -3422,9 +3582,9 @@ fn validate_accepts_research_requirement_on_skill() {
 #[test]
 fn validate_accepts_nested_nodes_and_state_leaves() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("lab", GROUND));
+    registry.register(utils::standing("lab", utils::GROUND_DOMAIN));
     registry.register(
-        utils::standing("knight", GROUND).with_requires([Requirement::Any(vec![
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Any(vec![
             Requirement::EntityType("lab".to_string()),
             Requirement::All(vec![
                 Requirement::Health(Bound::Share(Threshold::Under(utils::fixed("0.5")))),
@@ -3448,7 +3608,9 @@ fn validate_accepts_nested_nodes_and_state_leaves() {
 )]
 fn validate_rejects_empty_node() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("knight", GROUND).with_requires([Requirement::Any(vec![])]));
+    registry.register(
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Any(vec![])]),
+    );
     registry.validate();
 }
 
@@ -3459,9 +3621,9 @@ fn validate_rejects_empty_node() {
 fn validate_rejects_pool_share_over_whole() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("knight", GROUND).with_requires([Requirement::Health(Bound::Share(
-            Threshold::Under(utils::fixed("1.5")),
-        ))]),
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Health(
+            Bound::Share(Threshold::Under(utils::fixed("1.5"))),
+        )]),
     );
     registry.validate();
 }
@@ -3473,9 +3635,9 @@ fn validate_rejects_pool_share_over_whole() {
 fn validate_rejects_share_of_none() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("knight", GROUND).with_requires([Requirement::Energy(Bound::Share(
-            Threshold::AtLeast(FixedU64::ZERO),
-        ))]),
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Energy(
+            Bound::Share(Threshold::AtLeast(FixedU64::ZERO)),
+        )]),
     );
     registry.validate();
 }
@@ -3485,9 +3647,9 @@ fn validate_rejects_share_of_none() {
 fn validate_rejects_amount_under_nothing() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("knight", GROUND).with_requires([Requirement::Health(Bound::Amount(
-            Threshold::Under(FixedU64::ZERO),
-        ))]),
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Health(
+            Bound::Amount(Threshold::Under(FixedU64::ZERO)),
+        )]),
     );
     registry.validate();
 }
@@ -3499,9 +3661,9 @@ fn validate_rejects_amount_under_nothing() {
 fn validate_rejects_amount_at_least_nothing() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("knight", GROUND).with_requires([Requirement::Energy(Bound::Amount(
-            Threshold::AtLeast(FixedU64::ZERO),
-        ))]),
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Energy(
+            Bound::Amount(Threshold::AtLeast(FixedU64::ZERO)),
+        )]),
     );
     registry.validate();
 }
@@ -3511,7 +3673,7 @@ fn validate_accepts_stat_share_over_whole() {
     let mut registry = utils::ground_registry();
     // Hasted to at least half again its base speed: a stat's share is open.
     registry.register(
-        utils::standing("knight", GROUND).with_requires([Requirement::Stat {
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Stat {
             stat: EntityStatId::SPEED,
             bound: Bound::Share(Threshold::AtLeast(utils::fixed("1.5"))),
         }]),
@@ -3525,7 +3687,9 @@ fn validate_accepts_stat_share_over_whole() {
 )]
 fn validate_rejects_idle_for_zero() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("knight", GROUND).with_requires([Requirement::IdleFor(0)]));
+    registry.register(
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::IdleFor(0)]),
+    );
     registry.validate();
 }
 
@@ -3535,7 +3699,9 @@ fn validate_rejects_idle_for_zero() {
 )]
 fn validate_rejects_unhurt_for_zero() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("knight", GROUND).with_requires([Requirement::UnhurtFor(0)]));
+    registry.register(
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::UnhurtFor(0)]),
+    );
     registry.validate();
 }
 
@@ -3684,7 +3850,7 @@ fn validate_rejects_passives_feeding_each_other() {
         ),
     );
     registry.register(
-        utils::standing("channeler", GROUND)
+        utils::standing("channeler", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_pool(Pool::energy(100))
             .with_passives([surging, steeled]),
@@ -3712,7 +3878,7 @@ fn validate_rejects_passive_and_field_effect_feeding_each_other() {
         ),
     );
     registry.register(
-        utils::standing("channeler", GROUND)
+        utils::standing("channeler", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_pool(Pool::energy(100))
             .with_passives([surging])
@@ -3753,7 +3919,7 @@ fn validate_rejects_passives_feeding_each_other_through_stats_they_read() {
         held_on_stat_buff(EntityStatId::ARMOR, EntityStatId::SIGHT_RANGE),
     );
     registry.register(
-        utils::standing("runner", GROUND)
+        utils::standing("runner", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::ARMOR, FixedU64::ONE)
             .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(5))
             .with_passives([hasted, steadied]),
@@ -3824,7 +3990,7 @@ fn validate_accepts_passives_looping_through_clamp_lowerings() {
         ),
     );
     registry.register(
-        utils::standing("channeler", GROUND)
+        utils::standing("channeler", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_pool(Pool::energy(100))
             .with_passives([sapping, draining]),
@@ -3856,7 +4022,7 @@ fn validate_accepts_passive_feeding_one_that_feeds_nothing() {
         ),
     );
     registry.register(
-        utils::standing("channeler", GROUND)
+        utils::standing("channeler", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_pool(Pool::energy(100))
             .with_passives([surging, steeled]),
@@ -3927,7 +4093,7 @@ fn validate_accepts_while_buff_moving_pool_under_its_line() {
         },
     );
     registry.register(
-        utils::standing("depot", GROUND)
+        utils::standing("depot", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_passives([on_fire]),
     );
@@ -3958,7 +4124,7 @@ fn validate_rejects_passive_modifying_stat_bearer_lacks() {
         },
     );
     registry.register(
-        utils::standing("depot", GROUND)
+        utils::standing("depot", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_passives([on_fire]),
     );
@@ -4052,7 +4218,7 @@ fn register_rejects_field_effect_on_pool_maximum_without_shift() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("shrub", GROUND)
+        utils::standing("shrub", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(35))
             .with_field_effects([FieldEffect::new(
                 creep,
@@ -4079,7 +4245,7 @@ fn register_rejects_field_effect_moving_stat_it_holds_while_judging() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("shrub", GROUND)
+        utils::standing("shrub", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(35))
             .with_field_effects([FieldEffect::new(
                 creep,
@@ -4123,7 +4289,7 @@ fn validate_accepts_passive_on_rate_its_pool_carries() {
         },
     );
     registry.register(
-        utils::standing("depot", GROUND)
+        utils::standing("depot", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_passives([on_fire]),
     );
@@ -4320,7 +4486,7 @@ fn validate_rejects_passive_not_holding_on_requirement() {
         },
     );
     registry.register(
-        utils::standing("depot", GROUND)
+        utils::standing("depot", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
             .with_passives([thick_hide]),
@@ -4343,7 +4509,7 @@ fn validate_rejects_passive_registered_elsewhere() {
     );
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("depot", GROUND)
+        utils::standing("depot", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_passives([foreign]),
     );
@@ -4364,7 +4530,7 @@ fn validate_rejects_passive_named_twice() {
         },
     );
     registry.register(
-        utils::standing("depot", GROUND)
+        utils::standing("depot", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_passives([on_fire, on_fire]),
     );
@@ -4379,7 +4545,7 @@ fn validate_rejects_stat_requirement_on_stat_registered_elsewhere() {
     let girth = utils::ground_registry().register_entity_stat("girth", FixedU64::ZERO);
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("knight", GROUND).with_requires([Requirement::Stat {
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Stat {
             stat: girth,
             bound: Bound::Amount(Threshold::Under(FixedU64::ONE)),
         }]),
@@ -4402,11 +4568,11 @@ fn validate_rejects_stat_requirement_on_stat_registered_elsewhere() {
 fn validate_rejects_two_types_requiring_each_other() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("chapel", GROUND)
+        utils::standing("chapel", utils::GROUND_DOMAIN)
             .with_requires([Requirement::EntityType("keep".to_string())]),
     );
     registry.register(
-        utils::standing("keep", GROUND)
+        utils::standing("keep", utils::GROUND_DOMAIN)
             .with_requires([Requirement::EntityType("chapel".to_string())]),
     );
     registry.validate();
@@ -4428,7 +4594,7 @@ fn validate_rejects_research_and_type_requiring_each_other() {
         ),
     );
     registry.register(
-        utils::standing("keep", GROUND)
+        utils::standing("keep", utils::GROUND_DOMAIN)
             .with_requires([Requirement::Research(masonry)])
             .with_researcher([masonry]),
     );
@@ -4451,7 +4617,7 @@ fn validate_rejects_research_requiring_tag_nothing_carries() {
             [Requirement::Tag("hall".to_string())],
         ),
     );
-    registry.register(utils::standing("lab", GROUND).with_researcher([masonry]));
+    registry.register(utils::standing("lab", utils::GROUND_DOMAIN).with_researcher([masonry]));
     registry.validate();
 }
 
@@ -4476,9 +4642,9 @@ fn validate_rejects_skill_requiring_tag_nothing_carries() {
 fn validate_rejects_change_of_form_requiring_tag_nothing_carries() {
     let mut registry = utils::ground_registry();
     registry.register_tag("forge");
-    registry.register(utils::standing("keep", GROUND));
-    registry.register(
-        utils::standing("hall", GROUND).with_morphs([MorphTransition::new(
+    registry.register(utils::standing("keep", utils::GROUND_DOMAIN));
+    registry.register(utils::standing("hall", utils::GROUND_DOMAIN).with_morphs([
+        MorphTransition::new(
             "keep",
             MorphCourse::direct(MorphInterrupted::Reverts),
             Quantity::Constant(20),
@@ -4488,8 +4654,8 @@ fn validate_rejects_change_of_form_requiring_tag_nothing_carries() {
             Vec::new(),
             [Requirement::Tag("forge".to_string())],
             [],
-        )]),
-    );
+        ),
+    ]));
     registry.validate();
 }
 
@@ -4502,10 +4668,11 @@ fn validate_rejects_cycle_through_tag() {
     registry.register_tag("holy");
     // The chapel needs something holy; the only holy thing needs the chapel.
     registry.register(
-        utils::standing("chapel", GROUND).with_requires([Requirement::Tag("holy".to_string())]),
+        utils::standing("chapel", utils::GROUND_DOMAIN)
+            .with_requires([Requirement::Tag("holy".to_string())]),
     );
     registry.register(
-        utils::standing("shrine", GROUND)
+        utils::standing("shrine", utils::GROUND_DOMAIN)
             .with_tags(["holy"])
             .with_requires([Requirement::EntityType("chapel".to_string())]),
     );
@@ -4520,13 +4687,13 @@ fn validate_names_every_dead_branch_of_any() {
     let mut registry = utils::ground_registry();
     registry.register_tag("holy");
     registry.register(
-        utils::standing("chapel", GROUND).with_requires([Requirement::Any(vec![
+        utils::standing("chapel", utils::GROUND_DOMAIN).with_requires([Requirement::Any(vec![
             Requirement::EntityType("keep".to_string()),
             Requirement::Tag("holy".to_string()),
         ])]),
     );
     registry.register(
-        utils::standing("keep", GROUND)
+        utils::standing("keep", utils::GROUND_DOMAIN)
             .with_requires([Requirement::EntityType("chapel".to_string())]),
     );
     registry.validate();
@@ -4540,7 +4707,12 @@ fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
     let mut registry = utils::ground_registry();
     registry.register(
         EntityTypeDef::new("keep")
-            .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::new(2, 2),
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(100))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -4554,7 +4726,12 @@ fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
     );
     registry.register(
         EntityTypeDef::new("lookout")
-            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(10))
             .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
             .with_annex(
@@ -4572,17 +4749,17 @@ fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
 #[test]
 fn validate_accepts_cycle_with_free_branch() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("hall", GROUND));
+    registry.register(utils::standing("hall", utils::GROUND_DOMAIN));
     // chapel needs keep or hall; keep needs chapel. The hall lets chapel in,
     // and chapel lets keep in.
     registry.register(
-        utils::standing("chapel", GROUND).with_requires([Requirement::Any(vec![
+        utils::standing("chapel", utils::GROUND_DOMAIN).with_requires([Requirement::Any(vec![
             Requirement::EntityType("keep".to_string()),
             Requirement::EntityType("hall".to_string()),
         ])]),
     );
     registry.register(
-        utils::standing("keep", GROUND)
+        utils::standing("keep", utils::GROUND_DOMAIN)
             .with_requires([Requirement::EntityType("chapel".to_string())]),
     );
     registry.validate();
@@ -4614,11 +4791,11 @@ fn validate_accepts_bonus_against_type_or_tag() {
     let mut registry = utils::ground_registry();
     registry.register_tag("armored");
     registry.register(
-        utils::standing("archer", GROUND)
+        utils::standing("archer", utils::GROUND_DOMAIN)
             .with_bonus_damage_vs([("armored", 4u32), ("keep", 6u32)])
-            .with_attack(utils::weapon(GROUND), 6, 4, 4, 7, 3),
+            .with_attack(utils::weapon(utils::GROUND), 6, 4, 4, 7, 3),
     );
-    registry.register(utils::standing("keep", GROUND));
+    registry.register(utils::standing("keep", utils::GROUND_DOMAIN));
 
     registry.validate();
 }
@@ -4632,9 +4809,9 @@ fn validate_rejects_bonus_against_unknown_name() {
     // way content can be wrong.
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("archer", GROUND)
+        utils::standing("archer", utils::GROUND_DOMAIN)
             .with_bonus_damage_vs([("sieging", 4u32)])
-            .with_attack(utils::weapon(GROUND), 6, 4, 4, 7, 3),
+            .with_attack(utils::weapon(utils::GROUND), 6, 4, 4, 7, 3),
     );
 
     registry.validate();
@@ -4648,7 +4825,7 @@ fn validate_rejects_bonus_against_unknown_name() {
 fn validate_accepts_transitions_naming_each_other() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::sized("walker", GROUND, CellSize::new(2, 2))
+        utils::sized("walker", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::ONE,
@@ -4659,7 +4836,7 @@ fn validate_accepts_transitions_naming_each_other() {
             .with_morphs([morph_into("flier")]),
     );
     registry.register(
-        utils::sized("flier", GROUND, CellSize::new(2, 2))
+        utils::sized("flier", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::ONE,
@@ -4677,7 +4854,7 @@ fn validate_accepts_transitions_naming_each_other() {
 fn validate_accepts_one_way_transition() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -4687,13 +4864,15 @@ fn validate_accepts_one_way_transition() {
             )
             .with_morphs([morph_into("flier")]),
     );
-    registry.register(utils::standing("flier", GROUND).with_movement(
-        FixedU64::ONE,
-        FixedU64::from_num(0.5),
-        FixedU64::ONE,
-        FixedU64::from_num(360),
-        FixedU64::from_num(360),
-    ));
+    registry.register(
+        utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
+            FixedU64::ONE,
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
+        ),
+    );
 
     registry.validate();
 }
@@ -4705,7 +4884,7 @@ fn validate_accepts_one_way_transition() {
 fn validate_rejects_landing_carry_of_pool_destination_lacks() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(50))
             .with_pool(Pool::energy(20))
             .with_morphs([carrying_into(
@@ -4714,7 +4893,7 @@ fn validate_rejects_landing_carry_of_pool_destination_lacks() {
                 [(PoolId::ENERGY, PoolCarry::Full)],
             )]),
     );
-    registry.register(utils::standing("flier", GROUND).with_pool(Pool::health(50)));
+    registry.register(utils::standing("flier", utils::GROUND_DOMAIN).with_pool(Pool::health(50)));
     registry.validate();
 }
 
@@ -4724,9 +4903,9 @@ fn validate_rejects_landing_carry_of_pool_destination_lacks() {
 )]
 fn validate_rejects_entering_carry_of_pool_interim_lacks() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("cocoon", GROUND).with_pool(Pool::health(50)));
+    registry.register(utils::standing("cocoon", utils::GROUND_DOMAIN).with_pool(Pool::health(50)));
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(50))
             .with_pool(Pool::energy(20))
             .with_morphs([carrying_into(
@@ -4739,7 +4918,7 @@ fn validate_rejects_entering_carry_of_pool_interim_lacks() {
                 [],
             )]),
     );
-    registry.register(utils::standing("flier", GROUND).with_pool(Pool::health(50)));
+    registry.register(utils::standing("flier", utils::GROUND_DOMAIN).with_pool(Pool::health(50)));
     registry.validate();
 }
 
@@ -4750,12 +4929,12 @@ fn validate_rejects_entering_carry_of_pool_interim_lacks() {
 fn validate_rejects_revert_carry_of_pool_origin_lacks() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("cocoon", GROUND)
+        utils::standing("cocoon", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(50))
             .with_pool(Pool::energy(20)),
     );
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(50))
             .with_morphs([carrying_into(
                 "flier",
@@ -4767,7 +4946,7 @@ fn validate_rejects_revert_carry_of_pool_origin_lacks() {
                 [],
             )]),
     );
-    registry.register(utils::standing("flier", GROUND).with_pool(Pool::health(50)));
+    registry.register(utils::standing("flier", utils::GROUND_DOMAIN).with_pool(Pool::health(50)));
     registry.validate();
 }
 
@@ -4777,9 +4956,9 @@ fn validate_rejects_revert_carry_of_pool_origin_lacks() {
 )]
 fn validate_rejects_landing_carry_of_pool_no_form_left_had() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("cocoon", GROUND).with_pool(Pool::health(50)));
+    registry.register(utils::standing("cocoon", utils::GROUND_DOMAIN).with_pool(Pool::health(50)));
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(50))
             .with_morphs([carrying_into(
                 "flier",
@@ -4788,7 +4967,7 @@ fn validate_rejects_landing_carry_of_pool_no_form_left_had() {
             )]),
     );
     registry.register(
-        utils::standing("flier", GROUND)
+        utils::standing("flier", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(50))
             .with_pool(Pool::energy(20)),
     );
@@ -4798,9 +4977,9 @@ fn validate_rejects_landing_carry_of_pool_no_form_left_had() {
 #[test]
 fn validate_accepts_landing_carry_of_pool_interim_lacks() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("cocoon", GROUND).with_pool(Pool::health(50)));
+    registry.register(utils::standing("cocoon", utils::GROUND_DOMAIN).with_pool(Pool::health(50)));
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(50))
             .with_pool(Pool::energy(20))
             .with_morphs([carrying_into(
@@ -4810,7 +4989,7 @@ fn validate_accepts_landing_carry_of_pool_interim_lacks() {
             )]),
     );
     registry.register(
-        utils::standing("flier", GROUND)
+        utils::standing("flier", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(50))
             .with_pool(Pool::energy(20)),
     );
@@ -4824,7 +5003,7 @@ fn validate_accepts_landing_carry_of_pool_interim_lacks() {
 fn validate_rejects_transition_into_unregistered_type() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -4844,9 +5023,9 @@ fn validate_rejects_transition_into_unregistered_type() {
 )]
 fn validate_rejects_nearby_landing_into_form_that_cannot_move() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("keep", GROUND));
+    registry.register(utils::standing("keep", utils::GROUND_DOMAIN));
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -4876,7 +5055,7 @@ fn validate_accepts_transition_with_odd_footprint_difference() {
     // onto the lattice where the model needs it, so nothing is refused here.
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -4887,7 +5066,7 @@ fn validate_accepts_transition_with_odd_footprint_difference() {
             .with_morphs([morph_into("giant")]),
     );
     registry.register(
-        utils::sized("giant", GROUND, CellSize::new(2, 2)).with_movement(
+        utils::sized("giant", utils::GROUND_DOMAIN, CellSize::new(2, 2)).with_movement(
             FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::ONE,
@@ -4904,7 +5083,7 @@ fn validate_accepts_transition_with_even_footprint_difference() {
     // 1x1 -> 3x3 recentres by a whole cell per axis, which stays on lattice.
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -4915,7 +5094,7 @@ fn validate_accepts_transition_with_even_footprint_difference() {
             .with_morphs([morph_into("giant")]),
     );
     registry.register(
-        utils::sized("giant", GROUND, CellSize::new(3, 3)).with_movement(
+        utils::sized("giant", utils::GROUND_DOMAIN, CellSize::new(3, 3)).with_movement(
             FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::ONE,
@@ -4935,7 +5114,7 @@ fn validate_accepts_transition_with_even_footprint_difference() {
 fn validate_rejects_transition_with_unresolved_requirement() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -4955,13 +5134,15 @@ fn validate_rejects_transition_with_unresolved_requirement() {
                 [],
             )]),
     );
-    registry.register(utils::standing("flier", GROUND).with_movement(
-        FixedU64::ONE,
-        FixedU64::from_num(0.5),
-        FixedU64::ONE,
-        FixedU64::from_num(360),
-        FixedU64::from_num(360),
-    ));
+    registry.register(
+        utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
+            FixedU64::ONE,
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
+        ),
+    );
 
     registry.validate();
 }
@@ -4975,7 +5156,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
     let mut registry = utils::ground_registry();
     let stat = registry.register_entity_stat("change_time", FixedU64::ONE);
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -4995,13 +5176,15 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
                 [],
             )]),
     );
-    registry.register(utils::standing("flier", GROUND).with_movement(
-        FixedU64::ONE,
-        FixedU64::from_num(0.5),
-        FixedU64::ONE,
-        FixedU64::from_num(360),
-        FixedU64::from_num(360),
-    ));
+    registry.register(
+        utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
+            FixedU64::ONE,
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
+        ),
+    );
 
     registry.validate();
 }
@@ -5014,7 +5197,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
 fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -5034,13 +5217,15 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
                 [],
             )]),
     );
-    registry.register(utils::standing("flier", GROUND).with_movement(
-        FixedU64::ONE,
-        FixedU64::from_num(0.5),
-        FixedU64::ONE,
-        FixedU64::from_num(360),
-        FixedU64::from_num(360),
-    ));
+    registry.register(
+        utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
+            FixedU64::ONE,
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
+        ),
+    );
 
     registry.validate();
 }
@@ -5053,7 +5238,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
 fn validate_rejects_transition_with_unregistered_resource_cost() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -5073,13 +5258,15 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
                 [],
             )]),
     );
-    registry.register(utils::standing("flier", GROUND).with_movement(
-        FixedU64::ONE,
-        FixedU64::from_num(0.5),
-        FixedU64::ONE,
-        FixedU64::from_num(360),
-        FixedU64::from_num(360),
-    ));
+    registry.register(
+        utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
+            FixedU64::ONE,
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
+        ),
+    );
 
     registry.validate();
 }
@@ -5089,11 +5276,12 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
 fn validate_rejects_transition_through_unregistered_form() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("larva", GROUND)
+        utils::standing("larva", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_morphs([morph_through("egg", "hatchling")]),
     );
-    registry.register(utils::standing("hatchling", GROUND).with_pool(Pool::health(30)));
+    registry
+        .register(utils::standing("hatchling", utils::GROUND_DOMAIN).with_pool(Pool::health(30)));
 
     registry.validate();
 }
@@ -5103,12 +5291,77 @@ fn validate_rejects_transition_through_unregistered_form() {
 fn validate_rejects_transition_through_form_of_other_footprint() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("larva", GROUND)
+        utils::standing("larva", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_morphs([morph_through("egg", "hatchling")]),
     );
-    registry.register(utils::sized("egg", GROUND, CellSize::new(2, 2)).with_pool(Pool::health(60)));
-    registry.register(utils::standing("hatchling", GROUND).with_pool(Pool::health(30)));
+    registry.register(
+        utils::sized("egg", utils::GROUND_DOMAIN, CellSize::new(2, 2)).with_pool(Pool::health(60)),
+    );
+    registry
+        .register(utils::standing("hatchling", utils::GROUND_DOMAIN).with_pool(Pool::health(30)));
+
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'larva' morphing into 'hatchling' wears a form whose domain refuses terrain its own takes"
+)]
+fn validate_rejects_transition_through_form_on_fewer_terrains() {
+    // The larva's domain takes every terrain, the egg's dry land alone: worn
+    // where the larva stands, the egg could stand on water it may not be on.
+    let mut registry = utils::ground_registry();
+    registry.register_terrain("water");
+    let dry = registry.register_domain(
+        "dry",
+        DomainDef::new(
+            utils::GROUND,
+            Terrains::Only(registry.terrain("land").unwrap().into()),
+        ),
+    );
+    registry.register(
+        utils::standing("larva", utils::GROUND_DOMAIN)
+            .with_pool(Pool::health(20))
+            .with_morphs([morph_through("egg", "hatchling")]),
+    );
+    registry.register(
+        EntityTypeDef::new("egg")
+            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_pool(Pool::health(60)),
+    );
+    registry
+        .register(utils::standing("hatchling", utils::GROUND_DOMAIN).with_pool(Pool::health(30)));
+
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_transition_through_form_on_more_terrains() {
+    // The larva's and the hatchling's domain takes dry land alone, the egg's
+    // every terrain: worn where the larva stands, the egg stands on land it
+    // also takes.
+    let mut registry = utils::ground_registry();
+    registry.register_terrain("water");
+    let dry = registry.register_domain(
+        "dry",
+        DomainDef::new(
+            utils::GROUND,
+            Terrains::Only(registry.terrain("land").unwrap().into()),
+        ),
+    );
+    registry.register(
+        EntityTypeDef::new("larva")
+            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_pool(Pool::health(20))
+            .with_morphs([morph_through("egg", "hatchling")]),
+    );
+    registry.register(utils::standing("egg", utils::GROUND_DOMAIN).with_pool(Pool::health(60)));
+    registry.register(
+        EntityTypeDef::new("hatchling")
+            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_pool(Pool::health(30)),
+    );
 
     registry.validate();
 }
@@ -5117,12 +5370,13 @@ fn validate_rejects_transition_through_form_of_other_footprint() {
 fn validate_accepts_transition_through_form_of_same_footprint() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("larva", GROUND)
+        utils::standing("larva", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_morphs([morph_through("egg", "hatchling")]),
     );
-    registry.register(utils::standing("egg", GROUND).with_pool(Pool::health(60)));
-    registry.register(utils::standing("hatchling", GROUND).with_pool(Pool::health(30)));
+    registry.register(utils::standing("egg", utils::GROUND_DOMAIN).with_pool(Pool::health(60)));
+    registry
+        .register(utils::standing("hatchling", utils::GROUND_DOMAIN).with_pool(Pool::health(30)));
 
     registry.validate();
 }
@@ -5132,7 +5386,7 @@ fn validate_accepts_transition_with_payable_costs() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
     registry.register(
-        utils::standing("walker", GROUND)
+        utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::from_num(0.5),
@@ -5162,13 +5416,15 @@ fn validate_accepts_transition_with_payable_costs() {
                 [],
             )]),
     );
-    registry.register(utils::standing("flier", GROUND).with_movement(
-        FixedU64::ONE,
-        FixedU64::from_num(0.5),
-        FixedU64::ONE,
-        FixedU64::from_num(360),
-        FixedU64::from_num(360),
-    ));
+    registry.register(
+        utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
+            FixedU64::ONE,
+            FixedU64::from_num(0.5),
+            FixedU64::ONE,
+            FixedU64::from_num(360),
+            FixedU64::from_num(360),
+        ),
+    );
 
     registry.validate();
 }
@@ -5186,13 +5442,13 @@ fn register_rejects_turret_firing_while_moving_without_movement() {
     let rolling = registry.register_turret(
         "rolling",
         TurretDef::new(
-            Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
+            Weapon::new(utils::GROUND, Delivery::Instant, None, Slain::Remains),
             TurretStats::default(),
             WeaponConduct::OnTheMove,
         ),
     );
     registry.register(
-        utils::standing("bunker", GROUND)
+        utils::standing("bunker", utils::GROUND_DOMAIN)
             .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
             .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(4))
             .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(4))
@@ -5211,13 +5467,13 @@ fn register_rejects_turret_mounted_off_its_footprint() {
     let gun = registry.register_turret(
         "gun",
         TurretDef::new(
-            Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
+            Weapon::new(utils::GROUND, Delivery::Instant, None, Slain::Remains),
             TurretStats::default(),
             WeaponConduct::Halts,
         ),
     );
     registry.register(
-        utils::sized("keep", GROUND, CellSize::new(2, 2))
+        utils::sized("keep", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(10))
             .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::from_num(4))
             .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(4))
@@ -5243,13 +5499,13 @@ fn register_rejects_turret_reading_stat_its_body_lacks() {
     let gun = registry.register_turret(
         "gun",
         TurretDef::new(
-            Weapon::new(GROUND, Delivery::Instant, None, Slain::Remains),
+            Weapon::new(utils::GROUND, Delivery::Instant, None, Slain::Remains),
             TurretStats::default(),
             WeaponConduct::Halts,
         ),
     );
     registry.register(
-        utils::standing("keep", GROUND).with_turrets([TurretMount::new(
+        utils::standing("keep", utils::GROUND_DOMAIN).with_turrets([TurretMount::new(
             gun,
             CellPos::new(0, 0),
             CellSize::ONE,
@@ -5268,7 +5524,7 @@ fn register_accepts_field_sources_placement_and_effects() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("hive", GROUND)
+        utils::standing("hive", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(300))
             .with_field_sources([emitter(creep)])
             .with_field_placement([FieldPlacement::Requires {
@@ -5312,14 +5568,14 @@ fn register_rejects_standing_act_on_foreign_field() {
     let foreign = utils::ground_registry().register_field(
         "blight",
         FieldDef::new(
-            FieldLayer::Passable(GROUND.into()),
+            Terrains::Any,
             FieldDecay::Never,
             FieldVision::Dark,
             Detection::Blind,
         ),
     );
     registry.register(
-        utils::standing("pylon", GROUND)
+        utils::standing("pylon", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_standing_acts([StandingAct::Field {
                 field: foreign,
@@ -5335,7 +5591,7 @@ fn register_accepts_standing_act_on_registered_field() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("pylon", GROUND)
+        utils::standing("pylon", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_standing_acts([StandingAct::Field {
                 field: creep,
@@ -5362,7 +5618,7 @@ fn register_keeps_field_vision() {
     let watched = registry.register_field(
         "creep",
         FieldDef::new(
-            FieldLayer::Passable(GROUND.into()),
+            Terrains::Any,
             FieldDecay::Never,
             FieldVision::Watched,
             Detection::Blind,
@@ -5371,7 +5627,7 @@ fn register_keeps_field_vision() {
     let dark = registry.register_field(
         "power",
         FieldDef::new(
-            FieldLayer::Passable(GROUND.into()),
+            Terrains::Any,
             FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Blind,
@@ -5391,12 +5647,12 @@ fn register_rejects_duplicate_field() {
 }
 
 #[test]
-#[should_panic(expected = "field 'creep' covers unregistered layers")]
-fn register_rejects_field_over_unregistered_layer() {
+#[should_panic(expected = "field 'creep' names unregistered terrains 0b10")]
+fn register_rejects_field_on_unregistered_terrain() {
     utils::ground_registry().register_field(
         "creep",
         FieldDef::new(
-            FieldLayer::Passable(utils::WATER.into()),
+            Terrains::Only(TerrainMask::from(TerrainId::new(2))),
             FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Blind,
@@ -5409,8 +5665,9 @@ fn register_rejects_field_over_unregistered_layer() {
 fn register_rejects_source_of_foreign_field() {
     let mut foreign = utils::ground_registry();
     let creep = creep_field(&mut foreign);
-    utils::ground_registry()
-        .register(utils::standing("hive", GROUND).with_field_sources([emitter(creep)]));
+    utils::ground_registry().register(
+        utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([emitter(creep)]),
+    );
 }
 
 #[test]
@@ -5419,7 +5676,7 @@ fn register_rejects_placement_on_foreign_field() {
     let mut foreign = utils::ground_registry();
     let creep = creep_field(&mut foreign);
     utils::ground_registry().register(
-        utils::standing("spore", GROUND)
+        utils::standing("spore", utils::GROUND_DOMAIN)
             .with_field_placement([FieldPlacement::Forbids { field: creep }]),
     );
 }
@@ -5429,23 +5686,23 @@ fn register_rejects_placement_on_foreign_field() {
 fn register_rejects_effect_of_foreign_field() {
     let mut foreign = utils::ground_registry();
     let creep = creep_field(&mut foreign);
-    utils::ground_registry().register(utils::standing("zergling", GROUND).with_field_effects([
-        FieldEffect::new(
+    utils::ground_registry().register(
+        utils::standing("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             creep,
             Affiliation::Own,
             FieldCoverage::Every,
             Vec::new(),
             vec![EntityEffect::Disable],
             None,
-        ),
-    ]));
+        )]),
+    );
 }
 
 #[test]
 #[should_panic(expected = "decay cycle must be positive")]
 fn field_rejects_zero_decay_cycle() {
     FieldDef::new(
-        FieldLayer::Passable(GROUND.into()),
+        Terrains::Any,
         FieldDecay::Gradual { cycle: 0 },
         FieldVision::Dark,
         Detection::Blind,
@@ -5458,7 +5715,7 @@ fn register_rejects_source_starting_beyond_radius() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("hive", GROUND).with_field_sources([FieldSourceDef::new(
+        utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
             creep,
             3,
             FieldGrowth::Gradual {
@@ -5477,7 +5734,7 @@ fn register_rejects_source_rising_beyond_radius() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("hive", GROUND)
+        utils::standing("hive", utils::GROUND_DOMAIN)
             .with_rise(4, [])
             .with_field_sources([FieldSourceDef::new(
                 creep,
@@ -5495,7 +5752,7 @@ fn register_rejects_source_rising_on_type_that_never_rises() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("hive", GROUND).with_field_sources([FieldSourceDef::new(
+        utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
             creep,
             3,
             FieldGrowth::Instant,
@@ -5511,7 +5768,7 @@ fn register_rejects_source_holding_beyond_radius_while_disabled() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("hive", GROUND).with_field_sources([FieldSourceDef::new(
+        utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
             creep,
             3,
             FieldGrowth::Instant,
@@ -5529,7 +5786,7 @@ fn register_rejects_field_effect_with_no_side() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("zergling", GROUND).with_field_effects([FieldEffect::new(
+        utils::standing("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             creep,
             Affiliation::Anyone,
             FieldCoverage::Any,
@@ -5546,7 +5803,7 @@ fn register_rejects_field_effect_with_no_modifiers() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("zergling", GROUND).with_field_effects([FieldEffect::new(
+        utils::standing("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             creep,
             Affiliation::Anyone,
             FieldCoverage::Any,
@@ -5565,7 +5822,7 @@ fn register_rejects_field_effect_on_stat_type_lacks() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("zergling", GROUND)
+        utils::standing("zergling", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(35))
             .with_field_effects([FieldEffect::new(
                 creep,
@@ -5589,7 +5846,7 @@ fn register_accepts_field_effect_on_rate_its_pool_carries() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
-        utils::standing("zergling", GROUND)
+        utils::standing("zergling", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(35))
             .with_field_effects([FieldEffect::new(
                 creep,
@@ -5682,9 +5939,9 @@ fn register_accepts_player_cast_with_player_leaves_under_node() {
 )]
 fn validate_rejects_annexed_requirement_naming_type_that_is_no_annex() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("runner", GROUND).with_pool(Pool::health(10)));
+    registry.register(utils::standing("runner", utils::GROUND_DOMAIN).with_pool(Pool::health(10)));
     registry.register(
-        utils::standing("marine", GROUND)
+        utils::standing("marine", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(10))
             .with_requires([Requirement::Annexed("runner".to_string())]),
     );
@@ -5721,7 +5978,7 @@ fn register_accepts_position_cast_with_field_effect() {
 fn register_rejects_summon_of_remains() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("corpse", GROUND)
+        utils::standing("corpse", utils::GROUND_DOMAIN)
             .with_tags(["remains"])
             .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
     );
@@ -5753,7 +6010,7 @@ fn register_rejects_summon_of_remains() {
 #[test]
 fn register_accepts_remains_cast_with_summon_effect() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("skeleton", GROUND));
+    registry.register(utils::standing("skeleton", utils::GROUND_DOMAIN));
     let skeleton = registry.type_id("skeleton").expect("just registered");
     registry.register_skill(
         "raise_dead",
@@ -5836,7 +6093,7 @@ fn validate_accepts_skill_aimed_at_type_that_carries_it() {
         },
     );
     registry.register(
-        utils::standing("priest", GROUND)
+        utils::standing("priest", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_skills([heal]),
     );
@@ -5847,7 +6104,7 @@ fn validate_accepts_skill_aimed_at_type_that_carries_it() {
 #[test]
 fn register_accepts_summon_aimed_at_caster_and_at_cell() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("skeleton", GROUND));
+    registry.register(utils::standing("skeleton", utils::GROUND_DOMAIN));
     let skeleton = registry.type_id("skeleton").expect("just registered");
     let summons = |at| SkillDef {
         cooldown: 1,
@@ -5878,7 +6135,7 @@ fn register_accepts_summon_aimed_at_caster_and_at_cell() {
 #[should_panic(expected = "skill 'raise_dead' summons an unregistered entity type")]
 fn register_rejects_summon_of_foreign_type() {
     let mut foreign = utils::ground_registry();
-    foreign.register(utils::standing("skeleton", GROUND));
+    foreign.register(utils::standing("skeleton", utils::GROUND_DOMAIN));
     let skeleton = foreign.type_id("skeleton").expect("just registered");
     utils::ground_registry().register_skill(
         "raise_dead",
@@ -5908,7 +6165,7 @@ fn register_rejects_summon_of_foreign_type() {
 #[should_panic(expected = "skill 'raise_dead' summons nothing at all")]
 fn register_rejects_summon_of_nobody() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("skeleton", GROUND));
+    registry.register(utils::standing("skeleton", utils::GROUND_DOMAIN));
     let skeleton = registry.type_id("skeleton").expect("just registered");
     registry.register_skill(
         "raise_dead",
@@ -5960,7 +6217,7 @@ fn register_accepts_reach_read_from_stat_caster_carries() {
         },
     );
     registry.register(
-        utils::standing("necromancer", GROUND)
+        utils::standing("necromancer", utils::GROUND_DOMAIN)
             .with_stat(raise_range, FixedU64::from_num(6))
             .with_skills([bolt]),
     );
@@ -5994,7 +6251,7 @@ fn register_rejects_reach_by_stat_caster_lacks() {
             requires: Vec::new(),
         },
     );
-    registry.register(utils::standing("necromancer", GROUND).with_skills([bolt]));
+    registry.register(utils::standing("necromancer", utils::GROUND_DOMAIN).with_skills([bolt]));
 }
 
 #[test]
@@ -6008,7 +6265,7 @@ fn register_rejects_watch_radius_by_stat_caster_lacks() {
         "scan",
         watching(Quantity::Stat(scan_radius), Quantity::Constant(40)),
     );
-    registry.register(utils::standing("observatory", GROUND).with_skills([scan]));
+    registry.register(utils::standing("observatory", utils::GROUND_DOMAIN).with_skills([scan]));
 }
 
 #[test]
@@ -6031,7 +6288,8 @@ fn register_rejects_summon_count_by_stat_caster_lacks() {
     let host_size = registry.register_entity_stat("host_size", FixedU64::ONE);
     let raise_host = summoning(&mut registry, host_size);
     let raise_host = registry.register_skill("raise_host", raise_host);
-    registry.register(utils::standing("necromancer", GROUND).with_skills([raise_host]));
+    registry
+        .register(utils::standing("necromancer", utils::GROUND_DOMAIN).with_skills([raise_host]));
 }
 
 #[test]
@@ -6076,7 +6334,7 @@ fn register_rejects_cast_point_by_stat_caster_lacks() {
             requires: Vec::new(),
         },
     );
-    registry.register(utils::standing("necromancer", GROUND).with_skills([bolt]));
+    registry.register(utils::standing("necromancer", utils::GROUND_DOMAIN).with_skills([bolt]));
 }
 
 #[test]
@@ -6241,7 +6499,7 @@ fn register_accepts_cast_worked_on_stats_caster_carries() {
         },
     );
     registry.register(
-        utils::standing("necromancer", GROUND)
+        utils::standing("necromancer", utils::GROUND_DOMAIN)
             .with_stat(ritual_time, FixedU64::from_num(20))
             .with_skills([bolt]),
     );
@@ -6252,11 +6510,12 @@ fn register_accepts_weapon_beside_carrier() {
     let mut registry = utils::ground_registry();
     registry.register_resource("wood");
     registry.register(
-        utils::standing("tree", GROUND).with_resource_source("wood", DepletionPolicy::Destroy),
+        utils::standing("tree", utils::GROUND_DOMAIN)
+            .with_resource_source("wood", DepletionPolicy::Destroy),
     );
     registry.register(
-        utils::standing("ghoul", GROUND)
-            .with_attack_def(GROUND, Delivery::Instant, None, Slain::Remains)
+        utils::standing("ghoul", utils::GROUND_DOMAIN)
+            .with_attack_def(utils::GROUND, Delivery::Instant, None, Slain::Remains)
             .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5))
             .with_stat(EntityStatId::ATTACK_RANGE, FixedU64::ONE)
             .with_stat(EntityStatId::ACQUIRE_RANGE, FixedU64::from_num(5))
@@ -6313,8 +6572,10 @@ fn register_rejects_cast_on_foreign_field() {
 #[test]
 fn register_keeps_type_concealment() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("shade", GROUND).with_concealment(Concealment::Concealed));
-    registry.register(utils::standing("footman", GROUND));
+    registry.register(
+        utils::standing("shade", utils::GROUND_DOMAIN).with_concealment(Concealment::Concealed),
+    );
+    registry.register(utils::standing("footman", utils::GROUND_DOMAIN));
     assert_eq!(
         registry.entity("shade").unwrap().concealment,
         Concealment::Concealed
@@ -6415,23 +6676,23 @@ fn register_keeps_field_detection() {
     let true_sight = registry.register_field(
         "true_sight",
         FieldDef::new(
-            FieldLayer::Anywhere,
+            Terrains::Any,
             FieldDecay::Instant,
             FieldVision::Dark,
-            Detection::Reveals(GROUND.into()),
+            Detection::Reveals(utils::GROUND.into()),
         ),
     );
     assert_eq!(
         registry.field_def(true_sight).detection(),
-        Detection::Reveals(GROUND.into())
+        Detection::Reveals(utils::GROUND.into())
     );
 }
 
 #[test]
-#[should_panic(expected = "a field passable on no layer lies anywhere; declare it so")]
-fn field_rejects_passable_on_no_layer() {
+#[should_panic(expected = "a field on no terrain lies nowhere; declare it on \"any\"")]
+fn field_on_no_terrain_panics() {
     FieldDef::new(
-        FieldLayer::Passable(LayerMask::EMPTY),
+        Terrains::Only(TerrainMask::EMPTY),
         FieldDecay::Instant,
         FieldVision::Dark,
         Detection::Blind,
@@ -6442,7 +6703,7 @@ fn field_rejects_passable_on_no_layer() {
 #[should_panic(expected = "a field revealing no layer detects nothing; declare it blind")]
 fn field_rejects_detection_revealing_no_layer() {
     FieldDef::new(
-        FieldLayer::Passable(GROUND.into()),
+        Terrains::Any,
         FieldDecay::Instant,
         FieldVision::Dark,
         Detection::Reveals(LayerMask::EMPTY),
@@ -6455,7 +6716,7 @@ fn register_rejects_field_detecting_unregistered_layer() {
     utils::ground_registry().register_field(
         "sonar",
         FieldDef::new(
-            FieldLayer::Passable(GROUND.into()),
+            Terrains::Any,
             FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Reveals(utils::WATER.into()),
@@ -6516,7 +6777,7 @@ fn register_rejects_self_cast_health_upkeep_on_type_without_health() {
         }),
     );
     let skill = registry.register_skill("bleed", self_cast(bleeding));
-    registry.register(utils::standing("ghost", GROUND).with_skills([skill]));
+    registry.register(utils::standing("ghost", utils::GROUND_DOMAIN).with_skills([skill]));
 }
 
 #[test]
@@ -6534,7 +6795,7 @@ fn register_rejects_self_cast_upkeep_from_pool_type_lacks() {
     );
     let skill = registry.register_skill("cloak", self_cast(cloak));
     registry.register(
-        utils::standing("ghost", GROUND)
+        utils::standing("ghost", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(40))
             .with_skills([skill]),
     );
@@ -6552,7 +6813,7 @@ fn register_accepts_self_cast_upkeep_from_pool_type_carries() {
     );
     let skill = registry.register_skill("cloak", self_cast(cloak));
     registry.register(
-        utils::standing("ghost", GROUND)
+        utils::standing("ghost", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(40))
             .with_pool(Pool::energy(50))
             .with_skills([skill]),
@@ -6587,7 +6848,7 @@ fn validate_rejects_brood_of_unregistered_type() {
 fn validate_rejects_brood_of_type_that_is_no_broodling() {
     let mut registry = utils::ground_registry();
     registry.register(hatch("hatch", 3, 2));
-    registry.register(utils::standing("grub", GROUND).with_pool(Pool::health(25)));
+    registry.register(utils::standing("grub", utils::GROUND_DOMAIN).with_pool(Pool::health(25)));
     registry.validate();
 }
 
@@ -6598,7 +6859,7 @@ fn validate_rejects_brood_of_type_that_is_no_broodling() {
 fn validate_rejects_berthed_broodling_in_group_breeder_lacks() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::sized("hatch", GROUND, CellSize::new(3, 3))
+        utils::sized("hatch", utils::GROUND_DOMAIN, CellSize::new(3, 3))
             .with_pool(Pool::health(300))
             .with_breeder("grub", Quantity::Constant(10), 2, 0, OrphanFate::Perish),
     );
@@ -6637,7 +6898,7 @@ fn validate_rejects_berthed_broodling_wider_than_one_cell() {
     let mut registry = utils::ground_registry();
     registry.register(hatch("hatch", 3, 2));
     registry.register(
-        utils::sized("grub", GROUND, CellSize::new(2, 2))
+        utils::sized("grub", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_pool(Pool::health(25))
             .with_broodling(Attachment::new("brood", BerthStance::Still)),
     );
@@ -6690,12 +6951,17 @@ fn validate_accepts_interim_form_of_other_solidity() {
     let mut registry = utils::ground_registry();
     registry.register(
         EntityTypeDef::new("grub")
-            .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Passable,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(25))
             .with_morphs([morph_through("egg", "worker")]),
     );
-    registry.register(utils::standing("egg", GROUND).with_pool(Pool::health(100)));
-    registry.register(utils::standing("worker", GROUND).with_pool(Pool::health(30)));
+    registry.register(utils::standing("egg", utils::GROUND_DOMAIN).with_pool(Pool::health(100)));
+    registry.register(utils::standing("worker", utils::GROUND_DOMAIN).with_pool(Pool::health(30)));
     registry.validate();
 }
 
@@ -6707,7 +6973,7 @@ fn validate_accepts_interim_form_of_other_solidity() {
 fn registered_pool_writes_its_stats_with_unnamed_rates_at_zero() {
     let mut registry = utils::ground_registry();
     registry.register(
-        utils::standing("well", GROUND)
+        utils::standing("well", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_pool(Pool::builtin(
                 PoolId::ENERGY,
@@ -6749,7 +7015,7 @@ fn registered_pool_writes_its_stats_with_unnamed_rates_at_zero() {
 #[test]
 fn type_without_pool_carries_none_of_its_stats() {
     let mut registry = utils::ground_registry();
-    registry.register(utils::standing("rock", GROUND));
+    registry.register(utils::standing("rock", utils::GROUND_DOMAIN));
     let rock = registry.entity("rock").unwrap();
 
     for stat in [
@@ -6924,7 +7190,7 @@ fn register_rejects_gathering_radius_by_stat_caster_lacks() {
             FromAimTo::Caster,
         )),
     );
-    registry.register(utils::standing("recaller", GROUND).with_skills([recall]));
+    registry.register(utils::standing("recaller", utils::GROUND_DOMAIN).with_skills([recall]));
 }
 
 #[test]
@@ -6987,7 +7253,7 @@ fn validate_rejects_swap_aimed_at_unregistered_type() {
 
 /// A type that lies where it is left and is gone after `decay` ticks.
 fn remains(name: &str, decay: u32) -> EntityTypeDef {
-    utils::standing(name, GROUND)
+    utils::standing(name, utils::GROUND_DOMAIN)
         .with_tags(["remains"])
         .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(decay))
 }
@@ -6995,7 +7261,7 @@ fn remains(name: &str, decay: u32) -> EntityTypeDef {
 /// A 2x2 primary that raises the `annexes` it docks at (2, 0), standing on the
 /// site to do it.
 fn primary(annexes: [&str; 1]) -> EntityTypeDef {
-    utils::sized("keep", GROUND, CellSize::new(2, 2))
+    utils::sized("keep", utils::GROUND_DOMAIN, CellSize::new(2, 2))
         .with_pool(Pool::health(100))
         .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
         .with_builder(
@@ -7009,7 +7275,7 @@ fn primary(annexes: [&str; 1]) -> EntityTypeDef {
 
 /// An annex of `size` that rises, endures alone and is bound to its owner.
 fn annex(name: &str, size: CellSize) -> EntityTypeDef {
-    utils::sized(name, GROUND, size)
+    utils::sized(name, utils::GROUND_DOMAIN, size)
         .with_pool(Pool::health(10))
         .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
         .with_annex(standing_annex(), AnnexClaim::Bound)
@@ -7070,7 +7336,7 @@ fn haste_buff(registry: &mut ContentRegistry) -> PlayerBuffId {
 /// A 3×3 breeder of `grub`s with a brood group of `slots` seats and a limit of
 /// `limit`.
 fn hatch(name: &str, slots: usize, limit: usize) -> EntityTypeDef {
-    utils::sized(name, GROUND, CellSize::new(3, 3))
+    utils::sized(name, utils::GROUND_DOMAIN, CellSize::new(3, 3))
         .with_pool(Pool::health(300))
         .with_berths([(
             "brood",
@@ -7089,7 +7355,12 @@ fn hatch(name: &str, slots: usize, limit: usize) -> EntityTypeDef {
 /// A passable one-cell broodling that sits still in the `brood` group.
 fn grub(name: &str) -> EntityTypeDef {
     EntityTypeDef::new(name)
-        .with_location(GROUND, CellSize::ONE, Solidity::Passable)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::ONE,
+            Solidity::Passable,
+            utils::GROUND,
+        )
         .with_pool(Pool::health(25))
         .with_broodling(Attachment::new("brood", BerthStance::Still))
 }
@@ -7175,7 +7446,7 @@ fn creep_field(registry: &mut ContentRegistry) -> FieldId {
     registry.register_field(
         "creep",
         FieldDef::new(
-            FieldLayer::Passable(GROUND.into()),
+            Terrains::Any,
             FieldDecay::Gradual { cycle: 4 },
             FieldVision::Dark,
             Detection::Blind,
@@ -7293,7 +7564,7 @@ fn watching(radius: Quantity, duration: Quantity) -> SkillDef {
 /// A free, instant entity skill that raises as many `skeleton`s, registered
 /// here, as the caster's `count` stat says, around itself.
 fn summoning(registry: &mut ContentRegistry, count: EntityStatId) -> SkillDef {
-    registry.register(utils::standing("skeleton", GROUND));
+    registry.register(utils::standing("skeleton", utils::GROUND_DOMAIN));
     let skeleton = registry.type_id("skeleton").expect("just registered");
     SkillDef {
         cooldown: 1,
@@ -7396,7 +7667,7 @@ fn held(capacity: u32) -> Passage {
 /// A one-cell gateway of what `joins` names with `doors`, declaring no
 /// transport stat.
 fn gateway(name: &str, joins: Joins, doors: Doors) -> EntityTypeDef {
-    utils::standing(name, GROUND).with_gateway(joins, doors)
+    utils::standing(name, utils::GROUND_DOMAIN).with_gateway(joins, doors)
 }
 
 /// A free instant skill summoning `count` of `entity_type` at any cell.
@@ -7438,7 +7709,7 @@ fn register_power(registry: &mut ContentRegistry) -> FieldId {
     registry.register_field(
         "power",
         FieldDef::new(
-            FieldLayer::Passable(GROUND.into()),
+            Terrains::Any,
             FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Blind,
@@ -7457,7 +7728,7 @@ fn powered(power: FieldId) -> FieldPlacement {
 
 /// A one-cell `recruit` that trains in ten ticks and rises in ten.
 fn rising_recruit() -> EntityTypeDef {
-    utils::standing("recruit", GROUND)
+    utils::standing("recruit", utils::GROUND_DOMAIN)
         .with_train_time(10)
         .with_rise(10, Vec::new())
 }

@@ -118,7 +118,7 @@ fn free_footprint(world: &mut World, entity: Entity) {
     let class = OccupancyClass::of(def);
     world.resource_scope(|world, mut map: Mut<Map>| {
         let location = world.get::<LocationComponent>(entity).unwrap();
-        map.displace_entity(location, &location_def, class);
+        map.displace_if_some(entity_def::grid_mark_of(location, location_def, class));
     });
 }
 

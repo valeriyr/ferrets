@@ -2,12 +2,14 @@
 
 use ferrets_content::{
     attack::{AttackDef, Delivery, Slain, Weapon},
+    domain::{DomainDef, DomainId},
     dying::{Bequest, LeftBy},
     entity_type_def::EntityTypeDef,
     location::Solidity,
     pool_def::PoolId,
     registry::ContentRegistry,
     rise::RisePool,
+    terrains::Terrains,
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
@@ -19,16 +21,31 @@ pub const GROUND: LayerId = LayerId::new(1);
 pub const WATER: LayerId = LayerId::new(2);
 pub const AIR: LayerId = LayerId::new(4);
 
-/// A fresh registry that already knows the "ground" navigation layer.
+/// The domain [`ground_registry`] declares: the ground layer over every
+/// terrain. The first domain registered.
+pub const GROUND_DOMAIN: DomainId = DomainId::new(0);
+/// A domain in [`WATER`] and one in [`AIR`], as a registry mints the second
+/// and third domains declared.
+pub const WATER_DOMAIN: DomainId = DomainId::new(1);
+pub const AIR_DOMAIN: DomainId = DomainId::new(2);
+
+/// A fresh registry that already knows the "ground" navigation layer, the
+/// "land" terrain and the [`GROUND_DOMAIN`] over it.
 pub fn ground_registry() -> ContentRegistry {
     let mut registry = ContentRegistry::default();
-    registry.register_layer("ground");
+    let ground = registry.register_layer("ground");
+    registry.register_terrain("land");
+    assert_eq!(
+        registry.register_domain("ground", DomainDef::new(ground, Terrains::Any)),
+        GROUND_DOMAIN
+    );
     registry
 }
 
-/// A one-cell solid entity occupying `occupation`, with nothing else declared.
-pub fn standing(name: &str, occupation: impl Into<LayerMask>) -> EntityTypeDef {
-    sized(name, occupation, CellSize::ONE)
+/// A one-cell solid entity in `domain`, occupying its layer, with nothing else
+/// declared.
+pub fn standing(name: &str, domain: DomainId) -> EntityTypeDef {
+    sized(name, domain, CellSize::ONE)
 }
 
 /// One bequest of `entity_type`, handed on by any death that ends a life.
@@ -36,9 +53,22 @@ pub fn leaves(entity_type: &str) -> Vec<Bequest> {
     vec![Bequest::new(entity_type, 1, LeftBy::Ordinary)]
 }
 
-/// A solid entity occupying `occupation` whose footprint spans `size`.
-pub fn sized(name: &str, occupation: impl Into<LayerMask>, size: CellSize) -> EntityTypeDef {
-    EntityTypeDef::new(name).with_location(occupation, size, Solidity::Solid)
+/// A solid entity in `domain`, occupying its layer, whose footprint spans
+/// `size`.
+pub fn sized(name: &str, domain: DomainId, size: CellSize) -> EntityTypeDef {
+    EntityTypeDef::new(name).with_location(domain, size, Solidity::Solid, domain_layer(domain))
+}
+
+/// The layer of a domain these tests declare.
+///
+/// Panics for any other domain.
+fn domain_layer(domain: DomainId) -> LayerId {
+    match domain {
+        GROUND_DOMAIN => GROUND,
+        WATER_DOMAIN => WATER,
+        AIR_DOMAIN => AIR,
+        other => panic!("the helpers declare no domain {other:?}"),
+    }
 }
 
 /// A weapon reaching `targets` that lands its hit where it stands, aimed from the

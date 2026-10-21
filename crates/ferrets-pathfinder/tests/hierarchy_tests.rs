@@ -100,8 +100,8 @@ fn blocked_border_pairs_shrink_entrance_to_remaining_run() {
     // . . . .|. . . .   y=2   kills the y=1 pair, leaving one 2-cell run at
     // . . . .|. . . .   y=3   y=2..=3 whose middle transition lands on y=3.
     let mut grid = utils::grid(8, 4);
-    grid.set_occupied(utils::GROUND, utils::nav(3, 0), true);
-    grid.set_occupied(utils::GROUND, utils::nav(4, 1), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(3, 0), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(4, 1), true);
 
     let hierarchy = utils::build_ground(&grid, 4);
 
@@ -118,7 +118,7 @@ fn blocked_border_yields_no_transitions() {
     // A full wall down the border column leaves the two clusters unconnected.
     let mut grid = utils::grid(8, 4);
     for y in 0..4 {
-        grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
     }
 
     let hierarchy = utils::build_ground(&grid, 4);
@@ -199,7 +199,7 @@ fn wall_splits_grid_into_two_regions() {
     // wall cells themselves have none.
     let mut grid = utils::grid(8, 8);
     for y in 0..8 {
-        grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
     }
 
     let hierarchy = utils::build_ground(&grid, 4);
@@ -218,8 +218,8 @@ fn corner_touching_areas_are_separate_regions() {
     // X S   y=0   S = (1,0) and G = (0,1) touch only diagonally through a
     // G X   y=1   cut corner, which movement cannot cross either.
     let mut grid = utils::grid(2, 2);
-    grid.set_occupied(utils::GROUND, utils::nav(0, 0), true);
-    grid.set_occupied(utils::GROUND, utils::nav(1, 1), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(0, 0), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(1, 1), true);
 
     let hierarchy = utils::build_ground(&grid, 4);
 
@@ -245,19 +245,33 @@ fn out_of_bounds_cell_has_no_region() {
 
 #[test]
 fn masks_have_independent_regions() {
-    // A wall on GROUND only: GROUND splits in two, AIR stays whole, and the
-    // combined mask follows the intersection of what both layers pass.
+    // A wall on GROUND only: GROUND splits in two, AIR stays whole, and a
+    // shape occupying both layers splits where either is occupied.
     let mut grid = utils::grid(8, 4);
     for y in 0..4 {
-        grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
     }
 
-    let both = MoverShape::point(utils::GROUND | utils::AIR);
+    let both = MoverShape::point(utils::land(), utils::GROUND | utils::AIR);
     let hierarchy = NavHierarchy::build(&grid, 4, &[utils::on_ground(), utils::in_air(), both]);
 
     assert_eq!(hierarchy.region_count(utils::on_ground()), 2);
     assert_eq!(hierarchy.region_count(utils::in_air()), 1);
     assert_eq!(hierarchy.region_count(both), 2);
+}
+
+#[test]
+fn terrains_have_independent_regions() {
+    // A strip of water across the middle: a land shape is split in two, a
+    // shape over every terrain on the same layer is not.
+    let strip: Vec<_> = (0..4).map(|y| utils::nav(4, y)).collect();
+    let grid = utils::grid_with_water(8, 4, &strip);
+    let wading = MoverShape::point(utils::every_terrain(), utils::GROUND);
+
+    let hierarchy = NavHierarchy::build(&grid, 4, &[utils::on_ground(), wading]);
+
+    assert_eq!(hierarchy.region_count(utils::on_ground()), 2);
+    assert_eq!(hierarchy.region_count(wading), 1);
 }
 
 //
@@ -278,7 +292,7 @@ fn wide_mover_does_not_connect_through_narrow_gap() {
     let mut grid = utils::grid(8, 8);
     for y in 0..8 {
         if y != 2 {
-            grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
         }
     }
 
@@ -303,7 +317,7 @@ fn wide_mover_connects_through_gap_it_fits() {
     let mut grid = utils::grid(8, 8);
     for y in 0..8 {
         if y != 2 && y != 3 {
-            grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
         }
     }
 
@@ -320,7 +334,7 @@ fn wide_mover_has_no_region_where_its_footprint_would_not_fit() {
     // not for a wider one, whose footprint would reach into the wall.
     let mut grid = utils::grid(8, 8);
     for y in 0..8 {
-        grid.set_occupied(utils::GROUND, utils::nav(5, y), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(5, y), true);
     }
 
     let hierarchy = utils::build_for(&grid, 4, &[utils::on_ground(), utils::square_on_ground(2)]);
@@ -349,8 +363,8 @@ fn refresh_re_derives_marked_borders() {
     let mut grid = utils::grid(8, 4);
     let mut hierarchy = utils::build_ground(&grid, 4);
 
-    grid.set_occupied(utils::GROUND, utils::nav(3, 2), true);
-    grid.set_occupied(utils::GROUND, utils::nav(4, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(3, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(4, 2), true);
     hierarchy.mark_dirty(utils::nav(3, 2));
     hierarchy.mark_dirty(utils::nav(4, 2));
     hierarchy.refresh(&grid);
@@ -372,11 +386,11 @@ fn refresh_restores_entrance_when_footprint_clears() {
     let mut grid = utils::grid(8, 4);
     let mut hierarchy = utils::build_ground(&grid, 4);
 
-    grid.set_occupied(utils::GROUND, utils::nav(4, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(4, 2), true);
     hierarchy.mark_dirty(utils::nav(4, 2));
     hierarchy.refresh(&grid);
 
-    grid.set_occupied(utils::GROUND, utils::nav(4, 2), false);
+    grid.set_occupied_by(utils::GROUND, utils::nav(4, 2), false);
     hierarchy.mark_dirty(utils::nav(4, 2));
     hierarchy.refresh(&grid);
 
@@ -395,7 +409,7 @@ fn unmarked_changes_stay_stale_until_marked() {
     let mut hierarchy = utils::build_ground(&grid, 4);
 
     for y in 0..4 {
-        grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
     }
 
     // Refresh without any mark: the hierarchy must not chase the grid.
@@ -447,7 +461,7 @@ fn refresh_re_derives_wide_transitions_from_changes_past_border() {
         vec![transition(3, 1, 4, 1)]
     );
 
-    grid.set_occupied(utils::GROUND, utils::nav(5, 1), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(5, 1), true);
     hierarchy.mark_dirty(utils::nav(5, 1));
     hierarchy.refresh(&grid);
 
@@ -475,11 +489,11 @@ fn rebuilding_from_same_grid_yields_identical_hierarchy() {
 }
 
 //
-// ─── Unknown masks ────────────────────────────────────────────────────────────
+// ─── Unserved shapes ──────────────────────────────────────────────────────────
 //
 
 #[test]
-#[should_panic(expected = "no hierarchy built for shape")]
+#[should_panic(expected = "no hierarchy built for shape on terrains 0b11 and layers 0b10 at 1x1")]
 fn querying_unserved_layer_panics() {
     let grid = utils::grid(4, 4);
     let hierarchy = utils::build_ground(&grid, 4);
@@ -488,7 +502,7 @@ fn querying_unserved_layer_panics() {
 }
 
 #[test]
-#[should_panic(expected = "no hierarchy built for shape")]
+#[should_panic(expected = "no hierarchy built for shape on terrains 0b1 and layers 0b1 at 2x2")]
 fn querying_unserved_footprint_panics() {
     // Same layer, wider footprint: a distinct abstraction, because a wide mover
     // genuinely has fewer ways through the map than a narrow one.
@@ -496,6 +510,20 @@ fn querying_unserved_footprint_panics() {
     let hierarchy = utils::build_ground(&grid, 4);
 
     hierarchy.region_of(utils::nav(0, 0), utils::square_on_ground(2));
+}
+
+#[test]
+#[should_panic(expected = "no hierarchy built for shape on terrains 0b11 and layers 0b1 at 1x1")]
+fn querying_unserved_terrains_panics() {
+    // Same layer and footprint, more terrains: a distinct abstraction, because
+    // a mover that also takes water has other ways through the map.
+    let grid = utils::grid(4, 4);
+    let hierarchy = utils::build_ground(&grid, 4);
+
+    hierarchy.region_of(
+        utils::nav(0, 0),
+        MoverShape::point(utils::every_terrain(), utils::GROUND),
+    );
 }
 
 //

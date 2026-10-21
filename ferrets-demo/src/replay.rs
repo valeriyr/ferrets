@@ -181,7 +181,7 @@ pub fn teardown_session(world: &mut World) {
     }
 
     // Despawning entities does not release the cells they occupied, so rebuild the
-    // map to clear its occupation grid for the next game. The map is the game's
+    // map to clear its occupancy grid for the next game. The map is the game's
     // own to install, so it is the game's to rebuild.
     world.insert_resource(map::build());
     // Pulses are stamped with the tick they started on, and the next game's

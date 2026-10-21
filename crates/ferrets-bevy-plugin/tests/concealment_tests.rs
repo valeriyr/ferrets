@@ -14,13 +14,14 @@ use ferrets_content::{
     concealment::Concealment,
     cost::Cost,
     detection::Detection,
+    domain::DomainId,
     entity_buffs::{EntityBuffDef, Interruption, Lasting},
     entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        Emission, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldLayer,
-        FieldSourceDef, FieldVision,
+        Emission, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldSourceDef,
+        FieldVision,
     },
     kinds::Kinds,
     location::Solidity,
@@ -38,6 +39,7 @@ use ferrets_content::{
     skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
+    terrains::Terrains,
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance},
 };
@@ -1556,8 +1558,8 @@ fn self_cast(effect: EntityCastEffect, costs: Vec<Cost>) -> SkillDef {
 }
 
 /// A one-cell walker with `health` and `sight`.
-fn walker(name: &str, occupation: impl Into<LayerMask>, health: u32, sight: u32) -> EntityTypeDef {
-    utils::walker(name, occupation)
+fn walker(name: &str, domain: DomainId, health: u32, sight: u32) -> EntityTypeDef {
+    utils::walker(name, domain)
         .with_pool(Pool::health(health))
         .with_dying(1, [])
         .with_sight_range(sight)
@@ -1584,7 +1586,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
     let mut app = utils::make_app(slots);
     // The air layer the phantom and the arbiter live on, over the same ground.
     {
-        let mut grid = NavGrid::new(32, 32);
+        let mut grid = NavGrid::new(32, 32, |_| utils::LAND);
         grid.add_layer(utils::GROUND);
         grid.add_layer(utils::AIR);
         map::install_map(
@@ -1600,13 +1602,13 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
     }
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        assert_eq!(registry.register_layer(utils::AIR_LAYER), utils::AIR);
+        utils::register_air(&mut registry);
         let air = utils::AIR;
 
         let true_sight = registry.register_field(
             "true_sight",
             FieldDef::new(
-                FieldLayer::Anywhere,
+                Terrains::Any,
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Reveals(LayerMask::EMPTY | utils::GROUND | air),
@@ -1615,7 +1617,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         let ground_sight = registry.register_field(
             "ground_sight",
             FieldDef::new(
-                FieldLayer::Anywhere,
+                Terrains::Any,
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Reveals(utils::GROUND.into()),
@@ -1624,7 +1626,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         let veil = registry.register_field(
             "veil",
             FieldDef::new(
-                FieldLayer::Anywhere,
+                Terrains::Any,
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -1831,8 +1833,8 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
             ),
         );
 
-        registry.register(walker("scout", utils::GROUND, 20, 6));
-        registry.register(walker("sniper", utils::GROUND, 30, 8).with_attack(
+        registry.register(walker("scout", utils::GROUND_DOMAIN, 20, 6));
+        registry.register(walker("sniper", utils::GROUND_DOMAIN, 30, 8).with_attack(
             utils::weapon(utils::GROUND),
             10,
             8,
@@ -1840,7 +1842,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
             2,
             1,
         ));
-        registry.register(walker("marksman", utils::GROUND, 30, 4).with_attack(
+        registry.register(walker("marksman", utils::GROUND_DOMAIN, 30, 4).with_attack(
             utils::weapon(utils::GROUND),
             10,
             10,
@@ -1848,28 +1850,40 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
             2,
             1,
         ));
-        registry.register(walker("runner", utils::GROUND, 500, 3));
+        registry.register(walker("runner", utils::GROUND_DOMAIN, 500, 3));
         registry.register(
-            walker("shade", utils::GROUND, 20, 3).with_concealment(Concealment::Concealed),
+            walker("shade", utils::GROUND_DOMAIN, 20, 3).with_concealment(Concealment::Concealed),
         );
         registry.register(
             EntityTypeDef::new("wight")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(500))
                 .with_dying(1, [])
                 .with_sight_range(3)
                 .with_concealment(Concealment::Concealed),
         );
-        registry.register(walker("phantom", air, 20, 3).with_concealment(Concealment::Concealed));
+        registry.register(
+            walker("phantom", utils::AIR_DOMAIN, 20, 3).with_concealment(Concealment::Concealed),
+        );
         // Concealed on the ground, attacked only in the air.
         registry.register(
-            walker("skimmer", utils::GROUND, 20, 3)
+            walker("skimmer", utils::GROUND_DOMAIN, 20, 3)
                 .with_targetable(air)
                 .with_concealment(Concealment::Concealed),
         );
         registry.register(
             EntityTypeDef::new("dummy")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_sight_range(3),
@@ -1878,7 +1892,12 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         // and miss the rest: the footprint rules have something to bite on.
         registry.register(
             EntityTypeDef::new("hall")
-                .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2),
@@ -1886,7 +1905,12 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         // The same body, concealed, for the detection half of the rule.
         registry.register(
             EntityTypeDef::new("crypt")
-                .with_location(utils::GROUND, CellSize::new(3, 3), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
@@ -1894,7 +1918,12 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("tower")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
@@ -1916,7 +1945,12 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("ground_eye")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(8)
@@ -1928,15 +1962,15 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                     Emission::Nothing,
                 )]),
         );
-        registry.register(walker("arbiter", air, 100, 6).with_field_sources([
-            FieldSourceDef::new(
+        registry.register(
+            walker("arbiter", utils::AIR_DOMAIN, 100, 6).with_field_sources([FieldSourceDef::new(
                 veil,
                 3,
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Nothing,
-            ),
-        ]));
+            )]),
+        );
         let veiled = || {
             FieldEffect::new(
                 veil,
@@ -1949,7 +1983,12 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         };
         registry.register(
             EntityTypeDef::new("nest")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "1.5")], 1))])
@@ -1963,14 +2002,19 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("nestling")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Passable,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(5))
                 .with_dying(1, [])
                 .with_broodling(Attachment::new("brood", BerthStance::Still))
                 .with_field_effects([veiled()]),
         );
         registry.register(
-            walker("zealot", utils::GROUND, 60, 6)
+            walker("zealot", utils::GROUND_DOMAIN, 60, 6)
                 .with_field_effects([veiled()])
                 .with_morphs([MorphTransition::new(
                     "sentinel",
@@ -1984,12 +2028,19 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                     [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                 )]),
         );
-        registry.register(walker("sentinel", utils::GROUND, 60, 6).with_field_effects([veiled()]));
+        registry.register(
+            walker("sentinel", utils::GROUND_DOMAIN, 60, 6).with_field_effects([veiled()]),
+        );
         // Two wide bodies under the veil, one asking for every cell covered
         // and one for any, so the coverage rule has an edge to stand on.
         registry.register(
             EntityTypeDef::new("phalanx")
-                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
@@ -2004,14 +2055,19 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("rabble")
-                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_sight_range(2)
                 .with_field_effects([veiled()]),
         );
         registry.register(
-            walker("mage", utils::GROUND, 100, 6)
+            walker("mage", utils::GROUND_DOMAIN, 100, 6)
                 .with_attack(utils::weapon(utils::GROUND), 5, 1, 5, 4, 1)
                 .with_pool(Pool::energy(100))
                 .with_skills([
@@ -2026,7 +2082,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 ]),
         );
         registry.register(
-            walker("lurker", utils::GROUND, 20, 6)
+            walker("lurker", utils::GROUND_DOMAIN, 20, 6)
                 .with_pool(Pool::energy(100))
                 .with_skills([cloak, ambush, hire]),
         );
@@ -2034,11 +2090,11 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         // a reach of three cells against a notice of one, so a fight it did
         // not pick for itself is one an order alone starts.
         registry.register(
-            walker("spearman", utils::GROUND, 100, 6)
+            walker("spearman", utils::GROUND_DOMAIN, 100, 6)
                 .with_attack(utils::weapon(utils::GROUND), 5, 3, 1, 20, 10)
                 .with_skills([ambush]),
         );
-        registry.register(walker("mortar", utils::GROUND, 40, 8).with_attack(
+        registry.register(walker("mortar", utils::GROUND_DOMAIN, 40, 8).with_attack(
             AttackDef::new(Weapon::new(
                 utils::GROUND,
                 Delivery::Projectile(shell),
@@ -2057,11 +2113,11 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
             1,
         ));
         registry.register(
-            walker("sprinter", utils::GROUND, 100, 6)
+            walker("sprinter", utils::GROUND_DOMAIN, 100, 6)
                 .with_stat(EntityStatId::SPEED, FixedU64::from_num(1.5)),
         );
         registry.register(
-            walker("lobber", utils::GROUND, 100, 6)
+            walker("lobber", utils::GROUND_DOMAIN, 100, 6)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(90))
                 .with_stat(EntityStatId::ATTACK_ARC, FixedU64::from_num(360))
                 .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5))
@@ -2073,7 +2129,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_skills([ambush]),
         );
         registry.register(
-            walker("gunner", utils::GROUND, 100, 6)
+            walker("gunner", utils::GROUND_DOMAIN, 100, 6)
                 .with_stat(EntityStatId::AIM_RATE, FixedU64::from_num(3))
                 .with_stat(EntityStatId::ATTACK_ARC, FixedU64::from_num(60))
                 .with_stat(EntityStatId::DAMAGE, FixedU64::from_num(5))

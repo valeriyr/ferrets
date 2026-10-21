@@ -12,7 +12,7 @@ use ferrets_content::{
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldDecay, FieldDef, FieldLayer, FieldPlacement, FieldVision},
+    field::{FieldAction, FieldDecay, FieldDef, FieldPlacement, FieldVision},
     gateway::{Doors, Joins},
     kinds::Kinds,
     landing::Landing,
@@ -28,6 +28,7 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
     skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, SummonArrival, SummonAt},
+    terrains::Terrains,
     transport::{PassengerConduct, PassengerFate},
     tunnel::{OtherEndLost, Passage, TunnelDef},
     work::{Attachment, BerthStance},
@@ -1937,13 +1938,13 @@ fn register(app: &mut App) {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::from_num(SLOW_PERIOD)),
     );
     registry.register(leaving(entering(
-        utils::walker("mole", utils::GROUND)
+        utils::walker("mole", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_dying(1, [])
             .with_gateway(Joins::Network(warren), Doors::Both),
     )));
     registry.register(leaving(
-        utils::walker("pocket_burrow", utils::GROUND)
+        utils::walker("pocket_burrow", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))
             .with_dying(1, [])
             .with_tags(["portable"])
@@ -1951,7 +1952,7 @@ fn register(app: &mut App) {
             .with_gateway(Joins::Network(warren), Doors::Exit),
     ));
     registry.register(
-        utils::walker("wagon", utils::GROUND)
+        utils::walker("wagon", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(60))
             .with_dying(1, [])
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
@@ -1993,7 +1994,12 @@ fn register(app: &mut App) {
     );
     registry.register(
         EntityTypeDef::new("corpse")
-            .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Passable,
+                utils::GROUND,
+            )
             .with_tags(["remains"])
             .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
     );
@@ -2060,7 +2066,7 @@ fn register(app: &mut App) {
     );
 
     registry.register(
-        utils::walker("beast", utils::GROUND)
+        utils::walker("beast", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_dying(1, utils::leaves("corpse"))
             .with_tags(["beast"])
@@ -2068,7 +2074,7 @@ fn register(app: &mut App) {
             .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
     );
     registry.register(
-        utils::walker("brood_beast", utils::GROUND)
+        utils::walker("brood_beast", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_dying(1, [])
             .with_tags(["beast"])
@@ -2078,7 +2084,12 @@ fn register(app: &mut App) {
     );
     registry.register(
         EntityTypeDef::new("larva")
-            .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Passable,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(5))
             .with_dying(1, [])
             .with_broodling(Attachment::new("brood", BerthStance::Still)),
@@ -2086,14 +2097,14 @@ fn register(app: &mut App) {
     let creep = registry.register_field(
         "creep",
         FieldDef::new(
-            FieldLayer::Passable(utils::GROUND.into()),
+            Terrains::Only(utils::LAND.into()),
             FieldDecay::Never,
             FieldVision::Dark,
             Detection::Blind,
         ),
     );
     registry.register(
-        utils::walker("sapper", utils::GROUND)
+        utils::walker("sapper", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_dying(1, [])
             .with_tags(["beast"])
@@ -2101,7 +2112,7 @@ fn register(app: &mut App) {
             .with_field_placement([FieldPlacement::Forbids { field: creep }]),
     );
     registry.register(
-        utils::walker("critter", utils::GROUND)
+        utils::walker("critter", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(20))
             .with_dying(1, [])
             .with_tags(["critter"])

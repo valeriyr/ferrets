@@ -215,7 +215,7 @@ fn send_to_entity_does_not_attack_ally() {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
-            utils::walker("soldier", utils::GROUND)
+            utils::walker("soldier", utils::GROUND_DOMAIN)
                 .with_sight_range(8)
                 .with_pool(Pool::health(30))
                 .with_dying(2, [])

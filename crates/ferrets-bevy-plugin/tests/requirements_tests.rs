@@ -486,7 +486,12 @@ fn app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("mover")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_movement(
                     utils::fixed("0.5"),
                     utils::fixed("0.5"),
@@ -501,7 +506,12 @@ fn app() -> App {
         for name in ["hut", "tower"] {
             registry.register(
                 EntityTypeDef::new(name)
-                    .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                    .with_location(
+                        utils::GROUND_DOMAIN,
+                        CellSize::ONE,
+                        Solidity::Solid,
+                        utils::GROUND,
+                    )
                     .with_pool(Pool::health(100))
                     .with_dying(2, []),
             );

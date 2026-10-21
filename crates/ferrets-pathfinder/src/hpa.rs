@@ -256,7 +256,7 @@ pub fn detour(
             // cells.
             let claimed = if CellRect::new(cell, shape.size)
                 .cells()
-                .any(|covered| grid.is_claimed_by(shape.mask, covered))
+                .any(|covered| grid.is_claimed_by(shape.layers, covered))
             {
                 CLAIM_PENALTY
             } else {

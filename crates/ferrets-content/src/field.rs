@@ -2,11 +2,11 @@
 //! sources that feed them, the placement rules that read them, and the effects
 //! they have on whatever stands inside or outside.
 
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_pathfinder::{layer_mask::LayerMask, terrain_mask::TerrainMask};
 
 use crate::{
     affiliation::Affiliation, detection::Detection, entity_effect::EntityEffect,
-    requirement::Requirement,
+    requirement::Requirement, terrains::Terrains,
 };
 
 /// A handle to a registered field kind, assigned in registration order.
@@ -53,20 +53,11 @@ pub enum FieldVision {
     Watched,
 }
 
-/// Where a field may lie.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldLayer {
-    /// Any cell of the map.
-    Anywhere,
-    /// The cells passable on every one of these layers.
-    Passable(LayerMask),
-}
-
 /// One kind of field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldDef {
-    /// Where its cells may lie.
-    layer: FieldLayer,
+    /// The terrains its cells may lie on.
+    terrains: Terrains,
     /// What happens to covered cells no source sustains.
     decay: FieldDecay,
     /// What covering a cell does for the sight of the players covering it.
@@ -79,20 +70,20 @@ pub struct FieldDef {
 impl FieldDef {
     /// Creates a new `FieldDef` with the given data.
     ///
-    /// Panics if a gradual decay has a zero cycle, if the field lies on cells
-    /// passable on no layer at all, or if the detection reveals no layer at all.
+    /// Panics if the field lies on no terrain at all, if a gradual decay has a
+    /// zero cycle, or if the detection reveals no layer at all.
     pub fn new(
-        layer: FieldLayer,
+        terrains: Terrains,
         decay: FieldDecay,
         vision: FieldVision,
         detection: Detection,
     ) -> Self {
-        match layer {
-            FieldLayer::Passable(layers) => assert!(
-                layers != LayerMask::EMPTY,
-                "a field passable on no layer lies anywhere; declare it so"
+        match terrains {
+            Terrains::Only(terrains) => assert!(
+                terrains != TerrainMask::EMPTY,
+                "a field on no terrain lies nowhere; declare it on \"any\""
             ),
-            FieldLayer::Anywhere => {}
+            Terrains::Any => {}
         }
         match decay {
             FieldDecay::Gradual { cycle } => {
@@ -108,17 +99,17 @@ impl FieldDef {
             Detection::Blind => {}
         }
         Self {
-            layer,
+            terrains,
             decay,
             vision,
             detection,
         }
     }
 
-    /// Where its cells may lie.
+    /// The terrains its cells may lie on.
     #[inline]
-    pub fn layer(&self) -> FieldLayer {
-        self.layer
+    pub fn terrains(&self) -> Terrains {
+        self.terrains
     }
 
     /// What happens to covered cells no source sustains.
@@ -159,7 +150,7 @@ pub enum FieldGrowth {
 /// What an act does to a field around its performer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldAction {
-    /// Covers the cells within radius that pass the field's layer.
+    /// Covers the cells within radius on the field's terrains.
     Cover,
     /// Clears the cells within radius that no source sustains.
     Clear,

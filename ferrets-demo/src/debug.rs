@@ -285,7 +285,7 @@ pub fn draw_grid(
         for y in 0..map.height() {
             for x in 0..map.width() {
                 let cell = CellPos::new(x, y);
-                if nav_grid.is_occupied(layer, cell)
+                if nav_grid.is_occupied_by(layer, cell)
                     && (reveal.reveals() || render::sees(&session, &watch, &fog, x, y))
                     && !hidden_footprints
                         .iter()

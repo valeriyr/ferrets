@@ -290,7 +290,12 @@ fn placement_starts_pool_under_passives_it_wakes() {
         );
         registry.register(
             EntityTypeDef::new("outpost")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_passives([rallied]),
         );
@@ -365,7 +370,7 @@ fn install_army(app: &mut App) {
 /// A map placing types the orders roster defines: an owned base and a neutral
 /// resource source with an overridden amount.
 fn scene_map() -> MapData {
-    let mut data = MapData::new("mission", Projection::Isometric, 16, 16);
+    let mut data = MapData::new("mission", Projection::Isometric, 16, 16, "land");
     data.add_player_slot((2, 2));
     data.add_placement(Placement {
         type_name: "barracks".to_string(),

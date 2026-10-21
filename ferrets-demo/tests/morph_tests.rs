@@ -51,11 +51,11 @@ fn taking_off_swaps_occupied_layer() {
         for dx in 0..2 {
             let cell = CellPos::new(CLEAR.0 + dx, CLEAR.1 + dy);
             assert!(
-                live.nav_grid().is_passable(ground, cell),
+                !live.nav_grid().is_occupied_by(ground, cell),
                 "the airborne form still holds the ground at {cell:?}"
             );
             assert!(
-                !live.nav_grid().is_passable(air, cell),
+                live.nav_grid().is_occupied_by(air, cell),
                 "the airborne form does not hold the air at {cell:?}"
             );
         }
@@ -96,10 +96,10 @@ fn landing_is_refused_when_ground_is_taken() {
     let world = app.world();
     let air = world.resource::<ContentRegistry>().layer(map::AIR).unwrap();
     assert!(
-        !world
+        world
             .resource::<Map>()
             .nav_grid()
-            .is_passable(air, CellPos::new(CLEAR.0, CLEAR.1)),
+            .is_occupied_by(air, CellPos::new(CLEAR.0, CLEAR.1)),
         "a refused landing left the unit off the map"
     );
 }
@@ -1030,7 +1030,7 @@ fn melee_breaks_off_when_its_target_takes_flight() {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
-/// Clear grass well away from anything the map places.
+/// Clear land well away from anything the map places.
 const CLEAR: (u32, u32) = (16, 12);
 
 /// Sends a Morph command for the entity through the executor — the same wire

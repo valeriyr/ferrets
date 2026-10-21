@@ -64,7 +64,7 @@ pub fn separations(bodies: &[Body]) -> Vec<FixedVec2> {
     let mut pushes = vec![FixedVec2::ZERO; bodies.len()];
     for first in 0..bodies.len() {
         for second in (first + 1)..bodies.len() {
-            if bodies[first].mask & bodies[second].mask == LayerMask::EMPTY {
+            if bodies[first].layers & bodies[second].layers == LayerMask::EMPTY {
                 continue;
             }
             // Geometry runs between the circles' centers, which sit half a

@@ -11,8 +11,8 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldLayer,
-        FieldSourceDef, FieldVision,
+        Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef,
+        FieldVision,
     },
     location::Solidity,
     morph::{
@@ -26,6 +26,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, Spot},
     stand::StandingAct,
+    terrains::Terrains,
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
@@ -179,7 +180,12 @@ fn blight(app: &App) -> FieldId {
 
 fn building(name: &str, side: u32, rise_time: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
-        .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::new(side, side),
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_pool(Pool::health(100))
         .with_dying(1, [])
         .with_rise(rise_time, utils::rise_initial_pools(&[PoolId::HEALTH]))
@@ -197,7 +203,7 @@ fn stand_app() -> App {
         let blight = registry.register_field(
             "blight",
             FieldDef::new(
-                FieldLayer::Passable(utils::GROUND.into()),
+                Terrains::Only(utils::LAND.into()),
                 FieldDecay::Never,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -262,11 +268,11 @@ fn stand_app() -> App {
                 requires: Vec::new(),
             },
         );
-        registry.register(utils::walker("overlord", utils::GROUND).with_skills([spew]));
+        registry.register(utils::walker("overlord", utils::GROUND_DOMAIN).with_skills([spew]));
         // Sight enough to see where it builds: the build command is gated on
         // the fog.
         registry.register(
-            utils::walker("drone", utils::GROUND)
+            utils::walker("drone", utils::GROUND_DOMAIN)
                 .with_sight_range(4)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
                 .with_builder(

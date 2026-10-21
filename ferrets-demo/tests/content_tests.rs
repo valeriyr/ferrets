@@ -17,9 +17,7 @@ use ferrets_content::{
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{
-        FieldAction, FieldCoverage, FieldDef, FieldLayer, FieldPlacement, FieldSide, FieldVision,
-    },
+    field::{FieldAction, FieldCoverage, FieldDef, FieldPlacement, FieldSide, FieldVision},
     kinds::{Kind, Kinds},
     location::Solidity,
     morph::{
@@ -38,16 +36,19 @@ use ferrets_content::{
     skills::{
         EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, Recipient, SkillCaster, Whom,
     },
+    splash::{SplashDef, SplashShape},
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp},
     targeting,
+    terrains::Terrains,
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_demo::{content::CONTENT, map};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
+use ferrets_pathfinder::mover_shape::MoverShape;
 use ferrets_script::{content, engine::lua::LuaEngine};
-use ferrets_simulation::map::Map;
+use ferrets_simulation::{entity_def, map::Map};
 
 #[test]
 fn content_loads_and_validates() {
@@ -126,12 +127,16 @@ fn content_loads_and_validates() {
     assert!(registry.field("creep").is_some() && registry.field("power").is_some());
     assert!(registry.research("siege_tech").is_some());
     assert!(registry.skill("scanner_sweep").is_some());
-    assert!(
-        registry.has_layer(map::GROUND)
-            && registry.has_layer(map::WATER)
-            && registry.has_layer(map::AIR)
-    );
-    assert!(registry.has_terrain("grass") && registry.has_terrain("water"));
+    assert!(registry.has_layer(map::GROUND) && registry.has_layer(map::AIR));
+    for terrain in ["land", "shallow_water", "deep_water"] {
+        assert!(registry.has_terrain(terrain), "missing terrain '{terrain}'");
+    }
+    for domain in ["ground", "land", "amphibious", "naval", "deep_naval", "air"] {
+        assert!(
+            registry.domain(domain).is_some(),
+            "missing domain '{domain}'"
+        );
+    }
 }
 
 #[test]
@@ -861,22 +866,49 @@ fn grunt_and_shaman_carry_their_abilities() {
 }
 
 #[test]
-fn map_builds_against_content_with_lake_blocking_ground() {
+fn map_builds_against_content_with_lake_of_deep_water_in_shallow_rim() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
-    let data = map::data();
-    let live = Map::from_data(&data, &registry);
+    let live = Map::from_data(&map::data(), &registry);
+    let terrain = |x, y| live.nav_grid().terrain(CellPos::new(x, y));
 
-    let ground = registry.layer(map::GROUND).unwrap();
-    let water = registry.layer(map::WATER).unwrap();
+    assert_eq!(
+        terrain(48, 48),
+        registry.terrain("deep_water"),
+        "the lake's middle"
+    );
+    // (52, 40) lies 4 across and 8 up from the middle, off the rivers:
+    // 4² + 8² = 80, past the deep water's 49 and within the lake's 81.
+    assert_eq!(
+        terrain(52, 40),
+        registry.terrain("shallow_water"),
+        "the lake's rim"
+    );
+    // One across the vertical arm's axis, a bank the river makes shallow;
+    // 1² + 3² = 10 from the lake's middle, within its deep water's 49: the
+    // deeper wins.
+    assert_eq!(terrain(47, 45), registry.terrain("deep_water"));
+    assert_eq!(terrain(1, 1), registry.terrain("land"), "a corner");
+}
 
-    // The lake center floats ships and blocks walkers; a corner is the inverse.
-    let lake = CellPos::new(48, 48);
-    assert!(!live.nav_grid().is_passable(ground, lake));
-    assert!(live.nav_grid().is_passable(water, lake));
+#[test]
+fn soldiers_wade_rim_and_ships_keep_off_land() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let live = Map::from_data(&map::data(), &registry);
+    let fits = |name: &str, x, y| {
+        live.nav_grid()
+            .fits(CellPos::new(x, y), shape_of(&registry, name))
+    };
+    let (deep, rim, land) = ((48, 48), (52, 40), (1, 1));
 
-    let corner = CellPos::new(1, 1);
-    assert!(live.nav_grid().is_passable(ground, corner));
-    assert!(!live.nav_grid().is_passable(water, corner));
+    assert!(fits("grunt", rim.0, rim.1) && fits("grunt", land.0, land.1));
+    assert!(!fits("grunt", deep.0, deep.1), "a soldier does not swim");
+    assert!(fits("naga", deep.0, deep.1) && fits("naga", land.0, land.1));
+    assert!(fits("ship", deep.0, deep.1) && fits("ship", rim.0, rim.1));
+    assert!(!fits("ship", land.0, land.1), "a ship keeps off land");
+    assert!(
+        !fits("farm", rim.0, rim.1),
+        "nothing is built in the shallows"
+    );
 }
 
 //
@@ -884,7 +916,7 @@ fn map_builds_against_content_with_lake_blocking_ground() {
 //
 
 #[test]
-fn fliers_live_on_air_alone() {
+fn fliers_are_in_air_and_occupy_it_alone() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
@@ -895,42 +927,94 @@ fn fliers_live_on_air_alone() {
         "barracks_aloft",
         "factory_aloft",
     ] {
-        let occupation = registry
+        let location = registry
             .entity(flier)
-            .and_then(|def| def.location.as_ref())
-            .map(|location| location.occupation())
+            .and_then(|def| def.location)
             .expect("the flier has a location");
+        let occupied = location.occupies();
 
+        assert_eq!(registry.domain_def(location.domain()).layer(), air);
         assert!(
-            occupation == *air,
-            "'{flier}' occupies {occupation} rather than the air layer alone, so surface \
+            occupied == *air,
+            "'{flier}' occupies {occupied} rather than the air layer alone, so surface \
              occupancy would block it"
         );
     }
 }
 
 #[test]
-fn air_layer_is_open_where_ground_and_water_are_blocked() {
+fn only_naga_crosses_river_off_its_fords() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
-    let data = map::data();
-    let live = Map::from_data(&data, &registry);
+    let live = Map::from_data(&map::data(), &registry);
+    let fits = |name: &str, x, y| {
+        live.nav_grid()
+            .fits(CellPos::new(x, y), shape_of(&registry, name))
+    };
+    // The vertical arm at row 30: banks at columns 47 and 49 either side of
+    // the deep water on the axis, 48; row 19 is on the near ford.
+    let (bank, deep, ford) = ((47, 30), (48, 30), (48, 19));
 
-    let ground = registry.layer(map::GROUND).unwrap();
-    let water = registry.layer(map::WATER).unwrap();
-    let air = registry.layer(map::AIR).unwrap();
+    assert!(fits("grunt", bank.0, bank.1), "a soldier wades the bank");
+    assert!(fits("grunt", ford.0, ford.1), "the ford is land");
 
-    // Open water blocks walkers, dry land blocks ships, and the air is open over
-    // both: this is the whole of what the layer buys.
-    for cell in [CellPos::new(48, 48), CellPos::new(1, 1)] {
+    // Of everything that moves in the ground layer over land, the naga alone
+    // swims the deep water on the axis.
+    let ground = registry
+        .layer(map::GROUND)
+        .expect("ground layer is registered");
+    let land = registry.terrain("land").expect("land is registered");
+    for def in registry.entities().filter(|def| def.can_move()) {
+        let domain = registry.domain_def(
+            def.location
+                .expect("a type that moves has a location")
+                .domain(),
+        );
+        if domain.layer() == ground && domain.terrains().mask(&registry).meets(land.into()) {
+            assert_eq!(
+                fits(&def.name, deep.0, deep.1),
+                def.name == "naga",
+                "'{}' over the river's deep water",
+                def.name
+            );
+        }
+    }
+}
+
+#[test]
+fn river_channel_runs_into_lake_deep_water() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let live = Map::from_data(&map::data(), &registry);
+    let deep = registry.terrain("deep_water");
+
+    // Down the vertical arm's axis from the north edge to the lake's middle,
+    // past the near ford at rows 17..=21: every cell is deep water, the
+    // lake's shallow rim included: rows 39 and 40 on the axis, 9 and 8 cells
+    // out, whose 81 and 64 lie past the deep water's 49.
+    for y in (0..17).chain(22..=48) {
+        assert_eq!(
+            live.nav_grid().terrain(CellPos::new(48, y)),
+            deep,
+            "(48, {y}) breaks the channel"
+        );
+    }
+}
+
+#[test]
+fn fliers_are_over_land_and_water_alike() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let live = Map::from_data(&map::data(), &registry);
+    let zeppelin = shape_of(&registry, "zeppelin");
+
+    // Deep water refuses walkers, land refuses ships, and the air domain is
+    // over both: this is the whole of what the air buys.
+    for cell in [CellPos::new(47, 47), CellPos::new(1, 1)] {
         assert!(
-            live.nav_grid().is_passable(air, cell),
-            "air is blocked at ({}, {})",
+            live.nav_grid().fits(cell, zeppelin),
+            "the zeppelin is refused at ({}, {})",
             cell.x,
             cell.y
         );
     }
-    assert!(!live.nav_grid().is_passable(ground, CellPos::new(48, 48)));
-    assert!(!live.nav_grid().is_passable(water, CellPos::new(1, 1)));
 }
 
 #[test]
@@ -946,12 +1030,42 @@ fn only_tall_fortress_occupies_air() {
         .filter(|def| !def.can_move())
         .filter(|def| {
             def.location
-                .is_some_and(|location| location.occupation() & air != 0)
+                .is_some_and(|location| location.occupies() & air != 0)
         })
         .map(|def| def.name.as_str())
         .collect();
 
     assert_eq!(tall, ["sea_fortress"]);
+}
+
+#[test]
+fn missile_rack_bursts_in_air_sparing_its_side() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+    let rack = registry
+        .turret("missile_rack")
+        .expect("the rack is defined");
+
+    assert_eq!(
+        registry.turret_def(rack).weapon().splash(),
+        Some(&SplashDef::new(
+            SplashShape::Circular,
+            vec![(1, FixedU64::lit("0.5"))],
+            air,
+            false
+        ))
+    );
+    // What the burst finds in the air: a flier, a grounded gryphon and the
+    // towers tall enough to be shot out of it, and not a soldier.
+    for name in ["zeppelin", "gryphon", "watch_tower", "guard_tower"] {
+        let def = registry.entity(name).expect("the type is defined");
+        assert!(
+            targeting::reaches(air.into(), def),
+            "'{name}' is out of the burst"
+        );
+    }
+    let grunt = registry.entity("grunt").expect("the grunt is defined");
+    assert!(!targeting::reaches(air.into(), grunt));
 }
 
 //
@@ -965,9 +1079,10 @@ fn only_melee_shells_and_flat_guns_exclude_air() {
 
     // Every weapon declares its layers; what stays deliberate per type is what
     // it leaves out. Only the melee blades and bites — the dark templar's
-    // among them — the shells, the flat guns of the wagon and the tank, and
-    // the undead's flat gun and raised blades cannot answer what flies. The
-    // swarm's spawn bites like the swarmling it is too young to be.
+    // among them — the shells, the flat guns of the wagon and the tank, the
+    // naga's spear, and the undead's flat gun and raised blades cannot answer
+    // what flies. The swarm's spawn bites like the swarmling it is too young
+    // to be.
     let grounded: Vec<&str> = registry
         .entities()
         .filter(|def| def.can_attack())
@@ -986,6 +1101,7 @@ fn only_melee_shells_and_flat_guns_exclude_air() {
             "hatchling",
             "huntress",
             "mortar",
+            "naga",
             "necromancer",
             "nerubian_tower",
             "ravager",
@@ -1101,9 +1217,8 @@ fn mortar_is_mended_not_healed_and_leaves_no_body() {
 fn narrowed_weapons_still_reach_lake_boss() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
 
-    // The boss and its fleet live on the water layer, so a weapon narrowed with a
-    // whitelist of ground and air would silently stop being able to fight them.
-    // This is the regression that made "narrow by exclusion" the rule.
+    // The boss and its fleet are in the ground layer, as everything on the
+    // surface is, so a weapon narrowed to the ground still fights them.
     for attacker in ["grunt", "mortar"] {
         let attacker = registry.entity(attacker).expect("attacker is registered");
         for victim in ["ship", "sea_fortress"] {
@@ -1158,14 +1273,12 @@ fn watch_tower_stands_on_ground_and_answers_to_anti_air() {
     let air = registry.layer(map::AIR).unwrap();
 
     let tower = registry.entity("watch_tower").expect("tower is registered");
-    let occupation = tower
-        .location
-        .map(|location| location.occupation())
-        .expect("the tower has a location");
+    let occupied = tower.location.expect("the tower has a location").occupies();
 
     // It holds the ground alone, so fliers pass over it...
-    assert_eq!(occupation, *ground);
-    // ...yet it is answerable in the air, which occupation could not have said.
+    assert_eq!(occupied, *ground);
+    // ...yet it is answerable in the air, which what it occupies could not
+    // have said.
     assert_eq!(targeting::targetable(tower), ground | air);
 }
 
@@ -1200,34 +1313,25 @@ fn watch_tower_watches_and_guard_tower_fights() {
 }
 
 #[test]
-fn boss_placements_sit_on_water() {
+fn boss_placements_stand_on_water_their_domains_take() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let data = map::data();
     let live = Map::from_data(&data, &registry);
-    let water = registry.layer(map::WATER).unwrap();
 
     for placement in data
         .placements()
         .iter()
         .filter(|p| p.owner == Some(map::BOSS))
     {
-        let size = registry
-            .entity(&placement.type_name)
-            .and_then(|def| def.location.as_ref())
-            .map(|location| location.size())
-            .expect("boss placement type has a location");
-        for dy in 0..size.height {
-            for dx in 0..size.width {
-                let cell = CellPos::new(placement.cell.0 + dx, placement.cell.1 + dy);
-                assert!(
-                    live.nav_grid().is_passable(water, cell),
-                    "boss '{}' cell ({}, {}) is not open water",
-                    placement.type_name,
-                    cell.x,
-                    cell.y
-                );
-            }
-        }
+        let anchor = CellPos::new(placement.cell.0, placement.cell.1);
+        assert!(
+            live.nav_grid()
+                .fits(anchor, shape_of(&registry, &placement.type_name)),
+            "boss '{}' at ({}, {}) is off the water its domain takes",
+            placement.type_name,
+            anchor.x,
+            anchor.y
+        );
     }
 }
 
@@ -1792,7 +1896,7 @@ fn true_sight_is_dark_and_reveals_ground_and_air() {
     let true_sight = field_def(&registry, "true_sight");
     assert_eq!(true_sight.vision(), FieldVision::Dark);
     assert_eq!(true_sight.detection(), Detection::Reveals(ground | air));
-    assert_eq!(true_sight.layer(), FieldLayer::Anywhere);
+    assert_eq!(true_sight.terrains(), Terrains::Any);
 
     // Nothing else detects: creep watches, the veil hides, the rest are dark.
     for field in ["creep", "power", "blight", "veil"] {
@@ -2245,6 +2349,15 @@ fn swarm_growths_come_out_full_two_way_changes_keep_points_and_upgrades_keep_sha
 /// A berth point from decimal strings, in cells from the footprint's anchor.
 fn berth(x: &str, y: &str) -> FixedVec2 {
     FixedVec2::new(FixedI64::lit(x), FixedI64::lit(y))
+}
+
+/// The shape the type named `name` plans with.
+fn shape_of(registry: &ContentRegistry, name: &str) -> MoverShape {
+    let location = registry
+        .entity(name)
+        .and_then(|def| def.location)
+        .unwrap_or_else(|| panic!("'{name}' has a location"));
+    entity_def::mover_shape(registry, &location)
 }
 
 /// Whether `def` refuses to stand on the named field.

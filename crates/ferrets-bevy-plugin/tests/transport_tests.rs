@@ -5,16 +5,22 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
+    affiliation::Affiliation,
     attack::Slain,
     entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
     entity_stats::EntityStatId,
+    entity_type_def::EntityTypeDef,
+    kinds::Kinds,
+    location::Solidity,
+    pool::Pool,
     registry::ContentRegistry,
     stack_rule::StackRule,
     stats::ModifierOp,
+    transport::{PassengerConduct, PassengerFate},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     beside::{Beside, Lean},
     command::{PlayerCommand, SelectMode},
@@ -30,6 +36,7 @@ use ferrets_simulation::{
     events::{EventRecord, SimulationEvent},
     game_loop::orders::Refusal,
     map::Map,
+    movement_model::MovementModel,
     order::Order,
     simulation_id::SimulationId,
     spawn::{self, Boarding, SetDown},
@@ -1206,6 +1213,81 @@ fn passenger_unloaded_toward_point_steps_out_on_its_side() {
     utils::unload(&mut app, bunker_id, Some(utils::pos(20, 10)));
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(12, 10));
+}
+
+#[test]
+fn unloaded_passenger_stands_only_on_terrain_its_domain_takes() {
+    // A raft in the middle of a pool of water, (9,9)..(11,11), its domain
+    // taking every terrain, carries a marine whose domain takes land alone.
+    // Let out where it floats, the marine stands on the nearest land: of the
+    // ring beyond the pool, the cells straight out lie nearest, and in row
+    // then column order the first is (10,8).
+    let mut app = utils::dry_orders_app(
+        MovementModel::Cell,
+        &utils::water_pool(),
+        |registry, dry| {
+            let soldier = registry
+                .entity("soldier")
+                .expect("the orders content declares a soldier")
+                .clone();
+            let mut marine =
+                utils::in_domain(soldier, dry).with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE);
+            marine.name = "marine".to_string();
+            registry.register(marine);
+            registry.register(
+                EntityTypeDef::new("raft")
+                    .with_location(
+                        utils::GROUND_DOMAIN,
+                        CellSize::ONE,
+                        Solidity::Solid,
+                        utils::GROUND,
+                    )
+                    .with_pool(Pool::health(100))
+                    .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+                    .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(3))
+                    .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+                    .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+                    .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+                    .with_transporter(
+                        Kinds::types(["marine"]),
+                        Affiliation::Own,
+                        PassengerFate::Eject,
+                        PassengerConduct::Fight,
+                    ),
+            );
+        },
+    );
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 10, 0);
+    let (marine, marine_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
+    utils::send_to(&mut app, marine_id, raft_id);
+    utils::run_until_aboard(&mut app, raft, 1, 30);
+
+    utils::unload(&mut app, raft_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::cell_of(app.world(), marine), CellPos::new(10, 8));
+}
+
+#[test]
+fn entity_set_back_beside_stands_only_on_terrain_its_domain_takes() {
+    // A landlubber, its domain taking land alone, set back beside a cell in
+    // the middle of a pool of water, (9,9)..(11,11): it stands on the nearest
+    // land, of the ring beyond the pool the cell straight out first in row
+    // then column order, (10,8).
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &utils::water_pool(), |_, _| {});
+    let (landlubber, _) = utils::create_owned(&mut app, "landlubber", 4, 4, 0);
+    spawn::hide_entity(app.world_mut(), landlubber, Inside::Nothing);
+    assert_eq!(
+        spawn::place_back_beside(
+            app.world_mut(),
+            landlubber,
+            Beside::Footprint(CellRect::new(CellPos::new(10, 10), CellSize::ONE)),
+            Lean::Nothing
+        ),
+        SetDown::Placed
+    );
+
+    assert_eq!(utils::cell_of(app.world(), landlubber), CellPos::new(10, 8));
 }
 
 #[test]

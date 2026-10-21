@@ -9,7 +9,7 @@ use ferrets_content::{
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldDecay, FieldDef, FieldLayer, FieldPlacement, FieldVision},
+    field::{FieldAction, FieldDecay, FieldDef, FieldPlacement, FieldVision},
     kinds::Kinds,
     landing::Landing,
     location::Solidity,
@@ -28,6 +28,7 @@ use ferrets_content::{
         GatherSight, Gathering, Journey, PaymentPoint, Reach, Shortfall, SkillCaster, SkillDef,
         Whom,
     },
+    terrains::Terrains,
     transport::{PassengerConduct, PassengerFate},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
@@ -914,19 +915,29 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
         registry.register_resource("gold");
         registry.register(
             EntityTypeDef::new("mine")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_resource_source("gold", DepletionPolicy::Persist),
         );
         registry.register(
             EntityTypeDef::new("hall")
-                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_tags(["hall"]),
         );
         for name in ["footman", "veteran"] {
             registry.register(
-                utils::walker(name, utils::GROUND)
+                utils::walker(name, utils::GROUND_DOMAIN)
                     .with_pool(Pool::health(20))
                     .with_dying(1, [])
                     .with_tags(["infantry"])
@@ -950,21 +961,26 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
         let creep = registry.register_field(
             "creep",
             FieldDef::new(
-                FieldLayer::Passable(utils::GROUND.into()),
+                Terrains::Only(utils::LAND.into()),
                 FieldDecay::Never,
                 FieldVision::Dark,
                 Detection::Blind,
             ),
         );
         registry.register(
-            utils::walker("sapper", utils::GROUND)
+            utils::walker("sapper", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_field_placement([FieldPlacement::Forbids { field: creep }]),
         );
         registry.register(
             EntityTypeDef::new("snail")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_movement(
                     FixedU64::from_num(0.25),
                     FixedU64::from_num(0.25),
@@ -976,11 +992,16 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
         );
         registry.register(
             EntityTypeDef::new("mole")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Underfoot,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20)),
         );
         registry.register(
-            utils::walker("wagon", utils::GROUND)
+            utils::walker("wagon", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(60))
                 .with_dying(1, [])
                 .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
@@ -1194,7 +1215,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
             },
         ));
         registry.register(
-            utils::walker("mage", utils::GROUND)
+            utils::walker("mage", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(40))
                 .with_pool(Pool::energy(200))
                 .with_sight_range(10)
@@ -1241,7 +1262,7 @@ fn register_recaller(app: &mut App) {
         },
     );
     registry.register(
-        utils::walker("recaller", utils::GROUND)
+        utils::walker("recaller", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(40))
             .with_skills([recall]),
     );

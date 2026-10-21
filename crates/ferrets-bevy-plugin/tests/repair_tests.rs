@@ -900,12 +900,17 @@ fn app() -> App {
         // Tagged and damageable, but nothing produces it, so nothing paces a repair.
         registry.register(
             EntityTypeDef::new("monolith")
-                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_tags(["building"]),
         );
         registry.register(
-            utils::walker("soldier", utils::GROUND)
+            utils::walker("soldier", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(20))
                 .with_train_time(20),
         );
@@ -913,13 +918,13 @@ fn app() -> App {
         // it — the pair that shows a mender following its work.
         registry.register_tag("flesh");
         registry.register(
-            utils::walker("casualty", utils::GROUND)
+            utils::walker("casualty", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(100))
                 .with_train_time(20)
                 .with_tags(["flesh"]),
         );
         registry.register(
-            utils::walker("orderly", utils::GROUND)
+            utils::walker("orderly", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(30))
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
@@ -956,7 +961,12 @@ fn app() -> App {
         // Raised for nothing, so a pro-rata bill would be a share of nothing.
         registry.register(
             EntityTypeDef::new("free_shed")
-                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_rise(20, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_tags(["building"]),
@@ -1003,7 +1013,7 @@ fn app() -> App {
         // Pays out of its own energy at a flat rate, works alone, and reaches two
         // cells — the field-medic shape rather than the workshop one.
         registry.register(
-            utils::walker("medic", utils::GROUND)
+            utils::walker("medic", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(30))
                 .with_pool(Pool::energy(50))
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
@@ -1039,7 +1049,12 @@ fn app() -> App {
 /// declaring how its repair time relates to that.
 fn building(name: &str, repair_ratio: Option<FixedU64>) -> EntityTypeDef {
     let def = EntityTypeDef::new(name)
-        .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::new(2, 2),
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_pool(Pool::health(100))
         .with_price([("gold", 200)])
         .with_rise(20, utils::rise_initial_pools(&[PoolId::HEALTH]))
@@ -1079,7 +1094,7 @@ fn repairer(
     patience: Option<u32>,
     cost: RepairCost,
 ) -> EntityTypeDef {
-    let def = utils::walker(name, utils::GROUND)
+    let def = utils::walker(name, utils::GROUND_DOMAIN)
         .with_pool(Pool::health(20))
         .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
         .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE);

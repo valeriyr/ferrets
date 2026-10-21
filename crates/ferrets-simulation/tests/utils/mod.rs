@@ -4,7 +4,8 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{
-    entity_type_def::EntityTypeDef, location::Solidity, pool::Pool, registry::ContentRegistry,
+    domain::DomainDef, entity_type_def::EntityTypeDef, location::Solidity, pool::Pool,
+    registry::ContentRegistry, terrains::Terrains,
 };
 use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
@@ -34,19 +35,21 @@ use ferrets_simulation::{
 const PLAYERS: usize = 1;
 
 /// A world ready to spawn simulation entities: the built-in registry with a
-/// ground layer and one `unit` type (one cell, solid, carrying `pools`), a
-/// 16-cell map, one seated human, and the stores a spawn and its stat fold
-/// read.
+/// ground layer, a land terrain, a domain over it and one `unit` type (one
+/// cell, solid, carrying `pools`), a 16-cell map of land, one seated human,
+/// and the stores a spawn and its stat fold read.
 pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
     let mut registry = ContentRegistry::default();
     let ground = registry.register_layer("ground");
+    let land = registry.register_terrain("land");
+    let domain = registry.register_domain("ground", DomainDef::new(ground, Terrains::Any));
     let unit = pools.into_iter().fold(
-        EntityTypeDef::new("unit").with_location(ground, CellSize::ONE, Solidity::Solid),
+        EntityTypeDef::new("unit").with_location(domain, CellSize::ONE, Solidity::Solid, ground),
         EntityTypeDef::with_pool,
     );
     registry.register(unit);
     registry.validate();
-    let mut nav_grid = NavGrid::new(16, 16);
+    let mut nav_grid = NavGrid::new(16, 16, |_| land);
     nav_grid.add_layer(ground);
 
     let mut world = World::new();

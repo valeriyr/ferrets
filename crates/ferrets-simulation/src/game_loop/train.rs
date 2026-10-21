@@ -137,10 +137,13 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     if train_component.progress >= train_time {
         let CellRect { origin, size } = entity_def::footprint_rect(world, entity);
 
-        let placement =
-            world
-                .resource::<Map>()
-                .find_placement_near(origin, size, &unit_location_def);
+        let content_registry = world.resource::<ContentRegistry>();
+        let placement = world.resource::<Map>().find_placement_near(
+            origin,
+            size,
+            entity_def::mover_shape(content_registry, &unit_location_def),
+            unit_location_def.solidity(),
+        );
 
         // No free cell around the trainer — hold the finished unit and retry.
         // The unit leaves the queue only once it stands: a spawn the cell

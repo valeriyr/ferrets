@@ -3,9 +3,8 @@
 mod utils;
 
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::{layer_mask::LayerMask, nav_grid::NavGrid};
+use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid, terrain_mask::TerrainMask};
 use ferrets_physics::terrain;
 
 //
@@ -18,9 +17,8 @@ fn body_fits_open_ground() {
 
     assert!(terrain::body_fits(
         &grid,
-        LayerMask::from(utils::GROUND),
+        utils::ground_shape(),
         utils::position("3", "3"),
-        CellSize::ONE,
         FixedU64::from_num(0.5),
     ));
 }
@@ -31,9 +29,8 @@ fn body_reaching_into_wall_does_not_fit() {
 
     assert!(!terrain::body_fits(
         &grid,
-        LayerMask::from(utils::GROUND),
+        utils::ground_shape(),
         utils::position("4.7", "5"),
-        CellSize::ONE,
         FixedU64::from_num(0.5),
     ));
 }
@@ -45,10 +42,22 @@ fn body_touching_wall_boundary_fits() {
 
     assert!(terrain::body_fits(
         &grid,
-        LayerMask::from(utils::GROUND),
+        utils::ground_shape(),
         utils::position("4", "5"),
-        CellSize::ONE,
         FixedU64::from_num(0.5),
+    ));
+}
+
+/// Terrain the body's shape does not take refuses it as a wall does.
+#[test]
+fn body_reaching_into_terrain_off_its_shape_does_not_fit() {
+    let grid = water_grid(&[(5, 5)]);
+
+    assert!(!terrain::body_fits(
+        &grid,
+        utils::ground_shape(),
+        utils::position("4.7", "5"),
+        FixedU64::lit("0.5"),
     ));
 }
 
@@ -67,9 +76,8 @@ fn blocked_axis_drops_and_slide_keeps_other() {
 
     let committed = terrain::slide_toward(
         &grid,
-        LayerMask::from(utils::GROUND),
+        utils::ground_shape(),
         utils::position("3.9", "4.9"),
-        CellSize::ONE,
         utils::position("4.2", "5.2"),
         FixedU64::from_num(0.5),
     );
@@ -86,14 +94,47 @@ fn step_into_wall_stays_put() {
 
     let committed = terrain::slide_toward(
         &grid,
-        LayerMask::from(utils::GROUND),
+        utils::ground_shape(),
         position,
-        CellSize::ONE,
         utils::position("4.3", "5"),
         FixedU64::from_num(0.5),
     );
 
     assert_eq!(committed, position);
+}
+
+/// The same diagonal step into a column of water: the x advance is refused
+/// as by a wall, the y advance survives.
+#[test]
+fn blocked_axis_drops_against_terrain_off_its_shape() {
+    let grid = water_grid(&[(5, 4), (5, 5), (5, 6)]);
+
+    let committed = terrain::slide_toward(
+        &grid,
+        utils::ground_shape(),
+        utils::position("3.9", "4.9"),
+        utils::position("4.2", "5.2"),
+        FixedU64::lit("0.5"),
+    );
+
+    assert_eq!(committed, utils::position("3.9", "5.2"));
+}
+
+/// A shape that takes the water too steps onto it whole.
+#[test]
+fn shape_over_water_slides_onto_it() {
+    let grid = water_grid(&[(5, 4), (5, 5), (5, 6)]);
+    let wading = MoverShape::point(TerrainMask::from(utils::LAND) | utils::WATER, utils::GROUND);
+
+    let committed = terrain::slide_toward(
+        &grid,
+        wading,
+        utils::position("3.9", "4.9"),
+        utils::position("4.2", "5.2"),
+        FixedU64::lit("0.5"),
+    );
+
+    assert_eq!(committed, utils::position("4.2", "5.2"));
 }
 
 //
@@ -140,9 +181,8 @@ fn clipped_body_walks_out_of_wall() {
     assert_eq!(
         terrain::slide_toward(
             &grid,
-            LayerMask::from(utils::GROUND),
+            utils::ground_shape(),
             utils::position("4.7", "5"),
-            CellSize::ONE,
             desired,
             FixedU64::from_num(0.5),
         ),
@@ -160,9 +200,8 @@ fn clipped_body_cannot_clip_deeper() {
     assert_eq!(
         terrain::slide_toward(
             &grid,
-            LayerMask::from(utils::GROUND),
+            utils::ground_shape(),
             utils::position("4.7", "5"),
-            CellSize::ONE,
             utils::position("4.9", "5.3"),
             FixedU64::from_num(0.5),
         ),
@@ -176,10 +215,23 @@ fn clipped_body_cannot_clip_deeper() {
 
 /// An 8×8 single-layer grid with the given cells statically walled.
 fn walled_grid(walls: &[(u32, u32)]) -> NavGrid {
-    let mut grid = NavGrid::new(8, 8);
+    let mut grid = NavGrid::new(8, 8, |_| utils::LAND);
     grid.add_layer(utils::GROUND);
     for &(x, y) in walls {
         grid.set_occupied_by(utils::GROUND, CellPos::new(x, y), true);
     }
+    grid
+}
+
+/// An 8×8 grid of land whose `water` cells are water, nothing standing on it.
+fn water_grid(water: &[(u32, u32)]) -> NavGrid {
+    let mut grid = NavGrid::new(8, 8, |cell| {
+        if water.contains(&(cell.x, cell.y)) {
+            utils::WATER
+        } else {
+            utils::LAND
+        }
+    });
+    grid.add_layer(utils::GROUND);
     grid
 }

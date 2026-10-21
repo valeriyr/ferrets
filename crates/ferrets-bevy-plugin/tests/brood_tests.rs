@@ -42,7 +42,6 @@ use ferrets_simulation::{
     statistics::Statistics,
     supply,
 };
-use utils::GROUND;
 
 //
 // ─── Breeding ──────────────────────────────────────────────────────────────────
@@ -240,8 +239,11 @@ fn seated_broodlings_hold_no_cells() {
 
     let cell = utils::cell_of(app.world(), grub);
     let map = app.world().resource::<Map>();
-    assert!(map.nav_grid().is_passable_by(LayerMask::from(GROUND), cell));
-    assert!(!map.nav_grid().is_claimed_by(LayerMask::from(GROUND), cell));
+    assert!(!map.nav_grid().is_occupied_by(utils::GROUND, cell));
+    assert!(
+        !map.nav_grid()
+            .is_claimed_by(LayerMask::from(utils::GROUND), cell)
+    );
 }
 
 #[test]
@@ -722,7 +724,10 @@ fn interim_form_holds_ground_its_own_solidity_says() {
     utils::run_ticks(&mut app, 1);
     let cell = utils::cell_of(app.world(), grub);
     let map = app.world().resource::<Map>();
-    assert!(map.nav_grid().is_statically_occupied_by(GROUND, cell));
+    assert!(
+        map.nav_grid()
+            .is_statically_occupied_by(utils::GROUND, cell)
+    );
 }
 
 #[test]
@@ -1735,11 +1740,16 @@ fn shot_following_broodling_hidden_by_same_batch_is_lost_with_it() {
             registry.register_projectile("stone", ProjectileDef::new(FixedU64::ONE, Aim::Entity));
         registry.register(
             EntityTypeDef::new("pelter")
-                .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_attack(
                     AttackDef::new(Weapon::new(
-                        GROUND,
+                        utils::GROUND,
                         Delivery::Projectile(stone),
                         None,
                         Slain::Remains,
@@ -1990,14 +2000,17 @@ fn move_targets(app: &App, entity: Entity) -> Vec<ferrets_math::fixed_uvec2::Fix
         .collect()
 }
 
-/// Frees the static occupation of the `size` cells at `origin`.
+/// Frees the static occupancy of the `size` cells at `origin`.
 fn free_cells(app: &mut App, origin: CellPos, size: CellSize) {
     let mut map = app.world_mut().resource_mut::<Map>();
     for dy in 0..size.height {
         for dx in 0..size.width {
             let cell = CellPos::new(origin.x + dx, origin.y + dy);
-            if map.nav_grid().is_statically_occupied_by(GROUND, cell) {
-                map.set_static_occupied(GROUND, cell, false);
+            if map
+                .nav_grid()
+                .is_statically_occupied_by(utils::GROUND, cell)
+            {
+                map.set_static_occupied(utils::GROUND, cell, false);
             }
         }
     }

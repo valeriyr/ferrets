@@ -20,7 +20,7 @@ use crate::{
     session::player_id::PlayerId,
 };
 use ferrets_content::{
-    field::{Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldLayer},
+    field::{Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId},
     registry::ContentRegistry,
 };
 
@@ -216,8 +216,8 @@ pub fn apply_action_around(
     }
 }
 
-/// The cells within `reach` of `footprint` connected to it through cells whose
-/// terrain passes the field's layer, in the order a breadth-first walk from the
+/// The cells within `reach` of `footprint` connected to it through cells on
+/// the field's terrains, in the order a breadth-first walk from the
 /// footprint visits them. The footprint's own cells are included whatever
 /// their terrain.
 fn flood(map: &Map, def: &FieldDef, footprint: CellRect, reach: u32) -> Vec<CellPos> {
@@ -258,10 +258,10 @@ fn flood(map: &Map, def: &FieldDef, footprint: CellRect, reach: u32) -> Vec<Cell
                 continue;
             }
             visited[index(next)] = true;
-            let lies_there = match def.layer() {
-                FieldLayer::Anywhere => true,
-                FieldLayer::Passable(layers) => map.nav_grid().is_terrain_passable_by(layers, next),
-            };
+            let lies_there = map
+                .nav_grid()
+                .terrain(next)
+                .is_some_and(|terrain| def.terrains().admits(terrain));
             if !lies_there {
                 continue;
             }

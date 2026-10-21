@@ -21,7 +21,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
-        FieldId, FieldLayer, FieldPlacement, FieldSourceDef, FieldVision,
+        FieldId, FieldPlacement, FieldSourceDef, FieldVision,
     },
     kinds::Kinds,
     location::Solidity,
@@ -42,13 +42,13 @@ use ferrets_content::{
     skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
+    terrains::Terrains,
     transport::{PassengerConduct, PassengerFate},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_simulation::{
     checksum,
     command::PlayerCommand,
@@ -203,7 +203,6 @@ fn placement_under_lifted_field_effect_keeps_its_share() {
     let Fields { creep, .. } = fields(&app);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        registry.register_terrain("grass", utils::GROUND);
         // Half its health off creep, whole on it, the pool keeping its share.
         registry.register(
             building("shrub", 1, 6).with_field_effects([FieldEffect::new(
@@ -223,8 +222,7 @@ fn placement_under_lifted_field_effect_keeps_its_share() {
             )]),
         );
     }
-    let mut data = MapData::new("garden", Projection::Isometric, 16, 16);
-    data.fill_terrain("grass");
+    let mut data = MapData::new("garden", Projection::Isometric, 16, 16, "land");
     data.add_player_slot((5, 5));
     for (type_name, cell) in [("nest", (5, 5)), ("shrub", (7, 5))] {
         data.add_placement(Placement {
@@ -255,16 +253,13 @@ fn placement_under_lifted_field_effect_keeps_its_share() {
 }
 
 #[test]
-fn field_stops_at_terrain_its_layer_cannot_pass() {
+fn field_stops_at_terrain_it_does_not_name() {
     let mut app = field_app();
     let Fields { power, .. } = fields(&app);
-    {
-        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        registry.register_terrain("grass", utils::GROUND);
-        registry.register_terrain("water", LayerMask::EMPTY);
-    }
-    let mut data = MapData::new("walled", Projection::Isometric, 16, 16);
-    data.fill_terrain("grass");
+    app.world_mut()
+        .resource_mut::<ContentRegistry>()
+        .register_terrain("water");
+    let mut data = MapData::new("walled", Projection::Isometric, 16, 16, "land");
     for y in 0..16 {
         data.set_terrain((12, y), "water");
     }
@@ -282,16 +277,15 @@ fn field_stops_at_terrain_its_layer_cannot_pass() {
 }
 
 #[test]
-fn field_lying_anywhere_crosses_terrain_no_layer_passes() {
+fn field_on_any_terrain_crosses_every_terrain() {
     let mut app = field_app();
     let beam = {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        registry.register_terrain("grass", utils::GROUND);
-        registry.register_terrain("water", LayerMask::EMPTY);
+        registry.register_terrain("water");
         let beam = registry.register_field(
             "beam",
             FieldDef::new(
-                FieldLayer::Anywhere,
+                Terrains::Any,
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -308,8 +302,7 @@ fn field_lying_anywhere_crosses_terrain_no_layer_passes() {
         );
         beam
     };
-    let mut data = MapData::new("walled", Projection::Isometric, 16, 16);
-    data.fill_terrain("grass");
+    let mut data = MapData::new("walled", Projection::Isometric, 16, 16, "land");
     for y in 0..16 {
         data.set_terrain((12, y), "water");
     }
@@ -318,8 +311,8 @@ fn field_lying_anywhere_crosses_terrain_no_layer_passes() {
 
     utils::run_ticks(&mut app, 1);
 
-    // The same column that stops power carries a field that lies anywhere,
-    // over the water and to the far bank.
+    // The same column that stops power carries a field on any terrain, over
+    // the water and to the far bank.
     assert!(utils::covered_by(&app, beam, 12, 8, 0), "over the water");
     assert!(utils::covered_by(&app, beam, 13, 8, 0), "and past it");
 }
@@ -1628,11 +1621,17 @@ fn walker_disabled_mid_tick_takes_no_further_step() {
         );
         registry.register(
             EntityTypeDef::new("stunner")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_skills([stun]),
         );
-        registry.register(utils::walker("strider", utils::GROUND).with_pool(Pool::health(20)));
+        registry
+            .register(utils::walker("strider", utils::GROUND_DOMAIN).with_pool(Pool::health(20)));
     }
     // The stunner has the lower id, so its cast lands in the tick's process
     // pass before the walker's turn, after both were prepared.
@@ -1809,7 +1808,12 @@ fn fields(app: &App) -> Fields {
 /// A square structure of `side` cells that takes `rise_time` ticks to rise.
 fn building(name: &str, side: u32, rise_time: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
-        .with_location(utils::GROUND, CellSize::new(side, side), Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::new(side, side),
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_pool(Pool::health(100))
         .with_dying(1, [])
         .with_rise(rise_time, utils::rise_initial_pools(&[PoolId::HEALTH]))
@@ -1839,7 +1843,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         let creep = registry.register_field(
             "creep",
             FieldDef::new(
-                FieldLayer::Passable(utils::GROUND.into()),
+                Terrains::Only(utils::LAND.into()),
                 FieldDecay::Gradual { cycle: 2 },
                 FieldVision::Watched,
                 Detection::Blind,
@@ -1848,7 +1852,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         let power = registry.register_field(
             "power",
             FieldDef::new(
-                FieldLayer::Passable(utils::GROUND.into()),
+                Terrains::Only(utils::LAND.into()),
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -1917,7 +1921,12 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         // least 60 health.
         registry.register(
             EntityTypeDef::new("sporeling")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(40))
                 .with_pool(Pool::energy(40))
                 .with_morphs([
@@ -1967,14 +1976,24 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("sporepod")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(200)),
         );
         // A sporewing holding its health maximum doubled by share on creep,
         // and 40 more energy there while it has at least 60 health.
         registry.register(
             EntityTypeDef::new("sporewing")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_pool(Pool::energy(100))
                 .with_field_effects([
@@ -2014,7 +2033,12 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("sporemoth")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_pool(Pool::energy(100))
                 .with_field_effects([FieldEffect::new(
@@ -2039,7 +2063,12 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         // through a pupa that holds none.
         registry.register(
             EntityTypeDef::new("glowgrub")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_pool(Pool::energy(40))
                 .with_field_effects([FieldEffect::new(
@@ -2081,12 +2110,22 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("glowpupa")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20)),
         );
         registry.register(
             EntityTypeDef::new("glowmoth")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_pool(Pool::energy(100)),
         );
@@ -2116,7 +2155,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         // Creep effects: a zergling twice as fast on anyone's creep, a larva
         // that withers off it, and a burrow that withers off it once risen.
         registry.register(
-            utils::walker("zergling", utils::GROUND).with_field_effects([FieldEffect::new(
+            utils::walker("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
                 FieldCoverage::Any,
@@ -2129,8 +2168,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         // A skimmer, twice as fast on creep and half as fast off it, from one
         // entry stating both sides.
-        registry.register(utils::walker("skimmer", utils::GROUND).with_field_effects([
-            FieldEffect::new(
+        registry.register(
+            utils::walker("skimmer", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
                 FieldCoverage::Any,
@@ -2141,11 +2180,16 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     modifier(EntityStatId::SPEED, ModifierOp::PercentAdd, "-0.5"),
                 ]))],
                 None,
-            ),
-        ]));
+            )]),
+        );
         registry.register(
             EntityTypeDef::new("larva")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_field_effects([FieldEffect::new(
@@ -2162,7 +2206,12 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
 
         registry.register(
             EntityTypeDef::new("burrow")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
@@ -2261,7 +2310,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 )]),
         );
         registry.register(
-            utils::walker("zealot", utils::GROUND)
+            utils::walker("zealot", utils::GROUND_DOMAIN)
                 .with_train_time(4)
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
         );
@@ -2384,8 +2433,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 )])
                 .with_field_effects([unpowered_idles()]),
         );
-        registry.register(utils::walker("acolyte", utils::GROUND).with_field_effects([
-            FieldEffect::new(
+        registry.register(
+            utils::walker("acolyte", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
                 power,
                 Affiliation::Own,
                 FieldCoverage::Any,
@@ -2394,8 +2443,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 ]))],
                 Vec::new(),
                 None,
-            ),
-        ]));
+            )]),
+        );
         registry.register(
             building("cannon", 1, 20)
                 .with_attack(utils::weapon(utils::GROUND), 10, 6, 6, 2, 1)
@@ -2420,7 +2469,12 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         // A crystal yields to nobody while no power covers it.
         registry.register(
             EntityTypeDef::new("crystal")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_resource_source("crystal", DepletionPolicy::Persist)
                 .with_field_effects([FieldEffect::new(
                     power,
@@ -2432,7 +2486,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 )]),
         );
         registry.register(
-            utils::walker("probe", utils::GROUND)
+            utils::walker("probe", utils::GROUND_DOMAIN)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::from_num(2))
@@ -2470,7 +2524,12 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(
             EntityTypeDef::new("dummy")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_dying(1, []),
         );
@@ -2514,10 +2573,11 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 requires: Vec::new(),
             },
         );
-        registry.register(utils::walker("overlord", utils::GROUND).with_skills([spew, scour]));
+        registry
+            .register(utils::walker("overlord", utils::GROUND_DOMAIN).with_skills([spew, scour]));
 
         registry.register(
-            utils::walker("worker", utils::GROUND)
+            utils::walker("worker", utils::GROUND_DOMAIN)
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_builder(
                     ["spore", "bunker", "gateway", "pylon", "hive", "nest"],

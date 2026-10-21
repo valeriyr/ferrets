@@ -7,7 +7,6 @@ use ferrets_content::{
     location::Solidity,
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_pathfinder::layer_id::LayerId;
 
 mod utils;
 
@@ -97,8 +96,6 @@ fn naming_one_tag_twice_panics() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-const GROUND: LayerId = LayerId::new(1);
-
 /// A footman: an entity type of that name, wearing the `infantry` tag.
 fn footman() -> EntityTypeDef {
     standing("footman", ["infantry"])
@@ -111,6 +108,11 @@ fn catapult() -> EntityTypeDef {
 
 fn standing(name: &str, tags: impl IntoIterator<Item = &'static str>) -> EntityTypeDef {
     EntityTypeDef::new(name)
-        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::ONE,
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_tags(tags)
 }

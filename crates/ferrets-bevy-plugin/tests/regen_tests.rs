@@ -252,7 +252,12 @@ fn app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("troll")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::builtin(
                     PoolId::HEALTH,
@@ -265,7 +270,12 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("dummy")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20)),
         );
         let knitting = registry.register_entity_buff(
@@ -281,14 +291,24 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("hut")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(40))
                 .with_passives([knitting]),
         );
         registry.register(
             EntityTypeDef::new("lamp")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_pool(Pool::builtin(
                     PoolId::ENERGY,

@@ -2,7 +2,7 @@
 //! clear of what stands underfoot there without claiming its cells.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_content::location::LocationDef;
+use ferrets_content::{location::LocationDef, registry::ContentRegistry};
 use ferrets_geometry::cell_rect::CellRect;
 use ferrets_pathfinder::layer_mask::LayerMask;
 use ferrets_physics::body;
@@ -83,7 +83,7 @@ pub(crate) fn standing_underfoot(world: &World, ignored: &[Entity]) -> Vec<Under
                 return None;
             }
             Some(UnderfootBody {
-                layers: standing_location.occupation(),
+                layers: standing_location.occupies(),
                 footprint: entity_def::footprint_rect_of(world, standing_def, entity),
             })
         })
@@ -98,9 +98,11 @@ fn on_grid(
     to: LocationDef,
     lifted: &[GridMark],
 ) -> bool {
-    world
-        .resource::<Map>()
-        .can_place_entity_over_lifted(placed, &to, lifted)
+    world.resource::<Map>().can_place_entity_over_lifted(
+        placed,
+        entity_def::mover_shape(world.resource::<ContentRegistry>(), &to),
+        lifted,
+    )
 }
 
 /// Whether none of `underfoot` stands on the ground a static footprint of
@@ -108,6 +110,6 @@ fn on_grid(
 fn is_clear(underfoot: &[UnderfootBody], placed: &LocationComponent, to: LocationDef) -> bool {
     let footprint = CellRect::new(body::anchor(placed.position), to.size());
     !underfoot.iter().any(|body| {
-        body.layers & to.occupation() != LayerMask::EMPTY && body.footprint.intersects(footprint)
+        body.layers & to.occupies() != LayerMask::EMPTY && body.footprint.intersects(footprint)
     })
 }

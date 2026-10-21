@@ -209,8 +209,9 @@ fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
 
 #[test]
 fn walk_rounds_water_corner_without_creeping_at_it() {
-    // North out of the river ford (the river is x=48, open only at y=18..20):
-    // the body has to round the water corner at (48,17) to reach (49,13).
+    // North out of the river ford (the river's deep channel is x=48, open only
+    // at y=17..=21): the body has to round its corner at (48,16) to reach
+    // (49,13).
     //
     // Aiming diagonally past that corner puts the wall across the way rather
     // than beside it, so the surviving axis carries only the aim's sideways

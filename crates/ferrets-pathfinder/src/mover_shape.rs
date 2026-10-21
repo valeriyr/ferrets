@@ -13,10 +13,10 @@
 
 use ferrets_geometry::cell_size::CellSize;
 
-use crate::layer_mask::LayerMask;
+use crate::{layer_mask::LayerMask, terrain_mask::TerrainMask};
 
-/// The geometry a route must fit: the layers a mover occupies and the size of
-/// the footprint it stamps wherever it stands.
+/// The geometry a route must fit: the terrains a mover may be over, the layers
+/// it occupies and the size of the footprint it stamps wherever it stands.
 ///
 /// Deliberately anchor-free — a shape becomes a footprint only once a search
 /// anchors it at a candidate cell, and the same shape is anchored at every
@@ -25,24 +25,29 @@ use crate::layer_mask::LayerMask;
 /// whole group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MoverShape {
+    /// The terrains every cell of the footprint must be on.
+    pub terrains: TerrainMask,
     /// The layers every cell of the footprint must be free on.
-    pub mask: LayerMask,
+    pub layers: LayerMask,
     /// The size of the footprint that must fit at each anchor tested.
     pub size: CellSize,
 }
 
 impl MoverShape {
-    /// Creates a shape from the layers a mover occupies and its footprint size.
-    pub fn new(mask: impl Into<LayerMask>, size: CellSize) -> Self {
+    /// Creates a shape from the terrains a mover may be over, the layers it
+    /// occupies and its footprint size.
+    pub fn new(terrains: TerrainMask, layers: impl Into<LayerMask>, size: CellSize) -> Self {
         Self {
-            mask: mask.into(),
+            terrains,
+            layers: layers.into(),
             size,
         }
     }
 
-    /// A single-cell shape on `mask` — the shape of everything that covers one
-    /// cell, and of intermediate goals a search aims at.
-    pub fn point(mask: impl Into<LayerMask>) -> Self {
-        Self::new(mask, CellSize::ONE)
+    /// A single-cell shape over `terrains` on `layers` — the shape of
+    /// everything that covers one cell, and of intermediate goals a search
+    /// aims at.
+    pub fn point(terrains: TerrainMask, layers: impl Into<LayerMask>) -> Self {
+        Self::new(terrains, layers, CellSize::ONE)
     }
 }

@@ -18,7 +18,7 @@ use ferrets_simulation::{
 /// the declared placements.
 ///
 /// The map is installed before any placement is spawned, so spawning consults
-/// the map's own occupation grid. A placement is skipped (with a log) when its
+/// the map's own occupancy grid. A placement is skipped (with a log) when its
 /// owner slot is unoccupied or unknown — there is no player to own it — or
 /// when its cell cannot host its entity. Every node builds from the same data
 /// and slots, so the skips are identical everywhere.

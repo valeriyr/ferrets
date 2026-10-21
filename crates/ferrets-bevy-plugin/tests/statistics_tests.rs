@@ -1133,7 +1133,12 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
         );
         registry.register(
             EntityTypeDef::new("mage")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 // A named target must be in sight for the cast to be allowed at
                 // all, so the caster needs eyes.
@@ -1142,7 +1147,12 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
         );
         registry.register(
             EntityTypeDef::new("victim")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50)),
         );
         smite
@@ -1186,7 +1196,12 @@ fn ground_skill_app() -> (App, ferrets_content::skills::SkillId) {
         );
         registry.register(
             EntityTypeDef::new("sentry")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(50))
                 // A cell out of sight cannot be named as an aim, so the caster
                 // needs eyes on the patch it watches.
@@ -1214,14 +1229,19 @@ fn repair_app() -> App {
         registry.register_tag("building");
         registry.register(
             EntityTypeDef::new("hall")
-                .with_location(utils::GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_price([("gold", 50)])
                 .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_tags(["building"]),
         );
         registry.register(
-            utils::walker("fixer", utils::GROUND)
+            utils::walker("fixer", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(30))
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)

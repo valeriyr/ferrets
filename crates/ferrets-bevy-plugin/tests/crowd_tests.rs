@@ -14,6 +14,7 @@ use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::order_queue::OrderQueueComponent,
     map::Map,
+    movement_model::MovementModel,
     order::AttackTarget,
 };
 
@@ -54,6 +55,44 @@ fn head_on_movers_swap_in_corridor() {
 
     assert_eq!(utils::cell_of(app.world_mut(), left), CellPos::new(7, 5));
     assert_eq!(utils::cell_of(app.world_mut(), right), CellPos::new(2, 5));
+}
+
+#[test]
+fn head_on_movers_of_different_domains_swap_in_corridor() {
+    // A sealed corridor, the right-hand mover keeping to dry land: its domain
+    // is not the soldier's, but it occupies the same layer with the same
+    // footprint, and each lands on a cell of its own route — so they trade
+    // places as equals do.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[], |_, _| {});
+    corridor(&mut app);
+    let (left, left_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
+    let (right, right_id) = utils::create_owned(&mut app, "landlubber", 6, 5, 0);
+
+    utils::select(&mut app, left_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(7, 5),
+            flush: true,
+        },
+    );
+    utils::select(&mut app, right_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(2, 5),
+            flush: true,
+        },
+    );
+
+    utils::run_ticks(&mut app, 120);
+
+    // In a sealed corridor only a swap gets them past each other.
+    let world = app.world_mut();
+    assert_eq!(utils::cell_of(world, left), CellPos::new(7, 5));
+    assert_eq!(utils::cell_of(world, right), CellPos::new(2, 5));
+    assert!(utils::order_queue_is_empty(world, left));
+    assert!(utils::order_queue_is_empty(world, right));
 }
 
 #[test]
@@ -160,6 +199,35 @@ fn idle_ally_steps_aside() {
         utils::cell_of(app.world_mut(), bystander),
         CellPos::new(7, 4)
     );
+}
+
+#[test]
+fn idle_ally_steps_aside_only_onto_its_terrain() {
+    // The meeting of the test above, the cells ahead of the bystander water:
+    // the mover's domain takes it and walks on through, but the landlubber's
+    // takes land alone, so its step aside cannot go forward.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[(7, 4), (7, 5), (7, 6)], |_, _| {});
+    let (mover, mover_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
+
+    utils::select(&mut app, mover_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(8, 5),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    let (bystander, _) = utils::create_owned(&mut app, "landlubber", 6, 5, 0);
+
+    utils::run_ticks(&mut app, 80);
+
+    // The yield takes the best aside cell still on land: beside, not ahead —
+    // the forward diagonal (7,4) of the test above is water — the row above
+    // before the row below.
+    let world = app.world_mut();
+    assert_eq!(utils::cell_of(world, mover), CellPos::new(8, 5));
+    assert_eq!(utils::cell_of(world, bystander), CellPos::new(6, 4));
 }
 
 #[test]

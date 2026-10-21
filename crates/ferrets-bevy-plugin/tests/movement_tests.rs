@@ -7,12 +7,16 @@
 mod utils;
 
 use bevy::prelude::*;
+use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
+use ferrets_physics::terrain;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{location::LocationComponent, order_queue::OrderQueueComponent},
+    entity_def,
     map::Map,
+    movement_model::MovementModel,
     order::Order,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
 };
@@ -40,6 +44,56 @@ fn body_pressed_into_footprint_corner_rounds_it() {
         utils::position_of(app.world_mut(), runner),
         utils::pos(4, 5),
         "the runner rounded the corner and reached the ordered spot"
+    );
+}
+
+#[test]
+fn body_pressed_into_water_corner_rounds_it_on_land() {
+    // The keep's corner as water, (8..=10, 6..=8), and a landlubber, its
+    // domain taking land alone, walking past it from where the runner of the
+    // keep test starts.
+    let water: Vec<(u32, u32)> = (6..=8)
+        .flat_map(|y| (8..=10).map(move |x| (x, y)))
+        .collect();
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &water, |_, _| {});
+    let (landlubber, _) = utils::create_owned(&mut app, "landlubber", 12, 5, 0);
+    app.world_mut()
+        .entity_mut(landlubber)
+        .get_mut::<LocationComponent>()
+        .unwrap()
+        .position = utils::part_way("10.68", "5.08");
+    walk_to_spot(&mut app, landlubber, utils::pos(4, 5));
+    let shape = {
+        let world = app.world();
+        let location = entity_def::of(world, landlubber)
+            .location
+            .expect("a landlubber has a location");
+        entity_def::mover_shape(world.resource::<ContentRegistry>(), &location)
+    };
+    let radius = entity_def::radius(app.world(), landlubber);
+
+    // It starts clipping the water, as the keep test's runner clips the keep,
+    // and still clips it after its first tick; its second squares it onto
+    // row 5, and from then on its circle lies on land every tick.
+    utils::run_ticks(&mut app, 1);
+    for tick in 1..300 {
+        utils::run_ticks(&mut app, 1);
+        let position = utils::position_of(app.world_mut(), landlubber);
+        assert!(
+            terrain::body_fits(
+                app.world().resource::<Map>().nav_grid(),
+                shape,
+                position,
+                radius
+            ),
+            "on tick {tick} the landlubber's circle at {position:?} reaches over water"
+        );
+    }
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), landlubber));
+    assert_eq!(
+        utils::position_of(app.world_mut(), landlubber),
+        utils::pos(4, 5)
     );
 }
 
@@ -286,7 +340,7 @@ fn cell_walk_follows_corridor_past_its_first_leg() {
     // not arriving — the walk has to ask for the next one, or it stops at the
     // first crossing a couple of cells from where it started.
     let mut app = utils::orders_app();
-    utils::install_chokepoint_map(&mut app);
+    utils::install_choke_point_map(&mut app);
     let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
 
     utils::select(&mut app, id);

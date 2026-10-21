@@ -3,6 +3,8 @@
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_pathfinder::layer_mask::LayerMask;
 
+use crate::domain::DomainId;
+
 /// Whether an entity's footprint blocks the cells it stands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Solidity {
@@ -41,45 +43,59 @@ impl Solidity {
 /// Content-defined location properties for an entity type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocationDef {
-    /// The set of [`NavGrid`](ferrets_pathfinder::nav_grid::NavGrid) layers this
-    /// entity lives on: cells must be free on these layers for it to stand or
-    /// path there. Most entities use a single layer; use a combined [`LayerMask`]
-    /// for entities that interact with multiple layers simultaneously.
-    occupation: LayerMask,
-    /// Whether the footprint also claims the occupied layers.
-    solidity: Solidity,
+    /// The domain: the one layer the body moves in, and the terrains it may be
+    /// over there.
+    domain: DomainId,
     /// Footprint in whole grid cells.
     size: CellSize,
+    /// Whether the footprint also claims the occupied layers.
+    solidity: Solidity,
+    /// The layers whose cells the footprint takes, and in which it blocks and
+    /// collides: its domain's layer, and any further layers it stands in as
+    /// well.
+    occupies: LayerMask,
 }
 
 impl LocationDef {
     /// Creates a new `LocationDef` with the given data.
     ///
-    /// Panics if `occupation` is empty or `size` has a zero dimension.
+    /// Panics if `occupies` is empty or `size` has a zero dimension.
     #[inline]
-    pub fn new(occupation: impl Into<LayerMask>, size: CellSize, solidity: Solidity) -> Self {
-        let occupation = occupation.into();
+    pub fn new(
+        domain: DomainId,
+        size: CellSize,
+        solidity: Solidity,
+        occupies: impl Into<LayerMask>,
+    ) -> Self {
+        let occupies = occupies.into();
 
-        assert!(
-            occupation != LayerMask::EMPTY,
-            "occupation must not be empty"
-        );
+        assert!(occupies != LayerMask::EMPTY, "occupies must not be empty");
         assert!(
             size.width > 0 && size.height > 0,
             "size dimensions must be greater than 0"
         );
 
         Self {
-            occupation,
-            solidity,
+            domain,
             size,
+            solidity,
+            occupies,
         }
     }
 
-    /// Returns the set of NavGrid layers this entity lives on.
+    /// Returns the domain: the one layer the body moves in, and the terrains
+    /// it may be over there.
     #[inline]
-    pub fn occupation(&self) -> LayerMask {
-        self.occupation
+    pub fn domain(&self) -> DomainId {
+        self.domain
+    }
+
+    /// Returns the layers whose cells the footprint takes, and in which it
+    /// blocks and collides: its domain's layer, and any further layers it
+    /// stands in as well.
+    #[inline]
+    pub fn occupies(&self) -> LayerMask {
+        self.occupies
     }
 
     /// Returns whether the footprint claims the entity's layers.

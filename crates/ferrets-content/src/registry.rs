@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy_ecs::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
+use ferrets_pathfinder::{
+    layer_id::LayerId, layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask,
+};
 
 use crate::{
     affiliation::Affiliation,
@@ -15,16 +17,17 @@ use crate::{
     build::BuilderAttendance,
     cost::Cost,
     detection::Detection,
+    domain::{DomainDef, DomainId},
     entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
     entity_effect::EntityEffect,
     entity_modifiers::EntityModifiers,
     entity_stats::{ENTITY_BUILTIN_STATS, EntityStatDef, EntityStatId},
     entity_type_def::{EntityTypeDef, EntityTypeId},
-    field::{Emission, FieldDef, FieldGrowth, FieldId, FieldLayer, FieldPlacement},
+    field::{Emission, FieldDef, FieldGrowth, FieldId, FieldPlacement},
     gateway::{Doors, GatewayDef, Joins},
     holder::Holder,
     kinds::{Kind, Kinds},
-    location::Solidity,
+    location::{LocationDef, Solidity},
     morph::{MorphCourse, MorphPlacement, ViaInterrupted},
     network::{NetworkDef, NetworkId},
     player_buffs::{PlayerBuffDef, PlayerBuffId},
@@ -45,6 +48,7 @@ use crate::{
     stand::StandingAct,
     stats::EntityModifier,
     tags,
+    terrains::Terrains,
     tunnel::{Passage, TunnelDef, TunnelId},
     turret::{TurretDef, TurretId, WeaponConduct},
     work::{Crewing, WorkPresence},
@@ -65,7 +69,11 @@ pub struct ContentRegistry {
     races: BTreeSet<String>,
     tags: BTreeSet<String>,
     layers: BTreeMap<String, LayerId>,
-    terrains: BTreeMap<String, LayerMask>,
+    terrains: BTreeMap<String, TerrainId>,
+    /// Domain name → handle.
+    domains: BTreeMap<String, DomainId>,
+    /// All domain definitions, indexed by [`DomainId`] (registration order).
+    domain_defs: Vec<DomainDef>,
     fields: BTreeMap<String, FieldId>,
     field_defs: Vec<FieldDef>,
     networks: BTreeMap<String, NetworkId>,
@@ -107,6 +115,8 @@ impl Default for ContentRegistry {
             tags: BTreeSet::from([tags::BUILDING.to_string(), tags::REMAINS.to_string()]),
             layers: BTreeMap::new(),
             terrains: BTreeMap::new(),
+            domains: BTreeMap::new(),
+            domain_defs: Vec::new(),
             fields: BTreeMap::new(),
             field_defs: Vec::new(),
             networks: BTreeMap::new(),
@@ -226,7 +236,6 @@ impl ContentRegistry {
             self.validate_passives(def);
             self.validate_pool_stats(def);
             self.validate_bonus_damage_vs(def);
-            self.validate_traversable(def);
             self.validate_morphs(def);
             self.validate_crews(def);
             self.validate_self_work(def);
@@ -1099,41 +1108,89 @@ impl ContentRegistry {
             .map(|(name, &id)| (name.as_str(), id))
     }
 
-    /// Registers a terrain type (grass, water, …): a name and the mask of
-    /// navigation layers passable on cells of that terrain. An empty mask means
-    /// the terrain is impassable on every layer.
+    /// Registers a terrain (land, shallow water, …) and returns its assigned
+    /// [`TerrainId`].
     ///
-    /// The passable layers must be registered first.
+    /// Ids are assigned in registration order, so identical content registered
+    /// in the same order resolves to identical ids everywhere.
     ///
-    /// Panics if `name` is empty, the terrain is already registered, or the
-    /// mask includes an unregistered layer.
-    pub fn register_terrain(&mut self, name: impl Into<String>, passable: impl Into<LayerMask>) {
+    /// Panics if `name` is empty, the terrain is already registered, or all
+    /// terrain ids are already assigned.
+    pub fn register_terrain(&mut self, name: impl Into<String>) -> TerrainId {
         let name = name.into();
-        let passable = passable.into();
 
         assert!(!name.is_empty(), "terrain name must not be empty");
         assert!(
             !self.terrains.contains_key(&name),
             "terrain '{name}' is already registered"
         );
-        let unregistered = passable & !self.registered_layers();
+        let bit = u32::try_from(self.terrains.len()).unwrap();
         assert!(
-            unregistered == LayerMask::EMPTY,
-            "terrain '{name}' passes unregistered layers {unregistered}"
+            bit < u32::BITS,
+            "all {} terrain ids are already assigned",
+            u32::BITS
         );
-
-        self.terrains.insert(name, passable);
+        let id = TerrainId::new(1 << bit);
+        self.terrains.insert(name, id);
+        id
     }
 
-    /// Returns `true` if `name` is a registered terrain type.
+    /// Returns `true` if `name` is a registered terrain.
     pub fn has_terrain(&self, name: &str) -> bool {
         self.terrains.contains_key(name)
     }
 
-    /// Returns the mask of layers passable on the given terrain, or `None` if
-    /// not registered.
-    pub fn terrain(&self, name: &str) -> Option<LayerMask> {
+    /// Returns the id assigned to the given terrain name, or `None` if not
+    /// registered.
+    pub fn terrain(&self, name: &str) -> Option<TerrainId> {
         self.terrains.get(name).copied()
+    }
+
+    /// Returns the mask of every registered terrain.
+    pub fn registered_terrains(&self) -> TerrainMask {
+        self.terrains
+            .values()
+            .fold(TerrainMask::EMPTY, |mask, &terrain| mask | terrain)
+    }
+
+    /// Registers a domain (ground, naval, air, …) and returns its assigned
+    /// [`DomainId`]. Ids are assigned in registration order.
+    ///
+    /// Its layer and terrains must be registered first.
+    ///
+    /// Panics if `name` is empty, the domain is already registered, its layer
+    /// is unregistered, or it names an unregistered terrain.
+    pub fn register_domain(&mut self, name: impl Into<String>, domain: DomainDef) -> DomainId {
+        let name = name.into();
+        assert!(!name.is_empty(), "domain name must not be empty");
+        assert!(
+            !self.domains.contains_key(&name),
+            "domain '{name}' is already registered"
+        );
+        assert!(
+            self.registered_layers() & domain.layer() != LayerMask::EMPTY,
+            "domain '{name}' is in unregistered layer {}",
+            domain.layer()
+        );
+        self.validate_terrains(&format!("domain '{name}'"), domain.terrains());
+
+        let id = DomainId::from_index(self.domain_defs.len());
+        self.domains.insert(name, id);
+        self.domain_defs.push(domain);
+        id
+    }
+
+    /// Returns the [`DomainId`] for the given domain name, or `None` if not
+    /// registered.
+    pub fn domain(&self, name: &str) -> Option<DomainId> {
+        self.domains.get(name).copied()
+    }
+
+    /// Returns the definition of a registered domain.
+    ///
+    /// Panics if `id` was not minted by this registry.
+    pub fn domain_def(&self, id: DomainId) -> &DomainDef {
+        &self.domain_defs[id.index()]
     }
 
     /// Registers a field kind (creep, power, …) by name and returns its
@@ -1141,10 +1198,10 @@ impl ContentRegistry {
     /// identical content registered in the same order resolves to identical
     /// ids everywhere.
     ///
-    /// The layers the field covers must be registered first.
+    /// The terrains the field lies on must be registered first.
     ///
-    /// Panics if `name` is empty, the field is already registered, it lies on
-    /// an unregistered layer, or it detects on one.
+    /// Panics if `name` is empty, the field is already registered, it names an
+    /// unregistered terrain, or it detects on an unregistered layer.
     pub fn register_field(&mut self, name: impl Into<String>, field: FieldDef) -> FieldId {
         let name = name.into();
         assert!(!name.is_empty(), "field name must not be empty");
@@ -1152,16 +1209,7 @@ impl ContentRegistry {
             !self.fields.contains_key(&name),
             "field '{name}' is already registered"
         );
-        match field.layer() {
-            FieldLayer::Anywhere => {}
-            FieldLayer::Passable(layers) => {
-                let unregistered = layers & !self.registered_layers();
-                assert!(
-                    unregistered == LayerMask::EMPTY,
-                    "field '{name}' covers unregistered layers {unregistered}"
-                );
-            }
-        }
+        self.validate_terrains(&format!("field '{name}'"), field.terrains());
         self.validate_detection(&format!("field '{name}'"), field.detection());
 
         let id = FieldId::from_index(self.field_defs.len());
@@ -1411,8 +1459,14 @@ impl ContentRegistry {
                 // it holds those cells is its own.
                 if let (Some(from), Some(worn)) = (def.location, interim.location) {
                     assert!(
-                        from.size() == worn.size() && from.occupation() == worn.occupation(),
+                        from.size() == worn.size() && from.occupies() == worn.occupies(),
                         "{owner} wears a form whose footprint differs from its own"
+                    );
+                    let (own, worn_terrains) =
+                        (self.domain_terrains(&from), self.domain_terrains(&worn));
+                    assert!(
+                        own & worn_terrains == own,
+                        "{owner} wears a form whose domain refuses terrain its own takes"
                     );
                 }
                 // The time is read while the interim form is worn.
@@ -1488,39 +1542,6 @@ impl ContentRegistry {
                 }
             }
         }
-    }
-
-    /// Checks that a mover could stand somewhere: some registered terrain has to
-    /// pass every layer it occupies.
-    ///
-    /// An occupation mask is conjunctive — a mover needs all of its layers free —
-    /// so a combined mask names terrain that passes *all* of them, not terrain
-    /// that passes any. A ground-and-water mover is therefore a shore unit, and
-    /// wants a shore terrain to exist; without one it could not stand anywhere on
-    /// any map, which is a content mistake rather than a situation to discover at
-    /// runtime as a unit that mysteriously never moves.
-    ///
-    /// Content that declares no terrain at all is exempt: a map without terrain
-    /// starts fully open, so every layer is passable everywhere and there is
-    /// nothing to be inconsistent with.
-    ///
-    /// Runs in [`validate`](Self::validate) rather than at registration, because
-    /// terrains and entity types may be declared in either order.
-    fn validate_traversable(&self, def: &EntityTypeDef) {
-        if !def.can_move() || self.terrains.is_empty() {
-            return;
-        }
-        let Some(occupation) = def.location.map(|location| location.occupation()) else {
-            return;
-        };
-        assert!(
-            self.terrains
-                .values()
-                .any(|&passable| passable & occupation == occupation),
-            "entity type '{}' moves on layers {occupation} that no registered terrain \
-             passes together, so it could never stand anywhere",
-            def.name
-        );
     }
 
     /// Checks that a type's delivery configuration is usable: a blast must reach
@@ -2779,18 +2800,45 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that the definition occupies only registered navigation layers.
+    /// Checks that the definition is in a domain this registry minted and
+    /// occupies only registered layers, its domain's layer among them.
     fn validate_layers(&self, def: &EntityTypeDef) {
         let Some(location) = &def.location else {
             return;
         };
 
-        let unregistered = location.occupation() & !self.registered_layers();
+        assert!(
+            location.domain().index() < self.domain_defs.len(),
+            "entity type '{}' is in a domain this registry never minted",
+            def.name
+        );
+        let layers = location.occupies();
+        let unregistered = layers & !self.registered_layers();
         assert!(
             unregistered == LayerMask::EMPTY,
             "entity type '{}' occupies unregistered layers {unregistered}",
             def.name
         );
+        let own = self.domain_def(location.domain()).layer();
+        assert!(
+            layers & own != LayerMask::EMPTY,
+            "entity type '{}' occupies layers {layers} without layer {own}, its domain's",
+            def.name
+        );
+    }
+
+    /// Checks that every terrain `terrains` names is registered.
+    fn validate_terrains(&self, owner: &str, terrains: Terrains) {
+        match terrains {
+            Terrains::Any => {}
+            Terrains::Only(terrains) => {
+                let registered = self.registered_terrains();
+                assert!(
+                    terrains & registered == terrains,
+                    "{owner} names unregistered terrains {terrains}"
+                );
+            }
+        }
     }
 
     /// Checks that every type in the definition's train catalogue is a
@@ -3602,7 +3650,8 @@ impl ContentRegistry {
 
     /// Checks that a type raised over a resource source names a registered
     /// source of the kind the type itself yields, on the same footprint and the
-    /// same layers, that does not stand underfoot.
+    /// same layers, on terrain the type's own domain takes, that does not
+    /// stand underfoot.
     fn validate_overbuilds(&self, def: &EntityTypeDef) {
         let Some(over) = &def.overbuilds else { return };
         let source = self.entity(over).unwrap_or_else(|| {
@@ -3637,11 +3686,19 @@ impl ContentRegistry {
             def.name
         );
         assert!(
-            def.location.map(|location| location.occupation())
-                == source.location.map(|location| location.occupation()),
+            def.location.map(|location| location.occupies())
+                == source.location.map(|location| location.occupies()),
             "entity type '{}' overbuilds '{over}', which occupies other layers",
             def.name
         );
+        if let (Some(own), Some(yielded)) = (def.location, source.location) {
+            let source_terrains = self.domain_terrains(&yielded);
+            assert!(
+                source_terrains & self.domain_terrains(&own) == source_terrains,
+                "entity type '{}' overbuilds '{over}', whose domain takes terrain its own refuses",
+                def.name
+            );
+        }
         match source.location.map(|location| location.solidity()) {
             Some(Solidity::Underfoot) => panic!(
                 "entity type '{}' overbuilds '{over}', which stands underfoot",
@@ -3868,6 +3925,11 @@ impl ContentRegistry {
             .iter()
             .enumerate()
             .map(|(index, def)| (PoolId::from_index(index), def))
+    }
+
+    /// The terrains the domain of `location` takes.
+    fn domain_terrains(&self, location: &LocationDef) -> TerrainMask {
+        self.domain_def(location.domain()).terrains().mask(self)
     }
 }
 

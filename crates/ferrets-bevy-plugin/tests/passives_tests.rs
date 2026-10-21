@@ -911,7 +911,12 @@ fn app() -> (App, EntityBuffId) {
         );
         registry.register(
             EntityTypeDef::new("shed")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
@@ -919,7 +924,12 @@ fn app() -> (App, EntityBuffId) {
         );
         registry.register(
             EntityTypeDef::new("troll")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::builtin(
                     PoolId::HEALTH,
                     FixedU64::from_num(100),
@@ -933,7 +943,12 @@ fn app() -> (App, EntityBuffId) {
         );
         registry.register(
             EntityTypeDef::new("lantern")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(8))
                 .with_dying(2, [])
@@ -941,14 +956,24 @@ fn app() -> (App, EntityBuffId) {
         );
         registry.register(
             EntityTypeDef::new("kiln")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_dying(2, [])
                 .with_passives([embers]),
         );
         registry.register(
             EntityTypeDef::new("sapling")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::ONE)
@@ -989,7 +1014,12 @@ fn app() -> (App, EntityBuffId) {
         );
         registry.register(
             EntityTypeDef::new("seedling")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_rise(
                     4,
                     utils::rise_initial_pools(&[PoolId::HEALTH, PoolId::ENERGY]),
@@ -1020,7 +1050,12 @@ fn app() -> (App, EntityBuffId) {
         );
         registry.register(
             EntityTypeDef::new("beacon")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
                 .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::ONE)
@@ -1029,7 +1064,12 @@ fn app() -> (App, EntityBuffId) {
         );
         registry.register(
             EntityTypeDef::new("grove")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(2))
@@ -1038,7 +1078,12 @@ fn app() -> (App, EntityBuffId) {
         );
         registry.register(
             EntityTypeDef::new("oak")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(100))
                 .with_stat(EntityStatId::ARMOR, FixedU64::ZERO)
                 .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::ONE)
@@ -1047,7 +1092,12 @@ fn app() -> (App, EntityBuffId) {
         );
         registry.register(
             EntityTypeDef::new("huntress")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_movement(
                     utils::fixed("0.5"),
                     utils::fixed("0.5"),

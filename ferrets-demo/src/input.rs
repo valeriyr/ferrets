@@ -1610,32 +1610,32 @@ pub struct GhostView<'a> {
 }
 
 impl GhostView<'_> {
-    /// Whether the ghost of `def` anchored at `anchor` shows as fitting:
-    /// terrain that takes its footprint, clear on a layer it claims of every
+    /// Whether the ghost of `def` anchored at `anchor` shows as fitting: on
+    /// terrains its domain takes, clear on a layer it occupies of every
     /// footprint made out that claims its cells — and, for a footprint on the
     /// static plane, of every one that holds its ground — and its type's field
     /// rules met.
     pub fn fits(&self, def: &EntityTypeDef, anchor: CellPos) -> bool {
         let location_def = def.location.expect("validated content defines a location");
-        let occupation = location_def.occupation();
-        let footprint = CellRect::new(anchor, location_def.size());
+        let shape = entity_def::mover_shape(self.registry, &location_def);
+        let footprint = CellRect::new(anchor, shape.size);
         let refused_underfoot = match OccupancyClass::of(def) {
             OccupancyClass::Static => true,
             OccupancyClass::Claim => false,
         };
-        self.map.nav_grid().is_footprint_terrain_passable_by(
-            occupation,
-            anchor,
-            location_def.size(),
-        ) && !self.made_out.iter().any(|&(layers, standing, solidity)| {
-            layers & occupation != LayerMask::EMPTY
-                && standing.intersects(footprint)
-                && match solidity {
-                    Solidity::Solid => true,
-                    Solidity::Underfoot => refused_underfoot,
-                    Solidity::Passable => unreachable!("a passable body holds no ground"),
-                }
-        }) && self.allows(&def.field_placement, footprint)
+        self.map
+            .nav_grid()
+            .fits_terrain(anchor, shape.terrains, shape.size)
+            && !self.made_out.iter().any(|&(layers, standing, solidity)| {
+                layers & shape.layers != LayerMask::EMPTY
+                    && standing.intersects(footprint)
+                    && match solidity {
+                        Solidity::Solid => true,
+                        Solidity::Underfoot => refused_underfoot,
+                        Solidity::Passable => unreachable!("a passable body holds no ground"),
+                    }
+            })
+            && self.allows(&def.field_placement, footprint)
     }
 
     /// Where the ghost of `def` stands with the cursor on `cursor`, and whether
@@ -1724,7 +1724,7 @@ pub fn made_out_footprints<'a>(
             let location_def = registry.def(info.type_id()).location?;
             location_def.solidity().holds_ground().then(|| {
                 (
-                    location_def.occupation(),
+                    location_def.occupies(),
                     CellRect::new(body::anchor(location.position), location_def.size()),
                     location_def.solidity(),
                 )

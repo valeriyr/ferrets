@@ -23,7 +23,6 @@ use ferrets_content::{
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::layer_mask::LayerMask;
-use utils::GROUND;
 
 //
 // ─── Happy path ───────────────────────────────────────────────────────────────
@@ -31,7 +30,7 @@ use utils::GROUND;
 
 #[test]
 fn fully_loaded_definition_is_valid() {
-    let def = utils::standing("factotum", GROUND)
+    let def = utils::standing("factotum", utils::GROUND_DOMAIN)
         .with_movement(
             FixedU64::from_num(0.5),
             FixedU64::from_num(0.5),
@@ -41,7 +40,7 @@ fn fully_loaded_definition_is_valid() {
         )
         .with_pool(Pool::health(50))
         .with_dying(3, [])
-        .with_attack(utils::weapon(GROUND), 10, 1, 1, 4, 2)
+        .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
         .with_price([("gold", 30), ("wood", 10)])
         .with_train_time(4)
         .with_rise(6, utils::rise_initial_pools(&[PoolId::HEALTH]))
@@ -79,7 +78,7 @@ fn fully_loaded_definition_is_valid() {
 
 #[test]
 fn pools_are_kept_in_pool_order_whatever_order_they_are_given() {
-    let def = utils::standing("well", GROUND)
+    let def = utils::standing("well", utils::GROUND_DOMAIN)
         .with_pool(Pool::energy(40))
         .with_pool(Pool::health(100));
 
@@ -89,7 +88,7 @@ fn pools_are_kept_in_pool_order_whatever_order_they_are_given() {
 
 #[test]
 fn pool_given_twice_keeps_later_declaration() {
-    let def = utils::standing("well", GROUND)
+    let def = utils::standing("well", utils::GROUND_DOMAIN)
         .with_pool(Pool::health(20))
         .with_pool(Pool::health(30));
 
@@ -105,7 +104,7 @@ fn pool_given_twice_keeps_later_declaration() {
 #[test]
 #[should_panic(expected = "is filled by a declared pool")]
 fn stat_set_beside_its_pool_panics() {
-    let _ = utils::standing("well", GROUND)
+    let _ = utils::standing("well", utils::GROUND_DOMAIN)
         .with_pool(Pool::energy(20))
         .with_stat(EntityStatId::ENERGY_REGEN, FixedU64::from_num(1));
 }
@@ -113,7 +112,7 @@ fn stat_set_beside_its_pool_panics() {
 #[test]
 #[should_panic(expected = "is set on its own and filled by")]
 fn pool_declared_over_own_stat_panics() {
-    let _ = utils::standing("well", GROUND)
+    let _ = utils::standing("well", utils::GROUND_DOMAIN)
         .with_stat(EntityStatId::ENERGY_REGEN, FixedU64::from_num(1))
         .with_pool(Pool::energy(20));
 }
@@ -129,15 +128,25 @@ fn empty_name_panics() {
 }
 
 #[test]
-#[should_panic(expected = "occupation must not be empty")]
-fn empty_occupation_panics() {
-    EntityTypeDef::new("footman").with_location(LayerMask::EMPTY, CellSize::ONE, Solidity::Solid);
+#[should_panic(expected = "occupies must not be empty")]
+fn empty_occupies_panics() {
+    EntityTypeDef::new("footman").with_location(
+        utils::GROUND_DOMAIN,
+        CellSize::ONE,
+        Solidity::Solid,
+        LayerMask::EMPTY,
+    );
 }
 
 #[test]
 #[should_panic(expected = "size dimensions must be greater than 0")]
 fn zero_footprint_panics() {
-    EntityTypeDef::new("footman").with_location(GROUND, CellSize::new(0, 2), Solidity::Solid);
+    EntityTypeDef::new("footman").with_location(
+        utils::GROUND_DOMAIN,
+        CellSize::new(0, 2),
+        Solidity::Solid,
+        utils::GROUND,
+    );
 }
 
 //
@@ -531,14 +540,19 @@ fn middle() -> FixedVec2 {
 }
 
 fn footman() -> EntityTypeDef {
-    utils::standing("footman", GROUND)
+    utils::standing("footman", utils::GROUND_DOMAIN)
 }
 
 /// A one-cell `blade` with 20 health that rises over ten ticks, its health
 /// at its initial.
 fn rising_blade() -> EntityTypeDef {
     EntityTypeDef::new("blade")
-        .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+        .with_location(
+            utils::GROUND_DOMAIN,
+            CellSize::ONE,
+            Solidity::Solid,
+            utils::GROUND,
+        )
         .with_pool(Pool::health(20))
         .with_rise(10, [(PoolId::HEALTH, RisePool::Initial)])
 }

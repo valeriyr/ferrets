@@ -3,9 +3,10 @@
 //! through terrain, and re-derives the claim plane from where they settled.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_pathfinder::{layer_mask::LayerMask, mover_shape::MoverShape};
 use ferrets_physics::{body, body::Body, contact, terrain};
 
 use crate::{
@@ -29,6 +30,10 @@ pub fn resolve(world: &mut World) {
     // Gather, in simulation-id order.
     let mut entities: Vec<Entity> = Vec::new();
     let mut bodies: Vec<Body> = Vec::new();
+    let mut shapes: Vec<MoverShape> = Vec::new();
+
+    let content_registry = world.resource::<ContentRegistry>();
+
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         if !entity_def::stands_on_grid(world, entity) {
             continue;
@@ -58,22 +63,24 @@ pub fn resolve(world: &mut World) {
                     waypoint.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
                 )
             });
+        let shape = entity_def::mover_shape(content_registry, &location_def);
         entities.push(entity);
         bodies.push(Body {
             position,
-            size: location_def.size(),
+            size: shape.size,
             radius: entity_def::radius(world, entity),
             weight: entity_def::weight(world, entity),
-            mask: location_def.occupation(),
+            layers: shape.layers,
             heading,
         });
+        shapes.push(shape);
     }
 
     // Commit through terrain: a push may never overlap a body onto a
     // statically blocked cell — the blocked axis is dropped, sliding along
     // the other.
     let pushes = contact::separations(&bodies);
-    for ((&entity, body), push) in entities.iter().zip(&bodies).zip(pushes) {
+    for (((&entity, body), &shape), push) in entities.iter().zip(&bodies).zip(&shapes).zip(pushes) {
         // A mover still rising pushes the others but stands where it was set
         // down, as a structure does, until it has risen.
         if push == FixedVec2::ZERO || entity_def::rising(world, entity) {
@@ -82,9 +89,8 @@ pub fn resolve(world: &mut World) {
         let desired = terrain::displaced(body.position, push.x, push.y);
         let committed = terrain::slide_toward(
             world.resource::<Map>().nav_grid(),
-            body.mask,
+            shape,
             body.position,
-            body.size,
             desired,
             body.radius,
         );
@@ -108,7 +114,7 @@ pub fn resolve(world: &mut World) {
         .zip(&bodies)
         .map(|(&entity, body)| {
             let position = entity_def::position(world, entity);
-            (body.mask, body.size, body::anchor(position))
+            (body.layers, body.size, body::anchor(position))
         })
         .collect();
 
@@ -120,7 +126,7 @@ pub fn resolve(world: &mut World) {
         .query::<&MorphComponent>()
         .iter(world)
         .filter_map(|morph| morph.reservation.as_ref())
-        .map(|reservation| (reservation.mask, reservation.cells.clone()))
+        .map(|reservation| (reservation.layers, reservation.cells.clone()))
         .collect();
     world
         .resource_mut::<Map>()

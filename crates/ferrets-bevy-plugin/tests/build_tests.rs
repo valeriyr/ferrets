@@ -1321,6 +1321,58 @@ fn static_footprint_is_raised_over_underfoot_body_that_is_off_map() {
     );
 }
 
+#[test]
+fn building_is_refused_on_terrain_its_domain_does_not_take() {
+    // A dock, the depot in a domain that takes land alone, its 2×2 footprint
+    // at (10,10) over the one water cell (11,11): it goes up nowhere, and the
+    // 50 gold it costs stays unspent.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[(11, 11)], |registry, dry| {
+        let mut dock = registry
+            .entity("depot")
+            .expect("the orders content declares a depot")
+            .clone();
+        dock.name = "dock".to_string();
+        registry.register(utils::in_domain(dock, dry));
+        let mut wright = registry
+            .entity("worker")
+            .expect("the orders content declares a worker")
+            .clone()
+            .with_builder(
+                ["dock"],
+                BuilderAttendance::Crew(WorkPresence::Hidden {
+                    crew: CrewLimit::ONE,
+                }),
+            );
+        wright.name = "wright".to_string();
+        registry.register(wright);
+    });
+    let (wright, wright_id) = utils::create_owned(&mut app, "wright", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+    let build_at = |app: &mut App, x: u32, y: u32| {
+        utils::push_command(
+            app,
+            PlayerCommand::BuildEntity {
+                builder: wright_id,
+                type_name: "dock".into(),
+                position: utils::pos(x, y),
+                flush: true,
+            },
+        );
+        utils::run_ticks(app, 12);
+    };
+
+    build_at(&mut app, 10, 10);
+    assert_eq!(utils::count_of_type(app.world_mut(), "dock"), 0);
+    assert_eq!(utils::gold(app.world_mut()), 80);
+    assert!(utils::order_queue_is_empty(app.world_mut(), wright));
+
+    // One cell clear of the water, (12,10)..(13,11) all land, it goes up:
+    // 80 − 50 = 30 gold left.
+    build_at(&mut app, 12, 10);
+    assert_eq!(utils::count_of_type(app.world_mut(), "dock"), 1);
+    assert_eq!(utils::gold(app.world_mut()), 30);
+}
+
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
@@ -1356,7 +1408,7 @@ fn solidity_app() -> App {
     // Two layers, so a body that holds one of them can be shown not to refuse
     // a footprint on the other.
     {
-        let mut grid = NavGrid::new(32, 32);
+        let mut grid = NavGrid::new(32, 32, |_| utils::LAND);
         grid.add_layer(utils::GROUND);
         grid.add_layer(utils::AIR);
         ferrets_bevy_plugin::map::install_map(
@@ -1372,22 +1424,37 @@ fn solidity_app() -> App {
     }
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        assert_eq!(registry.register_layer(utils::AIR_LAYER), utils::AIR);
+        utils::register_air(&mut registry);
         registry.register(
             EntityTypeDef::new("mole")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Underfoot)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Underfoot,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20)),
         );
         registry.register(
             EntityTypeDef::new("pebble")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Passable,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20)),
         );
         // The same underfoot body a layer up, to show that holding ground on
         // one layer says nothing about another.
         registry.register(
             EntityTypeDef::new("kite")
-                .with_location(utils::AIR, CellSize::ONE, Solidity::Underfoot)
+                .with_location(
+                    utils::AIR_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Underfoot,
+                    utils::AIR,
+                )
                 .with_pool(Pool::health(20)),
         );
     }
@@ -1406,7 +1473,7 @@ fn surveyor_app() -> App {
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
-            utils::walker("surveyor", utils::GROUND)
+            utils::walker("surveyor", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(3))
                 .with_builder(

@@ -289,7 +289,12 @@ fn rising_entity_starts_under_maximum_its_passives_leave() {
         );
         registry.register(
             EntityTypeDef::new("braced_rampart")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(400))
                 .with_dying(2, [])
                 .with_passives([braced])
@@ -316,7 +321,12 @@ fn rising_entity_holds_pool_from_its_own_initial() {
     let mut app = utils::orders_app();
     app.world_mut().resource_mut::<ContentRegistry>().register(
         EntityTypeDef::new("lamp_post")
-            .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(100))
             .with_pool(Pool::builtin(
                 PoolId::ENERGY,
@@ -359,7 +369,12 @@ fn risen_pools_settle_under_risen_passives_at_next_fold() {
         );
         registry.register(
             EntityTypeDef::new("keep_wall")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(400))
                 .with_pool(Pool::builtin(
                     PoolId::ENERGY,
@@ -658,7 +673,7 @@ const RALLY_RISE_TIME: u32 = 4;
 fn register_rising_trainers(app: &mut App) {
     let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
     registry.register(
-        utils::walker("ark", utils::GROUND)
+        utils::walker("ark", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(50))
             .with_dying(1, [])
             .with_trainer(["soldier"])
@@ -669,7 +684,12 @@ fn register_rising_trainers(app: &mut App) {
     );
     registry.register(
         EntityTypeDef::new("camp")
-            .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(50))
             .with_dying(1, [])
             .with_trainer(["soldier"])

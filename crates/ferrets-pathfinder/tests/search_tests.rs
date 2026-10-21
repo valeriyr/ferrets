@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_pathfinder::{
+    mover_shape::MoverShape,
     nav_grid::NavGrid,
     search::{self, Expansion, Footing},
 };
@@ -36,7 +37,7 @@ fn finds_adjacent_when_start_blocked() {
     // . . . . .   y=3
     // . . . . .   y=4
     let mut grid = utils::grid(5, 5);
-    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
 
     let result = find_through_blocked(&grid, utils::nav(2, 2));
 
@@ -51,7 +52,7 @@ fn through_passable_finds_adjacent_when_start_blocked() {
     // . . . . .   y=3
     // . . . . .   y=4
     let mut grid = utils::grid(5, 5);
-    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
 
     let result = find_through_passable(&grid, utils::nav(2, 2));
 
@@ -71,7 +72,7 @@ fn through_blocked_finds_free_outside_ring() {
     // ThroughBlocked: BFS expands through the ring cells.
     // Pops (3,2) first (direction order); its first neighbor (3,1) is passable.
     let mut grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 1);
-    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
 
     let result = find_through_blocked(&grid, utils::nav(3, 3));
 
@@ -91,7 +92,7 @@ fn through_passable_returns_none_when_enclosed() {
     // ThroughPassable: blocked cells (other than start) are not expanded.
     // The ring cells are enqueued but skipped when popped — no free cell is found.
     let mut grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 1);
-    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
 
     let result = find_through_passable(&grid, utils::nav(3, 3));
 
@@ -113,8 +114,8 @@ fn through_passable_finds_free_through_ring_gap() {
     //
     // ThroughPassable: stops at ring cells, but (4,3) is passable and adjacent → returned.
     let mut grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 1);
-    grid.set_occupied(utils::GROUND, utils::nav(4, 3), false);
-    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(4, 3), false);
+    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
 
     let result = find_through_passable(&grid, utils::nav(3, 3));
 
@@ -127,10 +128,10 @@ fn returns_none_when_entire_grid_blocked() {
     // X X   y=1
     let mut grid = utils::grid(2, 2);
 
-    grid.set_occupied(utils::GROUND, utils::nav(0, 0), true);
-    grid.set_occupied(utils::GROUND, utils::nav(1, 0), true);
-    grid.set_occupied(utils::GROUND, utils::nav(0, 1), true);
-    grid.set_occupied(utils::GROUND, utils::nav(1, 1), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(0, 0), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(1, 0), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(0, 1), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(1, 1), true);
 
     let result = find_through_blocked(&grid, utils::nav(0, 0));
 
@@ -148,12 +149,12 @@ fn layer_mask_filters_obstacles() {
     // . . . . .   y=3
     // . . . . .   y=4
     let mut grid = utils::grid(5, 5);
-    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
 
     // AIR: (2,2) is passable → returns itself.
     let air_result = search::find_nearest_free_pos(
         &grid,
-        utils::AIR,
+        utils::in_air(),
         utils::nav(2, 2),
         Expansion::ThroughBlocked,
     );
@@ -179,9 +180,8 @@ fn placement_returns_free_anchor_cell_first() {
     for footing in [Footing::Free, Footing::Shared] {
         let found = search::find_placement_near(
             &grid,
-            utils::GROUND,
+            utils::on_ground(),
             CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
-            CellSize::ONE,
             8,
             footing,
         );
@@ -202,16 +202,15 @@ fn free_placement_skips_occupied_anchor_where_shared_takes_it() {
     let mut grid = utils::grid(10, 10);
     for y in 3..5 {
         for x in 3..5 {
-            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
 
     let asked = |footing| {
         search::find_placement_near(
             &grid,
-            utils::GROUND,
+            utils::on_ground(),
             CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
-            CellSize::ONE,
             8,
             footing,
         )
@@ -231,17 +230,16 @@ fn placement_requires_whole_spawn_footprint() {
     // the middle whose whole 2×2 footprint is free wins.
     let mut grid = utils::grid(8, 8);
     // Occupy the anchor cell and checker the first ring so no 2×2 fits there.
-    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
     for &(x, y) in &[(2, 2), (4, 2), (2, 4), (4, 4)] {
-        grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
     }
 
     let asked = |footing| {
         search::find_placement_near(
             &grid,
-            utils::GROUND,
+            MoverShape::new(utils::land(), utils::GROUND, CellSize::new(2, 2)),
             CellRect::new(utils::nav(3, 3), CellSize::ONE),
-            CellSize::new(2, 2),
             8,
             footing,
         )
@@ -251,7 +249,7 @@ fn placement_requires_whole_spawn_footprint() {
     for dy in 0..2 {
         for dx in 0..2 {
             assert!(
-                grid.is_passable_by(utils::GROUND, utils::nav(origin.x + dx, origin.y + dy)),
+                !grid.is_occupied_by(utils::GROUND, utils::nav(origin.x + dx, origin.y + dy)),
                 "cell ({dx}, {dy}) of the area found is held by something"
             );
         }
@@ -269,16 +267,15 @@ fn free_placement_gives_up_beyond_max_radius_where_shared_does_not() {
     let mut grid = utils::grid(10, 10);
     for y in 2..6 {
         for x in 2..6 {
-            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
 
     let asked = |footing| {
         search::find_placement_near(
             &grid,
-            utils::GROUND,
+            utils::on_ground(),
             CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
-            CellSize::ONE,
             1,
             footing,
         )
@@ -309,15 +306,14 @@ fn placement_toward_takes_ring_cell_nearest_toward() {
     let mut grid = utils::grid(10, 10);
     for y in 3..5 {
         for x in 3..5 {
-            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
 
     let found = search::find_placement_near_toward(
         &grid,
-        utils::GROUND,
+        utils::on_ground(),
         CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
-        CellSize::ONE,
         8,
         Footing::Free,
         CellRect::new(utils::nav(5, 3), CellSize::ONE),
@@ -334,15 +330,14 @@ fn placement_toward_stays_in_nearest_ring() {
     let mut grid = utils::grid(10, 10);
     for y in 3..5 {
         for x in 3..5 {
-            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
 
     let found = search::find_placement_near_toward(
         &grid,
-        utils::GROUND,
+        utils::on_ground(),
         CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
-        CellSize::ONE,
         8,
         Footing::Free,
         CellRect::new(utils::nav(9, 3), CellSize::ONE),
@@ -428,9 +423,8 @@ fn placements_come_out_in_scan_order() {
     for footing in [Footing::Free, Footing::Shared] {
         let found = search::find_placements_near(
             &grid,
-            utils::GROUND,
+            utils::on_ground(),
             CellRect::new(utils::nav(3, 3), CellSize::ONE),
-            CellSize::ONE,
             8,
             3,
             footing,
@@ -451,9 +445,8 @@ fn placements_never_overlap_each_other() {
     for footing in [Footing::Free, Footing::Shared] {
         let found = search::find_placements_near(
             &grid,
-            utils::GROUND,
+            MoverShape::new(utils::land(), utils::GROUND, CellSize::new(2, 2)),
             CellRect::new(utils::nav(3, 3), CellSize::ONE),
-            CellSize::new(2, 2),
             8,
             2,
             footing,
@@ -472,22 +465,20 @@ fn placements_return_fewer_than_asked_when_room_runs_out() {
     // Everything is held but (2,2) and (0,0), and (1,1) is water. What is held
     // is room for a shared footing and not for a free one; what the terrain
     // refuses is room for neither.
-    let mut grid = utils::grid(5, 5);
+    let mut grid = utils::grid_with_water(5, 5, &[utils::nav(1, 1)]);
     for y in 0..5 {
         for x in 0..5 {
-            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
-    grid.set_occupied(utils::GROUND, utils::nav(2, 2), false);
-    grid.set_occupied(utils::GROUND, utils::nav(0, 0), false);
-    grid.set_terrain_blocked(utils::GROUND, utils::nav(1, 1));
+    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), false);
+    grid.set_occupied_by(utils::GROUND, utils::nav(0, 0), false);
 
     let asked = |footing| {
         search::find_placements_near(
             &grid,
-            utils::GROUND,
+            utils::on_ground(),
             CellRect::new(utils::nav(2, 2), CellSize::ONE),
-            CellSize::ONE,
             8,
             4,
             footing,
@@ -524,16 +515,15 @@ fn free_placements_ring_building_while_shared_lie_under_it() {
     let mut grid = utils::grid(10, 10);
     for y in 4..7 {
         for x in 4..7 {
-            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
 
     let asked = |footing| {
         search::find_placements_near(
             &grid,
-            utils::GROUND,
+            utils::on_ground(),
             CellRect::new(utils::nav(4, 4), CellSize::new(3, 3)),
-            CellSize::ONE,
             8,
             4,
             footing,
@@ -571,9 +561,8 @@ fn placements_stand_about_middle_rather_than_first_corner() {
 
     let found = search::find_placements_near(
         &grid,
-        utils::GROUND,
+        utils::on_ground(),
         CellRect::new(utils::nav(4, 4), CellSize::new(3, 3)),
-        CellSize::ONE,
         8,
         2,
         Footing::Shared,
@@ -592,9 +581,8 @@ fn placement_middle_of_even_footprint_lies_between_its_cells() {
 
     let found = search::find_placements_near(
         &grid,
-        utils::GROUND,
+        utils::on_ground(),
         CellRect::new(utils::nav(3, 3), CellSize::new(4, 4)),
-        CellSize::ONE,
         8,
         4,
         Footing::Shared,
@@ -618,9 +606,8 @@ fn placements_of_none_find_nothing() {
 
     let found = search::find_placements_near(
         &grid,
-        utils::GROUND,
+        utils::on_ground(),
         CellRect::new(utils::nav(2, 2), CellSize::ONE),
-        CellSize::ONE,
         8,
         0,
         Footing::Free,
@@ -637,9 +624,9 @@ fn placements_of_none_find_nothing() {
 //
 
 fn find_through_blocked(grid: &NavGrid, pos: CellPos) -> Option<CellPos> {
-    search::find_nearest_free_pos(grid, utils::GROUND, pos, Expansion::ThroughBlocked)
+    search::find_nearest_free_pos(grid, utils::on_ground(), pos, Expansion::ThroughBlocked)
 }
 
 fn find_through_passable(grid: &NavGrid, pos: CellPos) -> Option<CellPos> {
-    search::find_nearest_free_pos(grid, utils::GROUND, pos, Expansion::ThroughPassable)
+    search::find_nearest_free_pos(grid, utils::on_ground(), pos, Expansion::ThroughPassable)
 }

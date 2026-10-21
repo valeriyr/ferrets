@@ -62,7 +62,7 @@ pub fn find_path(
     if stop_distance == 0
         && CellRect::new(goal, goal_size)
             .cells()
-            .all(|cell| grid.is_occupied_by(shape.mask, cell))
+            .all(|cell| !grid.cell_fits(cell, shape.terrains, shape.layers))
     {
         return None;
     }

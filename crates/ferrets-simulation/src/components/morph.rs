@@ -15,8 +15,8 @@ pub struct MorphReservation {
     /// footprint the entity's own standing claim covers are left under that
     /// claim, and must survive a cancel.
     pub cells: Vec<CellPos>,
-    /// The layers the cells are claimed on — the destination's occupation.
-    pub mask: LayerMask,
+    /// The layers the cells are claimed on — the ones the destination occupies.
+    pub layers: LayerMask,
 }
 
 /// A type change under way on this entity.

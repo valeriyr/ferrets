@@ -32,8 +32,8 @@ fn diagonal_blocked_when_both_adjacent_cardinals_are_walls() {
     // Move (1,1)→(0,2): both adjacent cardinals (0,1) and (1,2) are walls.
     // (0,2) has no other reachable neighbor — result is None.
     let mut grid = utils::grid(3, 3);
-    grid.set_occupied(utils::GROUND, utils::nav(0, 1), true);
-    grid.set_occupied(utils::GROUND, utils::nav(1, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(0, 1), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(1, 2), true);
 
     let path = find_iso(&grid, utils::world(1, 1), utils::world(0, 2), 0);
 
@@ -48,7 +48,7 @@ fn returns_none_for_blocked_goal() {
     // . . . . .   y=3
     // . . . . X   y=4   S = start (0,0), X = blocked goal (4,4)
     let mut grid = utils::grid(5, 5);
-    grid.set_occupied(utils::GROUND, utils::nav(4, 4), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(4, 4), true);
 
     let path = find_iso(&grid, utils::world(0, 0), utils::world(4, 4), 0);
 
@@ -74,7 +74,7 @@ fn empty_path_when_already_at_occupied_goal() {
     // Unit is standing on a cell that became occupied after it moved there.
     // start == goal and the cell is blocked — should return Some([]), not None.
     let mut grid = utils::grid(5, 5);
-    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
 
     let path = find_iso(&grid, utils::world(2, 2), utils::world(2, 2), 0).unwrap();
 
@@ -129,7 +129,7 @@ fn isometric_stop_distance_allows_blocked_goal() {
     // . . . * *   y=3   * = valid stop positions (distance 1)
     // . . . * X   y=4   X = blocked goal (4,4)
     let mut grid = utils::grid(5, 5);
-    grid.set_occupied(utils::GROUND, utils::nav(4, 4), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(4, 4), true);
 
     let path = find_iso(&grid, utils::world(0, 0), utils::world(4, 4), 1).unwrap();
     // Nearest stop position is (3,3) at isometric distance 1 from the blocked goal.
@@ -249,7 +249,7 @@ fn isometric_stops_beside_facing_side_of_wide_footprint() {
     // stopping where it stands.
     let mut grid = utils::grid(10, 10);
     for x in 3..=6 {
-        grid.set_occupied(utils::GROUND, utils::nav(x, 4), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(x, 4), true);
     }
 
     let path = find_iso_footprint(
@@ -336,7 +336,7 @@ fn partly_blocked_footprint_still_admits_walking_in() {
     // standing on any of its cells, so the walk ends on a free one rather than
     // giving up over the one it could never take.
     let mut grid = utils::grid(10, 10);
-    grid.set_occupied(utils::GROUND, utils::nav(4, 4), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(4, 4), true);
 
     let path = find_iso_rect(&grid, utils::world(7, 4), 0).unwrap();
 
@@ -378,7 +378,7 @@ fn isometric_routes_round_wall_to_footprint() {
     let mut grid = utils::grid(10, 10);
     occupy_goal(&mut grid);
     for y in 0..=7 {
-        grid.set_occupied(utils::GROUND, utils::nav(2, y), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(2, y), true);
     }
 
     let path = find_iso_rect(&grid, utils::world(0, 4), 1).unwrap();
@@ -418,7 +418,7 @@ fn wide_shape_refuses_gap_narrow_shape_passes() {
     let mut grid = utils::grid(8, 8);
     for y in 0..8 {
         if y != 3 {
-            grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
         }
     }
 
@@ -466,8 +466,8 @@ fn wide_path_cells_are_anchors_where_whole_footprint_fits() {
     // X X X X X X X X   y=3
     let mut grid = utils::grid(8, 8);
     for x in 0..8 {
-        grid.set_occupied(utils::GROUND, utils::nav(x, 0), true);
-        grid.set_occupied(utils::GROUND, utils::nav(x, 3), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(x, 0), true);
+        grid.set_occupied_by(utils::GROUND, utils::nav(x, 3), true);
     }
     let shape = utils::square_on_ground(2);
 
@@ -597,8 +597,8 @@ fn routes_around_wall() {
     // Isometric cost = 40 (4 × 10, all moves equal).
     // Orthogonal cost = 48 (14+10+10+14, diagonals cost more).
     let mut grid = utils::grid(5, 4);
-    grid.set_occupied(utils::GROUND, utils::nav(2, 1), true);
-    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(2, 1), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
 
     let expected = vec![
         utils::world(1, 0),
@@ -681,7 +681,7 @@ fn layer_mask_filters_obstacles() {
     // . . . . .   y=1
     // . . . . .   y=2
     let mut grid = utils::grid(5, 3);
-    grid.set_occupied(utils::GROUND, utils::nav(2, 0), true);
+    grid.set_occupied_by(utils::GROUND, utils::nav(2, 0), true);
 
     let air_path = astar::find_path(
         &grid,
@@ -887,7 +887,7 @@ const GOAL_SIZE: CellSize = CellSize::new(2, 2);
 fn occupy_goal(grid: &mut NavGrid) {
     for y in GOAL_ORIGIN.1..GOAL_ORIGIN.1 + GOAL_SIZE.height {
         for x in GOAL_ORIGIN.0..GOAL_ORIGIN.0 + GOAL_SIZE.width {
-            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
 }

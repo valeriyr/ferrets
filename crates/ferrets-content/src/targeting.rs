@@ -3,7 +3,7 @@
 //! Nothing here is stored. A weapon names the layers it reaches — a required
 //! declaration on every armed type, because any default aims the weapon
 //! somewhere the author never said — and a victim names the layers it can be
-//! attacked on, defaulting to where it lives. The two are matched by
+//! attacked on, defaulting to the layers it occupies. The two are matched by
 //! intersection: any layer in common is enough.
 //!
 //! Intersection, not containment: a victim answerable on two layers is
@@ -22,7 +22,7 @@ use crate::entity_type_def::EntityTypeDef;
 pub fn targetable(def: &EntityTypeDef) -> LayerMask {
     def.targetable.unwrap_or_else(|| {
         def.location
-            .map_or(LayerMask::EMPTY, |location| location.occupation())
+            .map_or(LayerMask::EMPTY, |location| location.occupies())
     })
 }
 

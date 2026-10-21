@@ -80,7 +80,7 @@ fn app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_tag("armored");
         registry.register(
-            utils::walker("grunt", utils::GROUND)
+            utils::walker("grunt", utils::GROUND_DOMAIN)
                 .with_sight_range(8)
                 .with_pool(Pool::health(50))
                 .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
@@ -88,19 +88,34 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("tank")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(200))
                 .with_armor(3)
                 .with_tags(["armored"]),
         );
         registry.register(
             EntityTypeDef::new("scout")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(200)),
         );
         registry.register(
             EntityTypeDef::new("fortress")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(200))
                 .with_armor(100),
         );

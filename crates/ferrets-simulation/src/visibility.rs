@@ -270,7 +270,7 @@ pub fn sighting_of(
             let standing_on = def
                 .location
                 .expect("validated content stands somewhere")
-                .occupation();
+                .occupies();
             footprint.cells().any(|cell| {
                 fields::detects(world, player, cell, standing_on)
                     || watches::detects(world, player, cell, standing_on)

@@ -15,8 +15,6 @@ use ferrets_simulation::{
     session::{GameSession, elimination_scope::EliminationScope, finish_policy::FinishPolicy},
 };
 
-use utils::{GROUND, GROUND_LAYER};
-
 //
 // ─── Running a recording ──────────────────────────────────────────────────────
 //
@@ -466,10 +464,14 @@ fn lone_base_app() -> App {
     app.add_plugins(ReplayPlugin);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
         registry.register(
             EntityTypeDef::new("base")
-                .with_location(GROUND, CellSize::new(2, 2), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(30))
                 .with_tags(["building"]),
         );
@@ -490,8 +492,8 @@ fn base_app() -> App {
     app.add_plugins(ReplayPlugin);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
-        assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
-        registry.register(utils::walker("soldier", GROUND).with_pool(Pool::health(30)));
+        registry
+            .register(utils::walker("soldier", utils::GROUND_DOMAIN).with_pool(Pool::health(30)));
         registry.validate();
     }
     utils::start_game(&mut app);

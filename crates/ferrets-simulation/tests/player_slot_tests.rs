@@ -102,7 +102,7 @@ fn scenario_casting_environment_seat_panics() {
 /// A map declaring a player seat, an environment seat, and another player
 /// seat, in that id order.
 fn scene_map() -> MapData {
-    let mut map = MapData::new("scene", Projection::Isometric, 8, 8);
+    let mut map = MapData::new("scene", Projection::Isometric, 8, 8, "land");
     map.add_player_slot((1, 1));
     map.add_environment_slot();
     map.add_player_slot((6, 6));

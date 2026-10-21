@@ -230,20 +230,35 @@ fn app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("bones")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Passable,
+                    utils::GROUND,
+                )
                 .with_tags(["remains"])
                 .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(400)),
         );
         registry.register(
             EntityTypeDef::new("wisp_of_ten")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(10))
                 .with_dying(2, utils::leaves("bones")),
         );
         registry.register(
             EntityTypeDef::new("brief_wisp")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::LIFETIME, utils::fixed("9.25")),
         );

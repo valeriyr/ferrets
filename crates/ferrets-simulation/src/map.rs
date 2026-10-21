@@ -10,6 +10,7 @@ use ferrets_pathfinder::{
     mover_shape::MoverShape,
     nav_grid::NavGrid,
     search::{self, Footing},
+    terrain_id::TerrainId,
 };
 
 use ferrets_math::FixedU64;
@@ -17,15 +18,14 @@ use ferrets_physics::body;
 
 use crate::{
     components::location::LocationComponent,
+    entity_def,
     map_data::{MapData, MapSlot, Placement},
     movement_model::MovementModel,
     occupancy::{GridMark, OccupancyClass},
     session::player_id::PlayerId,
 };
 use ferrets_content::{
-    entity_stats::EntityStatId,
-    entity_type_def::EntityTypeDef,
-    location::{LocationDef, Solidity},
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
     registry::ContentRegistry,
 };
 
@@ -53,21 +53,47 @@ pub struct Map {
 
 impl Map {
     /// Builds the live map a [`MapData`] describes: a fresh grid with every
-    /// layer of the registered vocabulary, and each cell blocked on the layers
-    /// its terrain is not passable on. A map declaring no terrain starts fully
-    /// open; entity occupancy composes on top either way.
+    /// layer of the registered vocabulary, and each cell of the terrain the
+    /// map gives it; entity occupancy composes on top.
     ///
     /// Panics if the terrain palette references an unregistered terrain, a cell
     /// indexes past the palette, the cell count does not match the grid, or a
     /// placement starts a pool its type cannot start there.
     pub fn from_data(data: &MapData, registry: &ContentRegistry) -> Self {
-        let mut nav_grid = NavGrid::new(data.width(), data.height());
+        assert_eq!(
+            data.terrain_cells().len(),
+            data.width() as usize * data.height() as usize,
+            "map '{}' terrain must cover every cell",
+            data.name()
+        );
+        let palette: Vec<TerrainId> = data
+            .terrains()
+            .iter()
+            .map(|name| {
+                registry.terrain(name).unwrap_or_else(|| {
+                    panic!("map '{}' uses unregistered terrain '{name}'", data.name())
+                })
+            })
+            .collect();
+        let cells: Vec<TerrainId> = data
+            .terrain_cells()
+            .iter()
+            .enumerate()
+            .map(|(i, &terrain)| {
+                *palette.get(terrain as usize).unwrap_or_else(|| {
+                    panic!(
+                        "map '{}' cell {i} indexes past the terrain palette",
+                        data.name()
+                    )
+                })
+            })
+            .collect();
+        let width = data.width();
+        let mut nav_grid = NavGrid::new(width, data.height(), |pos| {
+            cells[(pos.y * width + pos.x) as usize]
+        });
         for (_, layer) in registry.layers() {
             nav_grid.add_layer(layer);
-        }
-
-        if !data.terrain_cells().is_empty() {
-            Self::seed_terrain(&mut nav_grid, data, registry);
         }
 
         // What a death leaves is laid by the death that leaves it; a map that
@@ -152,41 +178,6 @@ impl Map {
         map
     }
 
-    /// Writes the grid's terrain plane: each cell blocked on the layers its
-    /// terrain leaves impassable.
-    fn seed_terrain(nav_grid: &mut NavGrid, data: &MapData, registry: &ContentRegistry) {
-        assert_eq!(
-            data.terrain_cells().len(),
-            data.width() as usize * data.height() as usize,
-            "map '{}' terrain must cover every cell",
-            data.name()
-        );
-
-        let blocked_per_terrain: Vec<_> = data
-            .terrains()
-            .iter()
-            .map(|name| {
-                let passable = registry.terrain(name).unwrap_or_else(|| {
-                    panic!("map '{}' uses unregistered terrain '{name}'", data.name())
-                });
-                registry.registered_layers() & !passable
-            })
-            .collect();
-
-        for (i, &terrain) in data.terrain_cells().iter().enumerate() {
-            let blocked = *blocked_per_terrain
-                .get(terrain as usize)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "map '{}' cell {i} indexes past the terrain palette",
-                        data.name()
-                    )
-                });
-            let pos = CellPos::new(i as u32 % data.width(), i as u32 / data.width());
-            nav_grid.set_terrain_blocked(blocked, pos);
-        }
-    }
-
     /// Creates a map over `nav_grid` whose hierarchy serves no mover yet.
     pub fn new(
         name: impl Into<String>,
@@ -226,13 +217,14 @@ impl Map {
     /// hierarchy does not serve.
     pub fn assert_serves_movers(&self, registry: &ContentRegistry) {
         for def in registry.entities() {
-            if let Some(shape) = Self::mover_shape(def) {
+            if let Some(shape) = Self::planned_shape(registry, def) {
                 assert!(
                     self.hierarchy.serves(shape),
-                    "map '{}' serves no hierarchy for mover '{}' ({} at {}x{})",
+                    "map '{}' serves no hierarchy for mover '{}' (terrains {}, layers {} at {}x{})",
                     self.name,
                     def.name,
-                    shape.mask,
+                    shape.terrains,
+                    shape.layers,
                     shape.size.width,
                     shape.size.height
                 );
@@ -288,19 +280,19 @@ impl Map {
         &self.nav_grid
     }
 
-    /// Returns `true` if every cell in a footprint of `to` at `placed` is free
-    /// but for what `lifted` marks there.
+    /// Returns `true` if every cell in a footprint of `to` at `placed` is
+    /// on its terrains and free but for what `lifted` marks there.
     pub fn can_place_entity_over_lifted(
         &self,
         placed: &LocationComponent,
-        to: &LocationDef,
+        to: MoverShape,
         lifted: &[GridMark],
     ) -> bool {
-        let mask = to.occupation();
-        CellRect::new(body::anchor(placed.position), to.size())
+        let layers = to.layers;
+        CellRect::new(body::anchor(placed.position), to.size)
             .cells()
             .all(|cell| {
-                if !self.contains(cell) {
+                if !self.nav_grid.is_on_terrains(to.terrains, cell) {
                     return false;
                 }
                 // The layers lifted bodies mark on this cell, plane by plane.
@@ -315,21 +307,20 @@ impl Map {
                     }
                 }
                 if static_lifted == LayerMask::EMPTY && claim_lifted == LayerMask::EMPTY {
-                    return self.nav_grid.is_passable_by(mask, cell);
+                    return !self.nav_grid.is_occupied_by(layers, cell);
                 }
-                // Whatever else is here is terrain, or on a layer or plane the
-                // lifted bodies do not mark.
-                let beyond_static = mask & !static_lifted;
-                let beyond_claim = mask & !claim_lifted;
-                self.nav_grid.is_terrain_passable_by(mask, cell)
-                    && (beyond_static == LayerMask::EMPTY
-                        || self.nav_grid.is_statically_passable_by(beyond_static, cell))
+                // Whatever else is here is on a layer or plane the lifted
+                // bodies do not mark.
+                let beyond_static = layers & !static_lifted;
+                let beyond_claim = layers & !claim_lifted;
+                (beyond_static == LayerMask::EMPTY
+                    || !self.nav_grid.is_statically_occupied_by(beyond_static, cell))
                     && (beyond_claim == LayerMask::EMPTY
                         || !self.nav_grid.is_claimed_by(beyond_claim, cell))
             })
     }
 
-    /// Finds a free position for an entity with `location_def` properties, scanning
+    /// Finds a free position for a body of `shape` and `solidity`, scanning
     /// outward from the rectangle of cells at `origin` with the given `size`.
     ///
     /// Cells are scanned ring by ring in row-major order, so the result is
@@ -338,15 +329,15 @@ impl Map {
         &self,
         origin: CellPos,
         size: CellSize,
-        location_def: &LocationDef,
+        shape: MoverShape,
+        solidity: Solidity,
     ) -> Option<CellPos> {
         search::find_placement_near(
             &self.nav_grid,
-            location_def.occupation(),
+            shape,
             CellRect::new(origin, size),
-            location_def.size(),
             MAX_RADIUS,
-            footing(location_def),
+            footing(solidity),
         )
     }
 
@@ -356,16 +347,16 @@ impl Map {
         &self,
         origin: CellPos,
         size: CellSize,
-        location_def: &LocationDef,
+        shape: MoverShape,
+        solidity: Solidity,
         toward: CellRect,
     ) -> Option<CellPos> {
         search::find_placement_near_toward(
             &self.nav_grid,
-            location_def.occupation(),
+            shape,
             CellRect::new(origin, size),
-            location_def.size(),
             MAX_RADIUS,
-            footing(location_def),
+            footing(solidity),
             toward,
         )
     }
@@ -391,46 +382,52 @@ impl Map {
         )
     }
 
-    /// Finds at most `max_amount` free placements for `location_def`'s footprint
-    /// near the rectangle at `origin`, none overlapping another.
+    /// Finds at most `max_amount` free placements for a body of `shape` and
+    /// `solidity` near the rectangle at `origin`, none overlapping another.
     pub fn find_placements_near(
         &self,
         origin: CellPos,
         size: CellSize,
-        location_def: &LocationDef,
+        shape: MoverShape,
+        solidity: Solidity,
         max_amount: usize,
     ) -> Vec<CellPos> {
         search::find_placements_near(
             &self.nav_grid,
-            location_def.occupation(),
+            shape,
             CellRect::new(origin, size),
-            location_def.size(),
             MAX_RADIUS,
             max_amount,
-            footing(location_def),
+            footing(solidity),
         )
     }
 
-    /// Marks every cell in the entity's footprint as occupied on the plane
+    /// Marks every cell `mark` covers as occupied on its layers, on the plane
     /// its class selects.
-    pub fn place_entity(
-        &mut self,
-        loc: &LocationComponent,
-        location_def: &LocationDef,
-        class: OccupancyClass,
-    ) {
-        self.set_footprint(loc, location_def, class, true);
+    pub fn place(&mut self, mark: GridMark) {
+        self.set_mark(mark, true);
     }
 
-    /// Clears every cell in the entity's footprint on the plane its class
+    /// Clears every cell `mark` covers on its layers, on the plane its class
     /// selects.
-    pub fn displace_entity(
-        &mut self,
-        loc: &LocationComponent,
-        location_def: &LocationDef,
-        class: OccupancyClass,
-    ) {
-        self.set_footprint(loc, location_def, class, false);
+    pub fn displace(&mut self, mark: GridMark) {
+        self.set_mark(mark, false);
+    }
+
+    /// [`place`](Self::place)s `mark` when there is one; a body whose
+    /// solidity claims no cells has none.
+    pub fn place_if_some(&mut self, mark: Option<GridMark>) {
+        if let Some(mark) = mark {
+            self.place(mark);
+        }
+    }
+
+    /// [`displace`](Self::displace)s `mark` when there is one; a body whose
+    /// solidity claims no cells has none.
+    pub fn displace_if_some(&mut self, mark: Option<GridMark>) {
+        if let Some(mark) = mark {
+            self.displace(mark);
+        }
     }
 
     // No mutable grid accessor on purpose: every occupancy write goes
@@ -440,9 +437,9 @@ impl Map {
     /// Writes one cell of the static plane, keeping the hierarchy in sync.
     ///
     /// This is the runtime path for static occupancy that belongs to no
-    /// entity footprint — map fixtures and scripted terrain changes; entity
-    /// footprints go through [`place_entity`](Self::place_entity) and
-    /// [`displace_entity`](Self::displace_entity), which carry their own
+    /// entity footprint — map fixtures and scripted blockers; entity
+    /// footprints go through [`place`](Self::place) and
+    /// [`displace`](Self::displace), which carry their own
     /// bookkeeping through this same write. Valid under both movement
     /// models: unlike the claim plane, the static plane keeps one discipline
     /// everywhere.
@@ -454,19 +451,19 @@ impl Map {
     /// first.
     pub fn set_static_occupied(
         &mut self,
-        mask: impl Into<LayerMask>,
+        layers: impl Into<LayerMask>,
         pos: CellPos,
         occupied: bool,
     ) {
-        let mask = mask.into();
+        let layers = layers.into();
         // Asserted against the static plane alone: this writes only static
         // bits, and a mover's claim over the cell says nothing about them.
         debug_assert!(
-            self.nav_grid.is_statically_occupied_by(mask, pos) != occupied,
+            self.nav_grid.is_statically_occupied_by(layers, pos) != occupied,
             "a static write must flip the cell: blocking needs it free, \
              freeing needs it blocked"
         );
-        self.nav_grid.set_occupied_by(mask, pos, occupied);
+        self.nav_grid.set_occupied_by(layers, pos, occupied);
         self.hierarchy.mark_dirty(pos);
     }
 
@@ -489,34 +486,28 @@ impl Map {
             MovementModel::Continuous => {}
         }
         self.nav_grid.clear_claims();
-        for &(mask, size, anchor) in footprints {
+        for &(layers, size, anchor) in footprints {
             for cell in CellRect::new(anchor, size).cells() {
-                self.nav_grid.set_claimed_by(mask, cell, true);
+                self.nav_grid.set_claimed_by(layers, cell, true);
             }
         }
-        for (mask, cells) in reservations {
+        for (layers, cells) in reservations {
             for &cell in cells {
-                self.nav_grid.set_claimed_by(*mask, cell, true);
+                self.nav_grid.set_claimed_by(*layers, cell, true);
             }
         }
     }
 
-    /// Whether a footprint of `size` could step from the rect at `from` to the
-    /// one at `to`: every cell of the destination the mover does not already
-    /// hold must be free.
+    /// Whether a footprint of `shape` could step from the rect at `from` to
+    /// the one at `to`: every cell of the destination the mover does not
+    /// already hold must be on its terrains and free.
     ///
     /// The mover's own cells are excluded rather than released and re-tested,
     /// because a step of one cell keeps most of its footprint where it was and
     /// would otherwise read its own claim as a blockage.
-    pub fn can_step_footprint(
-        &self,
-        occupation: LayerMask,
-        size: CellSize,
-        from: CellPos,
-        to: CellPos,
-    ) -> bool {
-        Self::entered_cells(size, from, to)
-            .all(|cell| self.nav_grid.is_passable_by(occupation, cell))
+    pub fn can_step_footprint(&self, shape: MoverShape, from: CellPos, to: CellPos) -> bool {
+        Self::entered_cells(shape.size, from, to)
+            .all(|cell| self.nav_grid.cell_fits(cell, shape.terrains, shape.layers))
     }
 
     /// Moves a mover's claim from the footprint at `from` to the one at `to`,
@@ -528,31 +519,25 @@ impl Map {
     ///
     /// See also [`take_claim`](Self::take_claim) for briefly lifting a claim
     /// out of a search's way.
-    pub fn step_claim(
-        &mut self,
-        occupation: LayerMask,
-        size: CellSize,
-        from: CellPos,
-        to: CellPos,
-    ) {
+    pub fn step_claim(&mut self, layers: LayerMask, size: CellSize, from: CellPos, to: CellPos) {
         for cell in Self::entered_cells(size, to, from) {
             debug_assert!(
-                self.nav_grid.is_claimed_by(occupation, cell),
+                self.nav_grid.is_claimed_by(layers, cell),
                 "a crossing must release cells the mover holds"
             );
-            self.nav_grid.set_claimed_by(occupation, cell, false);
+            self.nav_grid.set_claimed_by(layers, cell, false);
         }
         for cell in Self::entered_cells(size, from, to) {
             debug_assert!(
-                !self.nav_grid.is_claimed_by(occupation, cell),
+                !self.nav_grid.is_claimed_by(layers, cell),
                 "a crossing must claim free cells"
             );
-            self.nav_grid.set_claimed_by(occupation, cell, true);
+            self.nav_grid.set_claimed_by(layers, cell, true);
         }
     }
 
     /// Releases the claim on every cell of the `size` footprint at `origin`
-    /// that is held on `mask`, returning exactly the cells released so
+    /// that is held on `layers`, returning exactly the cells released so
     /// [`restore_claim`](Self::restore_claim) can put them back.
     ///
     /// This is how a search stops reading the searcher's own claim as an
@@ -569,24 +554,29 @@ impl Map {
     /// body that moved since legitimately stands off its own claim. Recording
     /// exactly what was flipped keeps the bracket self-inverse either way —
     /// restoring the whole rect would mint claims that never existed.
-    pub fn take_claim(&mut self, mask: LayerMask, origin: CellPos, size: CellSize) -> Vec<CellPos> {
+    pub fn take_claim(
+        &mut self,
+        layers: LayerMask,
+        origin: CellPos,
+        size: CellSize,
+    ) -> Vec<CellPos> {
         let mut held = Vec::new();
         for cell in CellRect::new(origin, size).cells() {
             match self.movement_model {
                 MovementModel::Cell => {
                     debug_assert!(
-                        self.nav_grid.is_claimed_by(mask, cell),
+                        self.nav_grid.is_claimed_by(layers, cell),
                         "a settled claimant's footprint must be fully claimed \
                          under the cell model"
                     );
                 }
                 MovementModel::Continuous => {
-                    if !self.nav_grid.is_claimed_by(mask, cell) {
+                    if !self.nav_grid.is_claimed_by(layers, cell) {
                         continue;
                     }
                 }
             }
-            self.nav_grid.set_claimed_by(mask, cell, false);
+            self.nav_grid.set_claimed_by(layers, cell, false);
             held.push(cell);
         }
         held
@@ -597,18 +587,18 @@ impl Map {
     /// The bracket is exclusive, so the cells must still be free exactly as
     /// the take left them; one found claimed means something wrote into the
     /// bracket.
-    pub fn restore_claim(&mut self, mask: LayerMask, cells: &[CellPos]) {
+    pub fn restore_claim(&mut self, layers: LayerMask, cells: &[CellPos]) {
         for &cell in cells {
             debug_assert!(
-                !self.nav_grid.is_claimed_by(mask, cell),
+                !self.nav_grid.is_claimed_by(layers, cell),
                 "restoring a taken claim must find its cells free"
             );
-            self.nav_grid.set_claimed_by(mask, cell, true);
+            self.nav_grid.set_claimed_by(layers, cell, true);
         }
     }
 
     /// Claims every cell of the `size` footprint at `origin` not already
-    /// claimed on `mask`, returning exactly the cells claimed so
+    /// claimed on `layers`, returning exactly the cells claimed so
     /// [`release_claim`](Self::release_claim) can let them go.
     ///
     /// This is how ground is secured ahead of standing on it: the claims read
@@ -623,14 +613,14 @@ impl Map {
     /// standing claim intact.
     pub fn reserve_claim(
         &mut self,
-        mask: LayerMask,
+        layers: LayerMask,
         origin: CellPos,
         size: CellSize,
     ) -> Vec<CellPos> {
         let mut claimed = Vec::new();
         for cell in CellRect::new(origin, size).cells() {
-            if !self.nav_grid.is_claimed_by(mask, cell) {
-                self.nav_grid.set_claimed_by(mask, cell, true);
+            if !self.nav_grid.is_claimed_by(layers, cell) {
+                self.nav_grid.set_claimed_by(layers, cell, true);
                 claimed.push(cell);
             }
         }
@@ -643,13 +633,13 @@ impl Map {
     /// still be claimed — under the cell model nothing may write over a
     /// reservation, and under the continuous model every rebuild re-asserts
     /// it; one found free means the reservation was clobbered.
-    pub fn release_claim(&mut self, mask: LayerMask, cells: &[CellPos]) {
+    pub fn release_claim(&mut self, layers: LayerMask, cells: &[CellPos]) {
         for &cell in cells {
             debug_assert!(
-                self.nav_grid.is_claimed_by(mask, cell),
+                self.nav_grid.is_claimed_by(layers, cell),
                 "releasing a reservation must find its cells claimed"
             );
-            self.nav_grid.set_claimed_by(mask, cell, false);
+            self.nav_grid.set_claimed_by(layers, cell, false);
         }
     }
 
@@ -668,61 +658,42 @@ impl Map {
         })
     }
 
-    /// Marks or clears every cell in the entity's footprint as occupied based on the `occupied` parameter.
-    /// The footprint is anchored at the cell the position rounds to
-    /// ([`body::anchor`]).
+    /// Marks or clears every cell `mark` covers, as `occupied` says.
     ///
-    /// Static footprints dirty the hierarchy; claims never do. No-op for
-    /// [`Solidity::Passable`] entities — they never claim cells.
-    fn set_footprint(
-        &mut self,
-        loc: &LocationComponent,
-        location_def: &LocationDef,
-        class: OccupancyClass,
-        occupied: bool,
-    ) {
-        if !location_def.solidity().claims_cells() {
-            return;
-        }
-
-        let origin = body::anchor(loc.position);
-        let CellSize { width, height } = location_def.size();
-        for dy in 0..height {
-            for dx in 0..width {
-                let cell = CellPos::new(origin.x + dx, origin.y + dy);
-                match class {
-                    // Solid footprints exclude each other and placement is
-                    // validated against terrain, so the flip the static
-                    // write asserts holds for footprints under both models.
-                    OccupancyClass::Static => {
-                        self.set_static_occupied(location_def.occupation(), cell, occupied);
-                    }
-                    OccupancyClass::Claim => {
-                        // One claimant per cell per layer is the cell
-                        // model's contract; the continuous model rebuilds
-                        // the plane from bodies each tick and legally
-                        // collapses shared cells into one bit — and its
-                        // clears belong to that rebuild alone: a footprint
-                        // release could wipe a neighbor's claim on a shared
-                        // cell mid-tick.
-                        match self.movement_model {
-                            MovementModel::Cell => {
-                                debug_assert!(
-                                    self.nav_grid.is_claimed_by(location_def.occupation(), cell)
-                                        != occupied,
-                                    "a claim write must flip the cell: claiming needs it \
+    /// Static marks dirty the hierarchy; claims never do.
+    fn set_mark(&mut self, mark: GridMark, occupied: bool) {
+        let layers = mark.layers;
+        for cell in mark.footprint.cells() {
+            match mark.class {
+                // Solid footprints exclude each other and placement is
+                // validated against terrain, so the flip the static
+                // write asserts holds for footprints under both models.
+                OccupancyClass::Static => {
+                    self.set_static_occupied(layers, cell, occupied);
+                }
+                OccupancyClass::Claim => {
+                    // One claimant per cell per layer is the cell
+                    // model's contract; the continuous model rebuilds
+                    // the plane from bodies each tick and legally
+                    // collapses shared cells into one bit — and its
+                    // clears belong to that rebuild alone: a footprint
+                    // release could wipe a neighbor's claim on a shared
+                    // cell mid-tick.
+                    match self.movement_model {
+                        MovementModel::Cell => {
+                            debug_assert!(
+                                self.nav_grid.is_claimed_by(layers, cell) != occupied,
+                                "a claim write must flip the cell: claiming needs it \
                                      free, releasing needs it held"
-                                );
-                            }
-                            MovementModel::Continuous => {
-                                if !occupied {
-                                    continue;
-                                }
+                            );
+                        }
+                        MovementModel::Continuous => {
+                            if !occupied {
+                                continue;
                             }
                         }
-                        self.nav_grid
-                            .set_claimed_by(location_def.occupation(), cell, occupied);
                     }
+                    self.nav_grid.set_claimed_by(layers, cell, occupied);
                 }
             }
         }
@@ -732,7 +703,10 @@ impl Map {
     /// the abstractions a map must serve for each of its movers to plan.
     fn mover_shapes(registry: &ContentRegistry) -> Vec<MoverShape> {
         let mut shapes: Vec<MoverShape> = Vec::new();
-        for shape in registry.entities().filter_map(Self::mover_shape) {
+        for shape in registry
+            .entities()
+            .filter_map(|def| Self::planned_shape(registry, def))
+        {
             if !shapes.contains(&shape) {
                 shapes.push(shape);
             }
@@ -741,17 +715,17 @@ impl Map {
     }
 
     /// The shape a type plans with, or `None` for a type that does not move.
-    fn mover_shape(def: &EntityTypeDef) -> Option<MoverShape> {
+    fn planned_shape(registry: &ContentRegistry, def: &EntityTypeDef) -> Option<MoverShape> {
         def.location
             .filter(|_| def.can_move())
-            .map(|location| MoverShape::new(location.occupation(), location.size()))
+            .map(|location| entity_def::mover_shape(registry, &location))
     }
 }
 
-/// The ground a footprint of this definition needs: one that claims its cells
-/// needs them free, one that shares them needs only terrain that allows it.
-fn footing(location_def: &LocationDef) -> Footing {
-    match location_def.solidity() {
+/// The ground a footprint of `solidity` needs: one that claims its cells needs
+/// them free, one that shares them needs only terrain that allows it.
+fn footing(solidity: Solidity) -> Footing {
+    match solidity {
         Solidity::Solid => Footing::Free,
         Solidity::Underfoot | Solidity::Passable => Footing::Shared,
     }

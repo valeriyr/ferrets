@@ -17,8 +17,6 @@ use ferrets_simulation::{
     session::{GameSession, game_speed::GameSpeed},
 };
 
-use utils::{NOMINAL_HZ, NOMINAL_MILLIS};
-
 /// Normal speed: the factor most of these tests measure against.
 const ONE: FixedU64 = FixedU64::ONE;
 
@@ -81,7 +79,7 @@ fn tick_within_its_share_is_not_throttled() {
     // boundary is stated as the share itself rather than as 32.5 ms: fixed-point
     // holds 0.65 to the last bit it has, not to the last decimal.
     assert_eq!(local(fixed("1"), ONE), NO_THROTTLE);
-    assert_eq!(local(NOMINAL_MILLIS * TARGET_LOAD, ONE), NO_THROTTLE);
+    assert_eq!(local(utils::NOMINAL_MILLIS * TARGET_LOAD, ONE), NO_THROTTLE);
 }
 
 #[test]
@@ -89,8 +87,8 @@ fn tick_filling_whole_budget_is_throttled_to_target_share() {
     // Costing the entire budget leaves nothing for whatever the game draws
     // between ticks, so the cadence drops to where the cost is the share again —
     // and a tick costing four budgets drops to a quarter of that.
-    assert_eq!(local(NOMINAL_MILLIS, ONE), TARGET_LOAD);
-    assert_eq!(local(NOMINAL_MILLIS * 4, ONE), TARGET_LOAD / 4);
+    assert_eq!(local(utils::NOMINAL_MILLIS, ONE), TARGET_LOAD);
+    assert_eq!(local(utils::NOMINAL_MILLIS * 4, ONE), TARGET_LOAD / 4);
 }
 
 #[test]
@@ -289,15 +287,15 @@ fn sustainable_factor_reads_tick_cost_against_nominal_budget() {
     // A tick costing a whole nominal tick can be held at the target share of
     // normal speed; twice that at half of it, a quarter of it at four times.
     assert_eq!(
-        ferrets_bevy_plugin::sustainable_factor(NOMINAL_MILLIS, NOMINAL_MILLIS),
+        ferrets_bevy_plugin::sustainable_factor(utils::NOMINAL_MILLIS, utils::NOMINAL_MILLIS),
         TARGET_LOAD
     );
     assert_eq!(
-        ferrets_bevy_plugin::sustainable_factor(NOMINAL_MILLIS * 2, NOMINAL_MILLIS),
+        ferrets_bevy_plugin::sustainable_factor(utils::NOMINAL_MILLIS * 2, utils::NOMINAL_MILLIS),
         TARGET_LOAD / 2,
     );
     assert_eq!(
-        ferrets_bevy_plugin::sustainable_factor(NOMINAL_MILLIS / 4, NOMINAL_MILLIS),
+        ferrets_bevy_plugin::sustainable_factor(utils::NOMINAL_MILLIS / 4, utils::NOMINAL_MILLIS),
         TARGET_LOAD * 4,
     );
 }
@@ -308,8 +306,8 @@ fn sustainable_factor_halves_when_tick_cost_doubles() {
     // about the cadence in force, which a throttle would already have lowered.
     let cost = fixed("20");
     assert_eq!(
-        ferrets_bevy_plugin::sustainable_factor(cost * 2, NOMINAL_MILLIS),
-        ferrets_bevy_plugin::sustainable_factor(cost, NOMINAL_MILLIS) / 2,
+        ferrets_bevy_plugin::sustainable_factor(cost * 2, utils::NOMINAL_MILLIS),
+        ferrets_bevy_plugin::sustainable_factor(cost, utils::NOMINAL_MILLIS) / 2,
     );
 }
 
@@ -511,7 +509,7 @@ fn fixed(value: &str) -> FixedU64 {
 
 /// The budget one tick has at `speed` times the nominal cadence, in milliseconds.
 fn budget(speed: FixedU64) -> FixedU64 {
-    NOMINAL_MILLIS / speed
+    utils::NOMINAL_MILLIS / speed
 }
 
 /// The throttle from this node's own tick cost, with no peers in the picture.
@@ -548,7 +546,7 @@ fn report_capacity(app: &mut App, capacity: FixedU64) {
 fn cadence_app() -> App {
     let mut app = utils::make_app(utils::human_slots(1));
     app.add_plugins(MinimalPlugins);
-    app.insert_resource(Time::<Fixed>::from_hz(NOMINAL_HZ));
+    app.insert_resource(Time::<Fixed>::from_hz(utils::NOMINAL_HZ));
     // Normally the network plugin's; the cadence reads it when peers have
     // reported, and a game without networking simply never fills it.
     app.init_resource::<PeerCapacities>();

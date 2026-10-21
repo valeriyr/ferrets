@@ -246,8 +246,8 @@ struct GhostSprite {
     /// The footprint remembered under the outline, for consumers that draw the
     /// remembered building as cells rather than as a shape.
     size: CellSize,
-    /// The layers the remembered building stood on.
-    occupation: LayerMask,
+    /// The layers the remembered building occupied.
+    layers: LayerMask,
     /// How the remembered building held the cells under it.
     solidity: Solidity,
     shape: GhostShape,
@@ -273,7 +273,7 @@ impl Ghosts {
             .filter(|ghost| ghost.solidity.holds_ground())
             .map(|ghost| {
                 (
-                    ghost.occupation,
+                    ghost.layers,
                     CellRect::new(CellPos::new(ghost.origin.0, ghost.origin.1), ghost.size),
                     ghost.solidity,
                 )
@@ -466,12 +466,12 @@ pub(crate) fn world_point(position: FixedUVec2) -> Vec3 {
 /// and how far its shadow sits below it.
 const AIR_LIFT_PX: f32 = CELL_PX * 0.9;
 
-/// Whether a type flies: it occupies the air *alone*. Something that holds
-/// the air on top of a surface — a fortress tall enough to wall the sky —
-/// stands on that surface and casts no flight shadow.
+/// Whether a type flies: its domain is in the air. Something that holds the
+/// air on top of a surface — a fortress tall enough to wall the sky — is in
+/// that surface's domain and casts no flight shadow.
 fn airborne(registry: &ContentRegistry, def: &EntityTypeDef) -> bool {
     match (registry.layer(map::AIR), def.location) {
-        (Some(air), Some(location)) => location.occupation() == *air,
+        (Some(air), Some(location)) => registry.domain_def(location.domain()).layer() == air,
         _ => false,
     }
 }
@@ -2814,8 +2814,9 @@ fn mounted_at(transform: &Transform, def: &EntityTypeDef, mount: &TurretMount) -
 /// The tile color for a terrain, by content name.
 pub(crate) fn terrain_color(terrain: &str) -> Color {
     match terrain {
-        "grass" => Color::srgb(0.20, 0.34, 0.17),
-        "water" => Color::srgb(0.15, 0.35, 0.6),
+        "land" => Color::srgb(0.20, 0.34, 0.17),
+        "shallow_water" => Color::srgb(0.22, 0.48, 0.62),
+        "deep_water" => Color::srgb(0.15, 0.35, 0.6),
         _ => Color::srgb(0.35, 0.33, 0.30), // unknown terrain — bare dirt
     }
 }
@@ -3149,7 +3150,7 @@ pub fn draw_ghosts(
                     origin: (x, y),
                     center: world_center(location.position, size).truncate(),
                     size,
-                    occupation: location_def.occupation(),
+                    layers: location_def.occupies(),
                     solidity: location_def.solidity(),
                     shape: ghost_shape(info.type_name(), size),
                 },

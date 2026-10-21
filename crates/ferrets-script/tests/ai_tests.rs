@@ -8,6 +8,7 @@ use ferrets_content::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     build::BuilderAttendance,
+    domain::DomainDef,
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -25,11 +26,11 @@ use ferrets_content::{
     },
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
+    terrains::Terrains,
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::nav_grid::LayerId;
 use ferrets_script::{
     ai::{
         AiRuntime,
@@ -945,7 +946,9 @@ fn cell(x: u32, y: u32) -> FixedUVec2 {
 /// `lab` type where a type is needed.
 fn research_content() -> (ContentView, ResearchId) {
     let mut registry = ContentRegistry::default();
-    registry.register_layer("ground");
+    let ground = registry.register_layer("ground");
+    registry.register_terrain("land");
+    registry.register_domain("ground", DomainDef::new(ground, Terrains::Any));
     registry.register_resource("gold");
     let smithing = registry.register_research(
         "smithing",
@@ -1025,7 +1028,12 @@ fn research_content() -> (ContentView, ResearchId) {
     registry.register_tag("workshop");
     registry.register(
         EntityTypeDef::new("lab")
-            .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_tags(["workshop"])
             .with_researcher([smithing])
             .with_pool(Pool::builtin(
@@ -1042,7 +1050,12 @@ fn research_content() -> (ContentView, ResearchId) {
     // list naming all four named kinds, which is what a script reads them off.
     registry.register(
         EntityTypeDef::new("relay")
-            .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(10))
             .with_price([("gold", 10)])
             .with_rise(4, utils::rise_initial_pools(&[PoolId::HEALTH]))
@@ -1056,7 +1069,12 @@ fn research_content() -> (ContentView, ResearchId) {
     );
     registry.register(
         EntityTypeDef::new("hub")
-            .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(20))
             .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
             .with_builder(
@@ -1075,7 +1093,12 @@ fn research_content() -> (ContentView, ResearchId) {
     );
     registry.register(
         EntityTypeDef::new("outpost")
-            .with_location(LayerId::new(1), CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(20))
             .with_requires([Requirement::Any(vec![
                 Requirement::EntityType("lab".to_string()),

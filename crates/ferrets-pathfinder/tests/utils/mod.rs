@@ -7,10 +7,17 @@ use ferrets_pathfinder::{
     hierarchy::NavHierarchy,
     mover_shape::MoverShape,
     nav_grid::{LayerId, NavGrid},
+    terrain_id::TerrainId,
+    terrain_mask::TerrainMask,
 };
 
 pub const GROUND: LayerId = LayerId::new(1);
 pub const AIR: LayerId = LayerId::new(2);
+
+/// The terrain every test grid starts as.
+pub const LAND: TerrainId = TerrainId::new(1);
+/// A second terrain, for cells a land shape may not enter.
+pub const WATER: TerrainId = TerrainId::new(2);
 
 pub fn world(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
@@ -20,9 +27,18 @@ pub fn nav(x: u32, y: u32) -> CellPos {
     CellPos::new(x, y)
 }
 
-/// Creates a grid of the given size with GROUND and AIR layers, all cells passable.
+/// Creates a grid of the given size with GROUND and AIR layers, every cell
+/// land and free.
 pub fn grid(width: u32, height: u32) -> NavGrid {
-    let mut grid = NavGrid::new(width, height);
+    grid_with_water(width, height, &[])
+}
+
+/// Creates a grid like [`grid`] whose `water` cells are water rather than
+/// land.
+pub fn grid_with_water(width: u32, height: u32, water: &[CellPos]) -> NavGrid {
+    let mut grid = NavGrid::new(width, height, |cell| {
+        if water.contains(&cell) { WATER } else { LAND }
+    });
 
     grid.add_layer(GROUND);
     grid.add_layer(AIR);
@@ -49,7 +65,7 @@ pub fn hollow_ring_grid(grid_size: u32, center: CellPos, radius: u32) -> NavGrid
             let y = center.y as i32 + dy;
 
             if x >= 0 && y >= 0 {
-                grid.set_occupied(GROUND, nav(x as u32, y as u32), true);
+                grid.set_occupied_by(GROUND, nav(x as u32, y as u32), true);
             }
         }
     }
@@ -57,19 +73,29 @@ pub fn hollow_ring_grid(grid_size: u32, center: CellPos, radius: u32) -> NavGrid
     grid
 }
 
-/// A single-cell shape on the GROUND layer — what most tests route.
+/// The terrains a land shape may be over.
+pub fn land() -> TerrainMask {
+    TerrainMask::from(LAND)
+}
+
+/// Every terrain the test grids use.
+pub fn every_terrain() -> TerrainMask {
+    TerrainMask::from(LAND) | WATER
+}
+
+/// A single-cell shape over land on the GROUND layer — what most tests route.
 pub fn on_ground() -> MoverShape {
-    MoverShape::point(GROUND)
+    MoverShape::point(land(), GROUND)
 }
 
-/// A single-cell shape on the AIR layer.
+/// A single-cell shape over every terrain on the AIR layer.
 pub fn in_air() -> MoverShape {
-    MoverShape::point(AIR)
+    MoverShape::point(every_terrain(), AIR)
 }
 
-/// A `size`-by-`size` shape on the GROUND layer, for clearance tests.
+/// A `size`-by-`size` shape over land on the GROUND layer, for clearance tests.
 pub fn square_on_ground(size: u32) -> MoverShape {
-    MoverShape::new(GROUND, CellSize::new(size, size))
+    MoverShape::new(land(), GROUND, CellSize::new(size, size))
 }
 
 /// Builds the hierarchy for a single-cell GROUND mover only.

@@ -12,6 +12,7 @@ use ferrets_content::{
     build::BuilderAttendance,
     cost::Cost,
     detection::Detection,
+    domain::DomainDef,
     dying::{Bequest, LeftBy},
     entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
@@ -19,8 +20,8 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        Emission, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldId, FieldLayer,
-        FieldPlacement, FieldSourceDef, FieldVision,
+        Emission, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldId, FieldPlacement,
+        FieldSourceDef, FieldVision,
     },
     gateway::{GatewayDef, Joins},
     holder::Holder,
@@ -47,13 +48,14 @@ use ferrets_content::{
     splash::SplashDef,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp, PlayerModifier},
+    terrains::Terrains,
     transport::TransporterDef,
     tunnel::{Passage, TunnelDef},
     turret::{TurretDef, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask, terrain_mask::TerrainMask};
 use mlua::{Lua, Table, Value};
 
 use crate::{content, error::ScriptError};
@@ -136,8 +138,17 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
     let terrains = Rc::clone(registry);
     globals.set(
         "define_terrain",
-        lua.create_function(move |_, (name, passable): (String, u32)| {
-            terrains.borrow_mut().register_terrain(name, passable);
+        lua.create_function(move |_, name: String| {
+            Ok(*terrains.borrow_mut().register_terrain(name))
+        })?,
+    )?;
+
+    let domains = Rc::clone(registry);
+    globals.set(
+        "define_domain",
+        lua.create_function(move |_, (name, table): (String, Table)| {
+            let domain = parse_domain(&table).map_err(mlua::Error::external)?;
+            domains.borrow_mut().register_domain(name, domain);
             Ok(())
         })?,
     )?;
@@ -284,12 +295,22 @@ fn build_entity(
     }
 
     let location = required::<Table>(table, "location")?;
-    let occupation = required::<u32>(&location, "occupation")?;
+    let domain = required::<String>(&location, "domain")?;
+    let domain = registry
+        .domain(&domain)
+        .ok_or_else(|| ScriptError::ContentError(format!("domain '{domain}' is not defined")))?;
     let solidity = required::<String>(&location, "solidity")?;
+    // A body occupies its domain's layer, and any further layers its
+    // location names.
+    let occupies = match optional::<u32>(&location, "occupies")? {
+        None => LayerMask::from(registry.domain_def(domain).layer()),
+        Some(layers) => LayerMask::from(layers),
+    };
     def = def.with_location(
-        occupation,
+        domain,
         cell_size(&location)?,
         content::solidity(&solidity)?,
+        occupies,
     );
 
     if let Some(stats) = optional::<Table>(table, "stats")? {
@@ -2013,35 +2034,46 @@ fn parse_joins(gateway: &Table, registry: &ContentRegistry) -> crate::Result<Joi
     }
 }
 
-/// Reads a field definition: the `layer` its cells lie on — `"anywhere"`
-/// or the mask they must be passable on — its
-/// `decay` — `"instant"`, `"never"`, or a `{ cycle = ticks }` table — its
+/// Reads a field definition: the `terrains` its cells lie on — `"any"` or a
+/// terrain mask — its `decay` — `"instant"`, `"never"`, or a `{ cycle = ticks }` table — its
 /// `vision` — `"dark"` unless declared, or `"watched"` to put covered cells in
 /// sight of whoever covers them — and its `detection`, the layer mask of what
 /// it reveals, blind unless declared (a watch's `detection` reads the same).
 fn parse_field(table: &Table) -> crate::Result<FieldDef> {
-    let layer = parse_field_layer(required::<Value>(table, "layer")?)?;
+    let terrains = parse_terrains(&required::<Value>(table, "terrains")?)?;
     let decay = parse_field_decay(required::<Value>(table, "decay")?)?;
     let vision = match optional::<String>(table, "vision")? {
         Some(name) => content::field_vision(&name)?,
         None => FieldVision::Dark,
     };
-    Ok(FieldDef::new(layer, decay, vision, parse_detection(table)?))
+    Ok(FieldDef::new(
+        terrains,
+        decay,
+        vision,
+        parse_detection(table)?,
+    ))
 }
 
-/// Reads where a field lies: `"anywhere"`, or the layer mask its cells must
-/// be passable on.
-fn parse_field_layer(value: Value) -> crate::Result<FieldLayer> {
-    match &value {
-        Value::String(name) if name == "anywhere" => Ok(FieldLayer::Anywhere),
-        Value::Integer(layers) => Ok(FieldLayer::Passable(LayerMask::from(
-            u32::try_from(*layers).map_err(|_| {
-                content::unexpected("field layer", &["a layer mask"], &layers.to_string())
+/// Reads a domain: the `layer` its bodies are in and the `terrains`
+/// they may be over.
+fn parse_domain(table: &Table) -> crate::Result<DomainDef> {
+    let layer = LayerId::from(required::<u32>(table, "layer")?);
+    let terrains = parse_terrains(&required::<Value>(table, "terrains")?)?;
+    Ok(DomainDef::new(layer, terrains))
+}
+
+/// Reads a terrain set: `"any"`, or a terrain mask.
+fn parse_terrains(value: &Value) -> crate::Result<Terrains> {
+    match value {
+        Value::String(any) if any == "any" => Ok(Terrains::Any),
+        Value::Integer(terrains) => Ok(Terrains::Only(TerrainMask::from(
+            u32::try_from(*terrains).map_err(|_| {
+                content::unexpected("terrains", &["a terrain mask"], &terrains.to_string())
             })?,
         ))),
         other => Err(content::unexpected(
-            "field layer",
-            &["'anywhere'", "a layer mask"],
+            "terrains",
+            &["'any'", "a terrain mask"],
             &found(other),
         )),
     }

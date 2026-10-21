@@ -27,7 +27,7 @@ use ferrets_content::{
 
 /// One field's cells.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FieldLayer {
+struct FieldCells {
     /// Who covers each cell, row-major.
     covered: Vec<PlayerMask>,
     /// Who sustains each cell this tick, row-major.
@@ -38,14 +38,14 @@ struct FieldLayer {
 
 /// Every field's coverage over the map, indexed by [`FieldId`] then cell.
 ///
-/// Layers come into being the first time a field is written, so the grid
+/// A field's cells come into being the first time it is written, so the grid
 /// follows whatever fields the content registers; a field never written reads
 /// as clear everywhere.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct FieldGrid {
     width: u32,
     height: u32,
-    fields: Vec<FieldLayer>,
+    fields: Vec<FieldCells>,
 }
 
 impl FieldGrid {
@@ -58,16 +58,16 @@ impl FieldGrid {
         }
     }
 
-    /// The layer of `field`, if it has been written.
-    fn layer(&self, field: FieldId) -> Option<&FieldLayer> {
+    /// The cells of `field`, if it has been written.
+    fn cells_of(&self, field: FieldId) -> Option<&FieldCells> {
         self.fields.get(field.index())
     }
 
-    /// The layer of `field`, brought into being if it has not been.
-    fn layer_mut(&mut self, field: FieldId) -> &mut FieldLayer {
+    /// The cells of `field`, brought into being if they have not been.
+    fn cells_of_mut(&mut self, field: FieldId) -> &mut FieldCells {
         let len = (self.width * self.height) as usize;
         while self.fields.len() <= field.index() {
-            self.fields.push(FieldLayer {
+            self.fields.push(FieldCells {
                 covered: vec![PlayerMask::EMPTY; len],
                 sustained: vec![PlayerMask::EMPTY; len],
                 decay_countdown: 0,
@@ -95,8 +95,8 @@ impl FieldGrid {
     /// Who covers `pos` in `field`.
     pub fn covered(&self, field: FieldId, pos: CellPos) -> PlayerMask {
         let index = self.index(pos);
-        self.layer(field)
-            .map_or(PlayerMask::EMPTY, |layer| layer.covered[index])
+        self.cells_of(field)
+            .map_or(PlayerMask::EMPTY, |cells| cells.covered[index])
     }
 
     /// Whether `pos` in `field` is covered by someone satisfying `of` judged
@@ -116,8 +116,8 @@ impl FieldGrid {
     /// never written.
     pub fn cells(&self, field: FieldId) -> impl Iterator<Item = (CellPos, PlayerMask)> + '_ {
         let width = self.width;
-        self.layer(field)
-            .map(|layer| layer.covered.as_slice())
+        self.cells_of(field)
+            .map(|cells| cells.covered.as_slice())
             .unwrap_or(&[])
             .iter()
             .enumerate()
@@ -127,31 +127,31 @@ impl FieldGrid {
     /// Adds `player` to the cover of `pos` in `field`.
     pub(crate) fn cover(&mut self, field: FieldId, pos: CellPos, player: PlayerId) {
         let index = self.index(pos);
-        self.layer_mut(field).covered[index] |= PlayerMask::of(player);
+        self.cells_of_mut(field).covered[index] |= PlayerMask::of(player);
     }
 
     /// Removes every player not sustaining `pos` in `field` from its cover.
     pub(crate) fn clear_unsustained(&mut self, field: FieldId, pos: CellPos) {
         let index = self.index(pos);
-        let layer = self.layer_mut(field);
-        layer.covered[index] &= layer.sustained[index];
+        let cells = self.cells_of_mut(field);
+        cells.covered[index] &= cells.sustained[index];
     }
 
     /// Forgets last tick's sustain of `field`.
     pub(crate) fn reset_sustained(&mut self, field: FieldId) {
-        self.layer_mut(field).sustained.fill(PlayerMask::EMPTY);
+        self.cells_of_mut(field).sustained.fill(PlayerMask::EMPTY);
     }
 
     /// Records that `player` sustains `pos` in `field` this tick.
     pub(crate) fn sustain(&mut self, field: FieldId, pos: CellPos, player: PlayerId) {
         let index = self.index(pos);
-        self.layer_mut(field).sustained[index] |= PlayerMask::of(player);
+        self.cells_of_mut(field).sustained[index] |= PlayerMask::of(player);
     }
 
     /// Adds every sustaining player to the cover of every cell of `field`.
     pub(crate) fn grow(&mut self, field: FieldId) {
-        let layer = self.layer_mut(field);
-        for (covered, &sustained) in layer.covered.iter_mut().zip(&layer.sustained) {
+        let cells = self.cells_of_mut(field);
+        for (covered, &sustained) in cells.covered.iter_mut().zip(&cells.sustained) {
             *covered |= sustained;
         }
     }
@@ -159,8 +159,8 @@ impl FieldGrid {
     /// Removes every unsustained player from the cover of every cell of
     /// `field`.
     pub(crate) fn clear_all_unsustained(&mut self, field: FieldId) {
-        let layer = self.layer_mut(field);
-        for (covered, &sustained) in layer.covered.iter_mut().zip(&layer.sustained) {
+        let cells = self.cells_of_mut(field);
+        for (covered, &sustained) in cells.covered.iter_mut().zip(&cells.sustained) {
             *covered &= sustained;
         }
     }
@@ -170,10 +170,10 @@ impl FieldGrid {
     /// four-neighbour the player does not cover, or on the map's border.
     pub(crate) fn recede(&mut self, field: FieldId) {
         let (width, height) = (self.width as usize, self.height as usize);
-        let layer = self.layer_mut(field);
-        let snapshot = layer.covered.clone();
-        for (index, covered) in layer.covered.iter_mut().enumerate() {
-            let unsustained = snapshot[index] & !layer.sustained[index];
+        let cells = self.cells_of_mut(field);
+        let snapshot = cells.covered.clone();
+        for (index, covered) in cells.covered.iter_mut().enumerate() {
+            let unsustained = snapshot[index] & !cells.sustained[index];
             if unsustained.is_empty() {
                 continue;
             }
@@ -198,12 +198,12 @@ impl FieldGrid {
     /// Ticks the recession countdown of `field`: returns `true` when a step
     /// is due and rearms the countdown to `cycle`.
     pub(crate) fn decay_due(&mut self, field: FieldId, cycle: u32) -> bool {
-        let layer = self.layer_mut(field);
-        if layer.decay_countdown == 0 {
-            layer.decay_countdown = cycle;
+        let cells = self.cells_of_mut(field);
+        if cells.decay_countdown == 0 {
+            cells.decay_countdown = cycle;
         }
-        layer.decay_countdown -= 1;
-        layer.decay_countdown == 0
+        cells.decay_countdown -= 1;
+        cells.decay_countdown == 0
     }
 
     fn index(&self, pos: CellPos) -> usize {

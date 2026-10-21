@@ -11,8 +11,8 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{
-        Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldLayer,
-        FieldPlacement, FieldSourceDef, FieldVision,
+        Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldPlacement,
+        FieldSourceDef, FieldVision,
     },
     kinds::Kinds,
     landing::Landing,
@@ -30,6 +30,7 @@ use ferrets_content::{
     },
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
+    terrains::Terrains,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
@@ -1147,30 +1148,50 @@ fn app() -> App {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register(
             EntityTypeDef::new("corpse")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Passable,
+                    utils::GROUND,
+                )
                 .with_tags(["remains"])
                 .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
         );
         registry.register(
             EntityTypeDef::new("skeleton")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20)),
         );
         registry.register(
             EntityTypeDef::new("soldier")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(30))
                 .with_dying(2, utils::leaves("corpse")),
         );
         registry.register(
             EntityTypeDef::new("colossus")
-                .with_location(utils::GROUND, CellSize::new(40, 40), Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(40, 40),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20)),
         );
         let blight = registry.register_field(
             "blight",
             FieldDef::new(
-                FieldLayer::Passable(utils::GROUND.into()),
+                Terrains::Only(utils::LAND.into()),
                 FieldDecay::Never,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -1178,13 +1199,23 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("ghoul")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_field_placement([FieldPlacement::Forbids { field: blight }]),
         );
         registry.register(
             EntityTypeDef::new("warden")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_stat(EntityStatId::SUPPLY_COST, FixedU64::from_num(2)),
         );
@@ -1477,7 +1508,7 @@ fn app() -> App {
             },
         );
         registry.register(
-            utils::walker("runner", utils::GROUND)
+            utils::walker("runner", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(30))
                 .with_sight_range(20),
         );
@@ -1522,7 +1553,7 @@ fn app() -> App {
             Reach::Wherever,
         );
         registry.register(
-            utils::walker("necromancer", utils::GROUND)
+            utils::walker("necromancer", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(40))
                 .with_sight_range(20)
                 .with_pool(Pool::energy(100))
@@ -1546,7 +1577,12 @@ fn app() -> App {
         // A mound rises over ten ticks of its own work.
         registry.register(
             EntityTypeDef::new("mound")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_rise(
@@ -1587,7 +1623,7 @@ fn app() -> App {
         let glow = registry.register_field(
             "glow",
             FieldDef::new(
-                FieldLayer::Passable(utils::GROUND.into()),
+                Terrains::Only(utils::LAND.into()),
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -1595,7 +1631,12 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("lantern")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_field_sources([FieldSourceDef::new(
@@ -1609,12 +1650,22 @@ fn app() -> App {
         // A spire rises over a seam of gold, which it covers.
         registry.register(
             EntityTypeDef::new("seam")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_resource_source("gold", DepletionPolicy::Destroy),
         );
         registry.register(
             EntityTypeDef::new("spire")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_rise(
@@ -1641,12 +1692,22 @@ fn app() -> App {
         // A well rises over a spring, which holds no ground of its own.
         registry.register(
             EntityTypeDef::new("spring")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Passable)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Passable,
+                    utils::GROUND,
+                )
                 .with_resource_source("gold", DepletionPolicy::Destroy),
         );
         registry.register(
             EntityTypeDef::new("well")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(20))
                 .with_dying(1, [])
                 .with_rise(
@@ -1689,7 +1750,12 @@ fn app() -> App {
         );
         registry.register(
             EntityTypeDef::new("acolyte")
-                .with_location(utils::GROUND, CellSize::ONE, Solidity::Solid)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
                 .with_pool(Pool::health(40))
                 .with_sight_range(20)
                 .with_pool(Pool::energy(100))

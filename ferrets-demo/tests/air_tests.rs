@@ -2,7 +2,7 @@
 //! may cross, where it may come to rest, and who it shares a cell with.
 //!
 //! These run on the 96×96 demo map rather than the built-in mission, because
-//! the mission's map is 32×32 and all grass — it has no water to fly over.
+//! the mission's map is 32×32 and all land — it has no water to fly over.
 
 mod utils;
 
@@ -39,7 +39,7 @@ fn flier_crosses_river_and_rests_on_water() {
     .expect("the flier spawns over clear ground");
 
     // The river splits the map for anything on foot, and this stretch has no
-    // ford: a walker would have to detour to y 18..20. The flier goes straight
+    // ford: a walker would have to detour to y 17..=21. The flier goes straight
     // over and stops on the water.
     app.world_mut()
         .entity_mut(flier)
@@ -77,7 +77,7 @@ fn walker_cannot_stand_where_flier_rests() {
 
     // The same cell the flier settles on above: proof that the destination is
     // genuinely closed to the ground layer, so the flight test is not just
-    // walking across open grass.
+    // walking across open land.
     assert!(
         utils::create_entity(
             app.world_mut(),
@@ -91,7 +91,7 @@ fn walker_cannot_stand_where_flier_rests() {
 }
 
 //
-// ─── Multi-layer occupation: what is tall enough to be in the way ──────────────
+// ─── Occupying several layers: what is tall enough to be in the way ───────────
 //
 
 #[test]
@@ -111,11 +111,11 @@ fn ground_building_does_not_block_flight() {
     for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
         let footprint = CellPos::new(CLEAR_GROUND.0 + dx, CLEAR_GROUND.1 + dy);
         assert!(
-            !live.nav_grid().is_passable(ground, footprint),
+            live.nav_grid().is_occupied_by(ground, footprint),
             "the farm does not hold its own ground at {footprint:?}"
         );
         assert!(
-            live.nav_grid().is_passable(air, footprint),
+            !live.nav_grid().is_occupied_by(air, footprint),
             "the farm closed the air at {footprint:?}, but it occupies the ground alone"
         );
     }
@@ -125,8 +125,9 @@ fn ground_building_does_not_block_flight() {
 fn tall_building_blocks_flight() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
 
-    // The fortress holds the water beneath it and the air above it at once, so
-    // its footprint is closed to ships and fliers alike.
+    // The fortress holds the ground layer under it, over deep water, and the
+    // air above it at once, so its footprint is closed to ships and fliers
+    // alike.
     let origin = (46, 46);
     utils::create_entity(
         app.world_mut(),
@@ -134,11 +135,11 @@ fn tall_building_blocks_flight() {
         utils::at_cell(origin.0, origin.1),
         None,
     )
-    .expect("the fortress stands on open water");
+    .expect("the fortress stands on deep water");
 
     let world = app.world();
     let registry = world.resource::<ContentRegistry>();
-    let water = registry.layer(map::WATER).unwrap();
+    let ground = registry.layer(map::GROUND).unwrap();
     let air = registry.layer(map::AIR).unwrap();
     let live = world.resource::<Map>();
 
@@ -146,11 +147,11 @@ fn tall_building_blocks_flight() {
         for dx in 0..3 {
             let footprint = CellPos::new(origin.0 + dx, origin.1 + dy);
             assert!(
-                !live.nav_grid().is_passable(water, footprint),
-                "the fortress does not hold the water at {footprint:?}"
+                live.nav_grid().is_occupied_by(ground, footprint),
+                "the fortress does not hold the ground layer at {footprint:?}"
             );
             assert!(
-                !live.nav_grid().is_passable(air, footprint),
+                live.nav_grid().is_occupied_by(air, footprint),
                 "the fortress left the air open at {footprint:?}, so nothing on the map \
                  obstructs flight"
             );
@@ -237,7 +238,7 @@ fn melee_ignores_flier_overhead() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
 
     // A grunt with a flier parked inside its acquire range. Its axe reaches the
-    // ground and the water, so the flier is not a target and the grunt must
+    // ground layer alone, so the flier is not a target and the grunt must
     // never start swinging at it.
     let (grunt, _) = utils::create_entity(
         app.world_mut(),
@@ -699,7 +700,7 @@ fn zeppelin_wreck_takes_passengers_with_it() {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
-/// A grass cell near a start point. The demo-map app places nothing, so the
+/// A land cell near a start point. The demo-map app places nothing, so the
 /// only thing that can occupy it is what a test spawns.
 const CLEAR_GROUND: (u32, u32) = (16, 12);
 /// A river cell: water, and outside both fords, so nothing on foot can stand

@@ -25,8 +25,6 @@ use ferrets_simulation::{
     spawn,
 };
 
-use utils::GROUND;
-
 #[test]
 fn last_standing_wins_when_only_opponent_base_is_destroyed() {
     let (mut app, bases) = bases_app(&[None, None]);
@@ -530,14 +528,24 @@ fn register_bases_content(app: &mut App) {
     let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
     registry.register(
         EntityTypeDef::new("base")
-            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(30))
             .with_dying(2, [])
             .with_tags(["building"]),
     );
     registry.register(
         EntityTypeDef::new("soldier")
-            .with_location(GROUND, CellSize::ONE, Solidity::Solid)
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::ONE,
+                Solidity::Solid,
+                utils::GROUND,
+            )
             .with_pool(Pool::health(30))
             .with_dying(2, []),
     );

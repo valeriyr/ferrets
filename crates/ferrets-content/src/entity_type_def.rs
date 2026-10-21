@@ -15,6 +15,7 @@ use crate::{
     brood::{BreederDef, BroodlingDef, OrphanFate},
     build::{BuilderAttendance, BuilderDef},
     concealment::Concealment,
+    domain::DomainId,
     dying::{Bequest, DyingDef},
     entity_buffs::EntityBuffId,
     entity_stats::EntityStatId,
@@ -508,21 +509,19 @@ impl EntityTypeDef {
         self
     }
 
-    /// Sets the navigation and footprint properties: the nav-layer occupation,
-    /// the footprint size in grid cells, and whether instances claim the cells
-    /// they stand on.
+    /// Sets the navigation and footprint properties: the domain, the footprint
+    /// size in grid cells, whether instances claim the cells they stand on,
+    /// and the layers the footprint occupies.
     ///
-    /// The occupation layers must be registered before this type — see
-    /// [`ContentRegistry::register`](crate::registry::ContentRegistry::register).
-    ///
-    /// Panics if `occupation` is empty or `size` has a zero dimension.
+    /// Panics if `occupies` is empty or `size` has a zero dimension.
     pub fn with_location(
         mut self,
-        occupation: impl Into<LayerMask>,
+        domain: DomainId,
         size: CellSize,
         solidity: Solidity,
+        occupies: impl Into<LayerMask>,
     ) -> Self {
-        self.location = Some(LocationDef::new(occupation, size, solidity));
+        self.location = Some(LocationDef::new(domain, size, solidity, occupies));
         self
     }
 
