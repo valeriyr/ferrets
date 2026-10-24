@@ -30,7 +30,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     layer_id::LayerId,
     layer_level::LayerLevel,

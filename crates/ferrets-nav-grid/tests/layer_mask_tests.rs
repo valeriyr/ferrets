@@ -1,4 +1,6 @@
-use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
+//! Layer masks: construction and the bit operations over them.
+
+use ferrets_nav_grid::{layer_id::LayerId, layer_mask::LayerMask};
 
 //
 // ─── Constants ────────────────────────────────────────────────────────────────

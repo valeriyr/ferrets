@@ -1,7 +1,7 @@
 //! Content-defined location property struct and its footprint solidity.
 
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::domain::DomainId;
 

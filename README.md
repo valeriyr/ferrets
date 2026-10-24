@@ -22,7 +22,7 @@
 
 **Scripted content and AI** — Game content — units, buildings, terrain, stats, buffs, skills, projectiles — is defined in Lua and loaded through a scripting seam that keeps the simulation independent of the scripting runtime. AI players are Lua scripts too: they observe an integer-only view of the world and issue the same commands a human player would.
 
-**Pathfinding** — Movement runs on a deterministic grid-based pathfinder over a navigation grid seeded from terrain and building occupancy.
+**Pathfinding** — Movement runs on a deterministic hierarchical pathfinder over a navigation grid: terrain per cell, content-declared layers with their own levels, ramps and cliffs, and the footprints standing on them.
 
 **Replays** — Every session is streamed to a replay file as it runs, so a recording survives a crash. Playback feeds the recorded commands back through the simulation, and embedded checksums verify the replay stays in sync while it plays.
 
@@ -49,6 +49,7 @@ crates/
 ├── ferrets-content      Content vocabulary and registry for the game engine
 ├── ferrets-geometry     Cell-grid geometry and the projection distance metrics
 ├── ferrets-math         Fixed-point scalars, vectors, rectangles and angles
+├── ferrets-nav-grid     Navigation grid — terrain, layers with their levels and slopes, occupancy
 ├── ferrets-network      Lockstep P2P networking for deterministic multiplayer
 ├── ferrets-pathfinder   Deterministic RTS pathfinding
 ├── ferrets-physics      Contact resolution for continuous-model unit bodies

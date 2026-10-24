@@ -3,7 +3,7 @@
 
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid};
+use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
 
 use crate::body;
 

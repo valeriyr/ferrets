@@ -6,16 +6,18 @@ use bevy_ecs::prelude::*;
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
-use ferrets_pathfinder::{
-    hierarchy::{DEFAULT_CLUSTER_SIZE, NavHierarchy},
+use ferrets_nav_grid::{
     layer_id::LayerId,
     layer_level::LayerLevel,
     layer_mask::LayerMask,
     mover_shape::MoverShape,
     nav_grid::NavGrid,
-    search::{self, Footing},
     slope::{Direction, Slope},
     terrain_id::TerrainId,
+};
+use ferrets_pathfinder::{
+    hierarchy::{DEFAULT_CLUSTER_SIZE, NavHierarchy},
+    search::{self, Footing},
 };
 
 use ferrets_math::FixedU64;

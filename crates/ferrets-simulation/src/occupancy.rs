@@ -3,7 +3,7 @@
 use ferrets_content::entity_type_def::EntityTypeDef;
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_physics::body;
 
 /// What a body marks on the navigation grid.

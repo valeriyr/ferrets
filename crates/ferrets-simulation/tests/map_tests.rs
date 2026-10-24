@@ -16,12 +16,13 @@ use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
 use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
+    layer_id::LayerId,
     layer_level::LayerLevel,
     layer_mask::LayerMask,
     mover_shape::MoverShape,
-    nav_grid::{LayerId, NavGrid},
+    nav_grid::NavGrid,
     relief::Relief,
     slope::{Direction, Slope},
     terrain_id::TerrainId,

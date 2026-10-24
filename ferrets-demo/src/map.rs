@@ -42,7 +42,7 @@ use std::cmp::Ordering;
 use ferrets_content::pool::PoolInitial;
 use ferrets_geometry::projection::Projection;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::slope::{Direction, Slope};
+use ferrets_nav_grid::slope::{Direction, Slope};
 use ferrets_script::engine::lua::LuaEngine;
 use ferrets_simulation::{
     map::Map,

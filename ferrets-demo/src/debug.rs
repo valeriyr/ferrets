@@ -6,7 +6,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSi
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
-use ferrets_pathfinder::slope::Slope;
+use ferrets_nav_grid::slope::Slope;
 use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SkillTarget},

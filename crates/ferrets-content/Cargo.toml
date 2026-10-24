@@ -13,4 +13,4 @@ serde.workspace = true
 
 ferrets-geometry.workspace = true
 ferrets-math.workspace = true
-ferrets-pathfinder.workspace = true
+ferrets-nav-grid.workspace = true

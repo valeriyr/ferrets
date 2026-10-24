@@ -1,0 +1,13 @@
+[package]
+name = "ferrets-nav-grid"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic RTS navigation grid: terrain, layers with their levels and slopes, occupancy and the shapes standing on them."
+
+[dependencies]
+serde.workspace = true
+
+ferrets-geometry.workspace = true

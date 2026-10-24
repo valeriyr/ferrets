@@ -9,7 +9,7 @@ description = "Deterministic RTS game pathfinding."
 
 [dependencies]
 pathfinding = "4.15"
-serde.workspace = true
 
 ferrets-geometry.workspace = true
 ferrets-math.workspace = true
+ferrets-nav-grid.workspace = true

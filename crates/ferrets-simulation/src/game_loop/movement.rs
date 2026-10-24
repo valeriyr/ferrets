@@ -11,12 +11,11 @@ use ferrets_geometry::{
 use ferrets_math::{
     FixedI64, FixedU64, facing::Facing, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2,
 };
+use ferrets_nav_grid::{layer_mask::LayerMask, mover_shape::MoverShape};
 use ferrets_pathfinder::{
     astar,
     hierarchy::ClusterPos,
     hpa::{self, Crossing, PathShape, PlanTarget},
-    layer_mask::LayerMask,
-    mover_shape::MoverShape,
 };
 use ferrets_physics::{body, terrain};
 

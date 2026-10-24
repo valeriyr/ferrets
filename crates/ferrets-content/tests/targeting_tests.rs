@@ -15,7 +15,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{layer_level::LayerLevel, layer_mask::LayerMask};
+use ferrets_nav_grid::{layer_level::LayerLevel, layer_mask::LayerMask};
 
 //
 // ─── Defaults ─────────────────────────────────────────────────────────────────

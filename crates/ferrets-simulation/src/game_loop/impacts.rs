@@ -8,7 +8,7 @@ use ferrets_geometry::{
     projection::{self, Projection},
 };
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 use super::{buffs, damage};
 use crate::{

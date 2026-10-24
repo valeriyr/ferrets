@@ -1,6 +1,6 @@
 //! Which terrains a declaration names.
 
-use ferrets_pathfinder::{terrain_id::TerrainId, terrain_mask::TerrainMask};
+use ferrets_nav_grid::{terrain_id::TerrainId, terrain_mask::TerrainMask};
 
 use crate::registry::ContentRegistry;
 

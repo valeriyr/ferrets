@@ -19,5 +19,5 @@ ferrets-script.workspace = true
 ferrets-simulation.workspace = true
 
 [dev-dependencies]
-ferrets-pathfinder.workspace = true
+ferrets-nav-grid.workspace = true
 ferrets-physics.workspace = true

@@ -14,7 +14,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::nav_grid::NavGrid;
+use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::location::LocationComponent,

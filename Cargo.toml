@@ -12,6 +12,7 @@ members = [
     "crates/ferrets-content",
     "crates/ferrets-geometry",
     "crates/ferrets-math",
+    "crates/ferrets-nav-grid",
     "crates/ferrets-network",
     "crates/ferrets-pathfinder",
     "crates/ferrets-physics",
@@ -38,6 +39,7 @@ ferrets-bevy-plugin = { path = "crates/ferrets-bevy-plugin" }
 ferrets-content = { path = "crates/ferrets-content" }
 ferrets-geometry = { path = "crates/ferrets-geometry" }
 ferrets-math = { path = "crates/ferrets-math" }
+ferrets-nav-grid = { path = "crates/ferrets-nav-grid" }
 ferrets-network = { path = "crates/ferrets-network" }
 ferrets-pathfinder = { path = "crates/ferrets-pathfinder" }
 ferrets-physics = { path = "crates/ferrets-physics" }

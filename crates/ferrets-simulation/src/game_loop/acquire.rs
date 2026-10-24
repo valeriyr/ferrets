@@ -13,7 +13,7 @@ use crate::{
     visibility::{self, Senses},
 };
 use ferrets_content::{pool_def::PoolId, registry::ContentRegistry, targeting};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 /// Ticks between acquisition scans for one entity. Scans are staggered by
 /// entity id (see [`due`]) so the load spreads across ticks.

@@ -2,7 +2,7 @@
 //! everything stays in bounds and the terrain always covers the whole grid.
 
 use ferrets_geometry::projection::Projection;
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     relief::Relief,
     slope::{Direction, Slope},
 };

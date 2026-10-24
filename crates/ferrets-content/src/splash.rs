@@ -1,7 +1,7 @@
 //! Content-defined splash property struct and its blast shape.
 
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 /// How a blast's bands are measured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

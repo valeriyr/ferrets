@@ -9,7 +9,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::{layer_level::LayerLevel, nav_grid::NavGrid};
+use ferrets_nav_grid::{layer_level::LayerLevel, nav_grid::NavGrid};
 use ferrets_simulation::{
     control_groups::ControlGroups,
     entity_index::EntityIndex,

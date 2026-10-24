@@ -13,8 +13,6 @@ use crate::{
     astar,
     hierarchy::{ClusterPos, NavHierarchy},
     mover_profile::{Blockers, MoverProfile},
-    mover_shape::MoverShape,
-    nav_grid::NavGrid,
 };
 use ferrets_geometry::{
     cell_pos::CellPos,
@@ -22,6 +20,7 @@ use ferrets_geometry::{
     cell_size::CellSize,
     projection::{self, Projection},
 };
+use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
 
 /// One border crossing of a planned corridor, in travel orientation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -597,7 +596,7 @@ fn line_of_cells(
         }
         let next = CellPos::new(x as u32, y as u32);
         let profile = MoverProfile::new(shape, blockers);
-        if !grid.fits_for(next, profile) || !grid.can_step(current, next, shape) {
+        if !profile.fits(grid, next) || !grid.can_step(current, next, shape) {
             return None;
         }
         let is_diagonal = next.x != current.x && next.y != current.y;

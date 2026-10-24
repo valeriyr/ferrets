@@ -61,17 +61,15 @@ use ferrets_geometry::{
 use ferrets_math::{
     FixedI64, FixedU64, facing::Facing, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2,
 };
+use ferrets_nav_grid::{
+    layer_id::LayerId, layer_level::LayerLevel, layer_mask::LayerMask, nav_grid::NavGrid,
+    terrain_id::TerrainId,
+};
 use ferrets_network::{
     role::Role,
     roster::Roster,
     session::NetSession,
     transport::{NetworkTransport, loopback::LoopbackTransport},
-};
-use ferrets_pathfinder::{
-    layer_level::LayerLevel,
-    layer_mask::LayerMask,
-    nav_grid::{LayerId, NavGrid},
-    terrain_id::TerrainId,
 };
 use ferrets_replay::{
     buffer::SharedBuffer,

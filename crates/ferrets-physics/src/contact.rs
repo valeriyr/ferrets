@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use ferrets_math::{FixedI64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::body::{self, Body};
 

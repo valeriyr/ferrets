@@ -31,7 +31,7 @@ use ferrets_math::{
     facing::{self, Facing},
     fixed_uvec2::FixedUVec2,
 };
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     layer_mask::LayerMask,
     slope::{Direction, Slope},
 };

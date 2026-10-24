@@ -6,7 +6,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{layer_mask::LayerMask, mover_shape::MoverShape};
+use ferrets_nav_grid::{layer_mask::LayerMask, mover_shape::MoverShape};
 use ferrets_physics::{body, body::Body, contact, terrain};
 
 use crate::{

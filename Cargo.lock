@@ -2347,8 +2347,8 @@ dependencies = [
  "ferrets-content",
  "ferrets-geometry",
  "ferrets-math",
+ "ferrets-nav-grid",
  "ferrets-network",
- "ferrets-pathfinder",
  "ferrets-physics",
  "ferrets-replay",
  "ferrets-script",
@@ -2362,7 +2362,7 @@ dependencies = [
  "bevy_ecs",
  "ferrets-geometry",
  "ferrets-math",
- "ferrets-pathfinder",
+ "ferrets-nav-grid",
  "serde",
 ]
 
@@ -2375,8 +2375,8 @@ dependencies = [
  "ferrets-content",
  "ferrets-geometry",
  "ferrets-math",
+ "ferrets-nav-grid",
  "ferrets-network",
- "ferrets-pathfinder",
  "ferrets-physics",
  "ferrets-replay",
  "ferrets-script",
@@ -2402,6 +2402,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrets-nav-grid"
+version = "0.1.0"
+dependencies = [
+ "ferrets-geometry",
+ "serde",
+]
+
+[[package]]
 name = "ferrets-network"
 version = "0.1.0"
 dependencies = [
@@ -2420,8 +2428,8 @@ version = "0.1.0"
 dependencies = [
  "ferrets-geometry",
  "ferrets-math",
+ "ferrets-nav-grid",
  "pathfinding",
- "serde",
 ]
 
 [[package]]
@@ -2430,7 +2438,7 @@ version = "0.1.0"
 dependencies = [
  "ferrets-geometry",
  "ferrets-math",
- "ferrets-pathfinder",
+ "ferrets-nav-grid",
 ]
 
 [[package]]
@@ -2455,7 +2463,7 @@ dependencies = [
  "ferrets-content",
  "ferrets-geometry",
  "ferrets-math",
- "ferrets-pathfinder",
+ "ferrets-nav-grid",
  "ferrets-simulation",
  "mlua",
  "thiserror 2.0.20",
@@ -2469,6 +2477,7 @@ dependencies = [
  "ferrets-content",
  "ferrets-geometry",
  "ferrets-math",
+ "ferrets-nav-grid",
  "ferrets-pathfinder",
  "ferrets-physics",
  "ferrets-random",

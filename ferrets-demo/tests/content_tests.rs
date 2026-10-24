@@ -46,7 +46,7 @@ use ferrets_content::{
 use ferrets_demo::{content::CONTENT, map};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     layer_mask::LayerMask,
     mover_shape::MoverShape,
     slope::{Direction, Slope},

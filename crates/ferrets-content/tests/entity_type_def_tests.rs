@@ -22,7 +22,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 //
 // ─── Happy path ───────────────────────────────────────────────────────────────

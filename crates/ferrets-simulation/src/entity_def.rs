@@ -54,7 +54,7 @@ use ferrets_content::{
     turret::TurretStats,
     warp::WarperDef,
 };
-use ferrets_pathfinder::{layer_mask::LayerMask, mover_shape::MoverShape};
+use ferrets_nav_grid::{layer_mask::LayerMask, mover_shape::MoverShape};
 
 /// Returns the [`SimulationId`] `entity` was spawned with.
 ///

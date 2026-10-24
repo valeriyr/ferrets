@@ -1,7 +1,7 @@
 //! The domain vocabulary: the one layer a body is in, the terrains it may be
 //! over there and how it crosses a cliff.
 
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing, layer_id::LayerId, terrain_mask::TerrainMask,
 };
 

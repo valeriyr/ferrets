@@ -4,7 +4,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use std::collections::{BTreeMap, BTreeSet};
 
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
     affiliation::Affiliation,

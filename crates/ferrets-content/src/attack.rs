@@ -7,7 +7,7 @@
 //! hit spreads over. Where a weapon is carried is [`crate::turret`]'s business,
 //! except for the one a body points itself, which is [`AttackDef`].
 
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{projectile::ProjectileId, splash::SplashDef};
 

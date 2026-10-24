@@ -17,7 +17,7 @@ use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
 use ferrets_math::{FixedU64, facing::Facing};
-use ferrets_pathfinder::nav_grid::NavGrid;
+use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
     beside::Lean,
     command::PlayerCommand,

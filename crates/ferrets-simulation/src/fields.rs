@@ -8,7 +8,7 @@
 use bevy_ecs::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
     components::owner,

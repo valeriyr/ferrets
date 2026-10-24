@@ -4,7 +4,7 @@ use bevy_ecs::prelude::*;
 use ferrets_content::{entity_type_def::EntityTypeId, pool_def::PoolId};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 /// Ground held ahead of a form change landing on it.
 #[derive(Debug, Clone)]

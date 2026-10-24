@@ -4,7 +4,8 @@ mod utils;
 
 use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_pathfinder::{astar, nav_grid::NavGrid};
+use ferrets_nav_grid::nav_grid::NavGrid;
+use ferrets_pathfinder::astar;
 
 //
 // ─── Isometric — exact goal ───────────────────────────────────────────────────

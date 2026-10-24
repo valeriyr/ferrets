@@ -12,7 +12,7 @@ use ferrets_content::{
 };
 use ferrets_demo::{input, render::Sighted};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{

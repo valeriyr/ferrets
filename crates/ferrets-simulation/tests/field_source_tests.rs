@@ -6,7 +6,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     terrains::Terrains,
 };
-use ferrets_pathfinder::layer_level::LayerLevel;
+use ferrets_nav_grid::layer_level::LayerLevel;
 use ferrets_simulation::components::field_source::{
     Emitted, FieldSourceState, FieldSourcesComponent,
 };

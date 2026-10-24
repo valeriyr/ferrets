@@ -4,7 +4,7 @@ mod utils;
 
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     mover_shape::MoverShape,
     nav_grid::NavGrid,

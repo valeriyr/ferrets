@@ -3,7 +3,7 @@
 mod utils;
 
 use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize, projection::Projection};
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     mover_shape::MoverShape,
     nav_grid::NavGrid,

@@ -1,4 +1,6 @@
-use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
+//! Layer ids: construction, the bit each holds, and combining them into masks.
+
+use ferrets_nav_grid::{layer_id::LayerId, layer_mask::LayerMask};
 
 //
 // ─── Construction ─────────────────────────────────────────────────────────────

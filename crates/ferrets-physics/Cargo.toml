@@ -10,4 +10,4 @@ description = "Deterministic contact resolution for continuous-model RTS bodies.
 [dependencies]
 ferrets-geometry.workspace = true
 ferrets-math.workspace = true
-ferrets-pathfinder.workspace = true
+ferrets-nav-grid.workspace = true

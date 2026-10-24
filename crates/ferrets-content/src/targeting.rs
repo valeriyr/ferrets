@@ -10,7 +10,7 @@
 //! answerable by a weapon reaching either of them, which is what lets a thing
 //! rooted on the ground still be shot out of the air.
 
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{entity_type_def::EntityTypeDef, registry::ContentRegistry};
 

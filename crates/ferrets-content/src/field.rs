@@ -2,7 +2,7 @@
 //! sources that feed them, the placement rules that read them, and the effects
 //! they have on whatever stands inside or outside.
 
-use ferrets_pathfinder::{layer_mask::LayerMask, terrain_mask::TerrainMask};
+use ferrets_nav_grid::{layer_mask::LayerMask, terrain_mask::TerrainMask};
 
 use crate::{
     affiliation::Affiliation, detection::Detection, entity_effect::EntityEffect,

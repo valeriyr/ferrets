@@ -2,7 +2,7 @@
 
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 /// One body during a contact-resolution pass: a circle inscribed in the
 /// footprint anchored at its position — where it is rendered — with a radius in

@@ -2,7 +2,7 @@
 
 use ferrets_content::{domain::DomainId, pool_def::PoolId, rise::RisePool};
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{layer_id::LayerId, terrain_id::TerrainId};
+use ferrets_nav_grid::{layer_id::LayerId, terrain_id::TerrainId};
 
 /// The layers the test content declares, in the order a registry mints them:
 /// the first layer declared is `1`, and each next one takes the next bit.

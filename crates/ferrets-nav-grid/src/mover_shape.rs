@@ -1,15 +1,5 @@
-//! The shape a route is planned for.
-//!
-//! Clearance is asked in these terms. A cell counts as open for a mover only
-//! when the whole footprint anchored at it is open, so a two-wide body simply
-//! does not see one-wide gaps — dilation asked per cell rather than
-//! materialized into a second grid. Asking rather than storing keeps one
-//! source of truth: there is no dilated plane to invalidate alongside the
-//! occupancy it was derived from.
-//!
-//! Paths are therefore sequences of **anchor** cells, consistent with how a
-//! standing footprint is anchored, and never sequences of cells the mover's
-//! middle passes over.
+//! The shape a footprint takes before it is anchored at a cell: what the grid
+//! asks of every cell it would cover.
 
 use ferrets_geometry::cell_size::CellSize;
 
@@ -18,13 +8,7 @@ use crate::{
     terrain_mask::TerrainMask,
 };
 
-/// The geometry a route must fit.
-///
-/// Deliberately anchor-free — a shape becomes a footprint only once a search
-/// anchors it at a candidate cell, and the same shape is anchored at every
-/// cell a route tests. Two movers with the same shape route identically,
-/// which is what lets one hierarchy abstraction and one shared plan serve a
-/// whole group.
+/// The geometry a footprint must fit, anchored at no cell of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MoverShape {
     /// The terrains every cell of the footprint must be on.

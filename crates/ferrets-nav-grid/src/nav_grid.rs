@@ -3,8 +3,8 @@
 
 use crate::{
     cliff_crossing::CliffCrossing,
+    layer_id::LayerId,
     layer_mask::LayerMask,
-    mover_profile::{Blockers, MoverProfile},
     mover_shape::MoverShape,
     relief::Relief,
     slope::{Direction, Slope},
@@ -18,8 +18,6 @@ use ferrets_geometry::{
     projection::{self, Projection},
 };
 
-pub use crate::layer_id::LayerId;
-
 /// Stores per-cell navigation data for the game map.
 ///
 /// Each cell has a **terrain**, shared by every layer, and on each layer a
@@ -27,9 +25,8 @@ pub use crate::layer_id::LayerId;
 /// is flat at it everywhere. Every layer is at every cell. Occupancy lies on
 /// two planes per layer: the **occupancy** plane (standing footprints) and the
 /// **claim** plane (cells units hold while resting or crossing). Terrain,
-/// relief and occupancy together are the **static** plane long-range planning
-/// honors; claims are honored by movement and ignored by everything that must
-/// not see units.
+/// relief and occupancy together are the **static** plane; the claims are the
+/// plane that changes as units move.
 #[derive(Debug, Clone)]
 pub struct NavGrid {
     width: u32,
@@ -442,9 +439,7 @@ impl NavGrid {
     /// stand on, free of static occupants on its layers — and the footprint
     /// [holds together](Self::holds_together).
     ///
-    /// This is the clearance question long-range planning asks: whether a mover
-    /// of that shape could ever stand here, as opposed to whether it can right
-    /// now. Footprints reaching out of bounds always return `false`.
+    /// Footprints reaching out of bounds always return `false`.
     pub fn fits_statically(&self, anchor: CellPos, shape: MoverShape) -> bool {
         CellRect::new(anchor, shape.size)
             .cells()
@@ -460,15 +455,6 @@ impl NavGrid {
         CellRect::new(anchor, shape.size)
             .cells()
             .all(|cell| self.stands_on_ground(cell, shape))
-    }
-
-    /// Returns `true` if the profile's footprint at `anchor` is open
-    /// under its blocker mode.
-    pub(crate) fn fits_for(&self, anchor: CellPos, profile: MoverProfile) -> bool {
-        match profile.blockers {
-            Blockers::All => self.fits(anchor, profile.shape),
-            Blockers::Static => self.fits_statically(anchor, profile.shape),
-        }
     }
 
     /// Panics in debug builds if `mask` contains any unregistered layer bits.

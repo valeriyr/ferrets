@@ -4,13 +4,13 @@
 mod utils;
 
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_pathfinder::{
-    hierarchy::{ClusterPos, NavHierarchy, Transition},
+use ferrets_nav_grid::{
     mover_shape::MoverShape,
     nav_grid::NavGrid,
     relief::Relief,
     slope::{Direction, Slope},
 };
+use ferrets_pathfinder::hierarchy::{ClusterPos, NavHierarchy, Transition};
 
 //
 // ─── Cluster geometry ─────────────────────────────────────────────────────────

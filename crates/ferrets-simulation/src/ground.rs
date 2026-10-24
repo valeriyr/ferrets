@@ -5,7 +5,7 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{location::LocationDef, registry::ContentRegistry};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing, layer_mask::LayerMask, mover_shape::MoverShape,
 };
 use ferrets_physics::body;

@@ -9,12 +9,11 @@ use std::{
 use crate::{
     astar,
     mover_profile::{Blockers, MoverProfile},
-    mover_shape::MoverShape,
-    nav_grid::NavGrid,
 };
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
+use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
 
 /// Cells per cluster side used by the live game grid.
 pub const DEFAULT_CLUSTER_SIZE: u32 = 16;

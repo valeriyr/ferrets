@@ -55,7 +55,7 @@ use ferrets_content::{
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     layer_id::LayerId, layer_level::LayerLevel, layer_mask::LayerMask, terrain_mask::TerrainMask,
 };
 use mlua::{Lua, Table, Value};

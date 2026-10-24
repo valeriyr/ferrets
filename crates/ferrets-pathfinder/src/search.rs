@@ -2,8 +2,8 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::{mover_shape::MoverShape, nav_grid::NavGrid};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
 
 /// Controls how the BFS expands when it encounters a blocked cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

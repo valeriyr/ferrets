@@ -25,7 +25,7 @@ use ferrets_content::{
     turret::{TurretFire, WeaponConduct},
 };
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::cliff_crossing::CliffCrossing;
+use ferrets_nav_grid::cliff_crossing::CliffCrossing;
 
 use crate::{engine::ScriptEngine, error::ScriptError};
 

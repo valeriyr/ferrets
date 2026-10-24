@@ -7,12 +7,9 @@ use ferrets_geometry::{
     projection::{self, Projection, Step},
 };
 use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
 
-use crate::{
-    mover_profile::{Blockers, MoverProfile},
-    mover_shape::MoverShape,
-    nav_grid::NavGrid,
-};
+use crate::mover_profile::{Blockers, MoverProfile};
 
 /// Movement directions: (dx, dy). Costs depend on [`Projection`].
 const DIRECTIONS: [(i32, i32); 8] = [
@@ -92,7 +89,7 @@ pub(crate) fn passable_neighbors(
             return None;
         }
         let neighbor = CellPos::new(nx as u32, ny as u32);
-        if !grid.fits_for(neighbor, profile) || !grid.can_step(pos, neighbor, profile.shape) {
+        if !profile.fits(grid, neighbor) || !grid.can_step(pos, neighbor, profile.shape) {
             return None;
         }
         let step = if dx != 0 && dy != 0 {
@@ -120,8 +117,7 @@ pub(crate) fn allows_diagonal(
     profile: MoverProfile,
     to: CellPos,
 ) -> bool {
-    grid.fits_for(CellPos::new(to.x, from.y), profile)
-        && grid.fits_for(CellPos::new(from.x, to.y), profile)
+    profile.fits(grid, CellPos::new(to.x, from.y)) && profile.fits(grid, CellPos::new(from.x, to.y))
 }
 
 /// Finds the shortest path confined to the `window` rect — cells outside it

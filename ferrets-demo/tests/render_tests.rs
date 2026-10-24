@@ -27,7 +27,7 @@ use ferrets_demo::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_simulation::{
     beside::{Beside, Lean},
     command::SkillTarget,

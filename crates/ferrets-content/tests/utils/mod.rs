@@ -13,7 +13,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{layer_id::LayerId, layer_level::LayerLevel, layer_mask::LayerMask};
+use ferrets_nav_grid::{layer_id::LayerId, layer_level::LayerLevel, layer_mask::LayerMask};
 
 /// The navigation layers these tests register, in the order a registry mints
 /// them: the first layer declared is `1`, and each next one takes the next bit.

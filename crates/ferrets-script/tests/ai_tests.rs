@@ -31,7 +31,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::layer_level::LayerLevel;
+use ferrets_nav_grid::layer_level::LayerLevel;
 use ferrets_script::{
     ai::{
         AiRuntime,

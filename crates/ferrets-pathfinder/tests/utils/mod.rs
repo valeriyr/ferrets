@@ -1,18 +1,18 @@
 #![allow(dead_code)]
 
-use ferrets_geometry::cell_pos::CellPos;
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
-    hierarchy::NavHierarchy,
+    layer_id::LayerId,
     mover_shape::MoverShape,
-    nav_grid::{LayerId, NavGrid},
+    nav_grid::NavGrid,
     relief::Relief,
     slope::{Direction, Slope},
     terrain_id::TerrainId,
     terrain_mask::TerrainMask,
 };
+use ferrets_pathfinder::hierarchy::NavHierarchy;
 
 pub const GROUND: LayerId = LayerId::new(1);
 pub const AIR: LayerId = LayerId::new(2);

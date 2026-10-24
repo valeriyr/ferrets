@@ -13,7 +13,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},

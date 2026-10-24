@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use ferrets_geometry::projection::Projection;
-use ferrets_pathfinder::{relief::Relief, slope::Slope};
+use ferrets_nav_grid::{relief::Relief, slope::Slope};
 use serde::{Deserialize, Serialize};
 
 use crate::{movement_model::MovementModel, session::player_id::PlayerId};

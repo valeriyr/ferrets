@@ -16,6 +16,7 @@ xxhash-rust = { version = "0.8", features = ["xxh64"] }
 ferrets-content.workspace = true
 ferrets-geometry.workspace = true
 ferrets-math.workspace = true
+ferrets-nav-grid.workspace = true
 ferrets-pathfinder.workspace = true
 ferrets-physics.workspace = true
 ferrets-random.workspace = true

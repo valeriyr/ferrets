@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy_ecs::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing, layer_id::LayerId, layer_level::LayerLevel,
     layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask,
 };

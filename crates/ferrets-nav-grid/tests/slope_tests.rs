@@ -1,6 +1,6 @@
 //! Slopes: the eight directions a step or a slope may take.
 
-use ferrets_pathfinder::slope::Direction;
+use ferrets_nav_grid::slope::Direction;
 
 //
 // ─── Directions ───────────────────────────────────────────────────────────────

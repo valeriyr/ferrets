@@ -19,7 +19,7 @@ use crate::{
     session::GameSession,
     simulation_id::SimulationId,
 };
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 /// Whether `entity` may start an AttackMove: its type moves and it operates.
 pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {

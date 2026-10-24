@@ -5,13 +5,13 @@ mod utils;
 use std::collections::HashSet;
 
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_pathfinder::{
+use ferrets_nav_grid::{
     mover_shape::MoverShape,
     nav_grid::NavGrid,
     relief::Relief,
-    search::{self, Expansion, Footing},
     slope::{Direction, Slope},
 };
+use ferrets_pathfinder::search::{self, Expansion, Footing};
 
 //
 // ─── find_nearest_free_pos ────────────────────────────────────────────────────

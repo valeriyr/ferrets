@@ -10,12 +10,11 @@ mod utils;
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
+use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
 use ferrets_pathfinder::{
     astar,
     hierarchy::NavHierarchy,
     hpa::{self, PlanTarget},
-    mover_shape::MoverShape,
-    nav_grid::NavGrid,
 };
 
 //
