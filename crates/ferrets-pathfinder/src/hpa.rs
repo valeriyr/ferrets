@@ -96,7 +96,7 @@ pub fn find_path(
     requested: PlanTarget,
     path_shape: PathShape,
 ) -> Option<HierarchicalPath> {
-    if projection.in_reach(start, shape.size, requested.rect(), requested.stop) {
+    if grid.accepts(projection, start, shape, requested.rect(), requested.stop) {
         return Some(HierarchicalPath {
             segment: vec![],
             corridor: vec![],
@@ -138,7 +138,7 @@ pub fn plan_corridor(
     shape: MoverShape,
     requested: PlanTarget,
 ) -> Option<(PlanTarget, Vec<Crossing>)> {
-    if projection.in_reach(start, shape.size, requested.rect(), requested.stop) {
+    if grid.accepts(projection, start, shape, requested.rect(), requested.stop) {
         return Some((requested, vec![]));
     }
 
@@ -300,7 +300,7 @@ fn repair_goal(
     for y in min_y..max_y {
         for x in min_x..max_x {
             let cell = CellPos::new(x, y);
-            if projection.in_range_of_rect(cell, accepted, requested.stop)
+            if grid.accepts(projection, cell, shape, requested.rect(), requested.stop)
                 && hierarchy.region_of(cell, shape) == Some(start_region)
             {
                 return Some(requested);
@@ -597,7 +597,7 @@ fn line_of_cells(
         }
         let next = CellPos::new(x as u32, y as u32);
         let profile = MoverProfile::new(shape, blockers);
-        if !grid.fits_for(next, profile) {
+        if !grid.fits_for(next, profile) || !grid.can_step(current, next, shape) {
             return None;
         }
         let is_diagonal = next.x != current.x && next.y != current.y;

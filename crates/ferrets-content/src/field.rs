@@ -58,6 +58,9 @@ pub enum FieldVision {
 pub struct FieldDef {
     /// The terrains its cells may lie on.
     terrains: Terrains,
+    /// The layers it spreads on: whose bodies its effects and placement rules
+    /// are for.
+    spreads_on: LayerMask,
     /// What happens to covered cells no source sustains.
     decay: FieldDecay,
     /// What covering a cell does for the sight of the players covering it.
@@ -70,10 +73,12 @@ pub struct FieldDef {
 impl FieldDef {
     /// Creates a new `FieldDef` with the given data.
     ///
-    /// Panics if the field lies on no terrain at all, if a gradual decay has a
-    /// zero cycle, or if the detection reveals no layer at all.
+    /// Panics if the field lies on no terrain at all, spreads on no layer, if a
+    /// gradual decay has a zero cycle, or if the detection reveals no layer at
+    /// all.
     pub fn new(
         terrains: Terrains,
+        spreads_on: LayerMask,
         decay: FieldDecay,
         vision: FieldVision,
         detection: Detection,
@@ -85,6 +90,10 @@ impl FieldDef {
             ),
             Terrains::Any => {}
         }
+        assert!(
+            spreads_on != LayerMask::EMPTY,
+            "a field spreading on no layer is for nobody; declare the layers it spreads on"
+        );
         match decay {
             FieldDecay::Gradual { cycle } => {
                 assert!(cycle > 0, "decay cycle must be positive");
@@ -100,6 +109,7 @@ impl FieldDef {
         }
         Self {
             terrains,
+            spreads_on,
             decay,
             vision,
             detection,
@@ -110,6 +120,13 @@ impl FieldDef {
     #[inline]
     pub fn terrains(&self) -> Terrains {
         self.terrains
+    }
+
+    /// The layers it spreads on: whose bodies its effects and placement rules
+    /// are for.
+    #[inline]
+    pub fn spreads_on(&self) -> LayerMask {
+        self.spreads_on
     }
 
     /// What happens to covered cells no source sustains.

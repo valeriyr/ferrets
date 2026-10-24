@@ -6,6 +6,7 @@ use ferrets_content::{
     registry::ContentRegistry,
     terrains::Terrains,
 };
+use ferrets_pathfinder::layer_level::LayerLevel;
 use ferrets_simulation::components::field_source::{
     Emitted, FieldSourceState, FieldSourcesComponent,
 };
@@ -105,13 +106,16 @@ fn gradual_growth(cycle: u32, initial_radius: u32) -> FieldGrowth {
     }
 }
 
-/// The handle of one registered field lying on every terrain.
+/// The handle of one registered field lying on every terrain of the one
+/// ground layer.
 fn creep() -> FieldId {
     let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground", LayerLevel::At(1));
     registry.register_field(
         "creep",
         FieldDef::new(
             Terrains::Any,
+            ground.into(),
             FieldDecay::Never,
             FieldVision::Dark,
             Detection::Blind,

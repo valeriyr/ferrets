@@ -347,24 +347,24 @@ fn bytes_of_clamps_channels_past_full() {
 
 #[test]
 fn composition_reads_terrain_per_cell() {
-    // Revealed, the picture is the map: the central lake and the land around
-    // it must not come out the same color, or the terrain layer is not being
-    // read per cell.
+    // Revealed, the picture is the map: the sea in the top-left and the land
+    // below it must not come out the same color, or the terrain layer is not
+    // being read per cell.
     let mut app = utils::view_app();
     *app.world_mut().resource_mut::<FogReveal>() = FogReveal::Revealed;
     utils::compose_minimap(&mut app);
 
-    assert_ne!(painted(&app, 48, 48), painted(&app, 5, 5));
+    assert_ne!(painted(&app, 5, 5), painted(&app, 5, 30));
 }
 
 #[test]
 fn composition_hides_ground_never_seen() {
     // Nothing is placed, so nothing has ever been seen: every cell reads as the
-    // same void, lake and land alike.
+    // same void, sea and land alike.
     let mut app = utils::view_app();
     utils::compose_minimap(&mut app);
 
-    assert_eq!(painted(&app, 48, 48), painted(&app, 5, 5));
+    assert_eq!(painted(&app, 5, 5), painted(&app, 5, 30));
 }
 
 #[test]
@@ -384,16 +384,16 @@ fn glimpsed_entity_paints_no_blip() {
     let mut app = utils::view_app();
     *app.world_mut().resource_mut::<FogReveal>() = FogReveal::Revealed;
     utils::compose_minimap(&mut app);
-    let ground = painted(&app, 5, 5);
+    let ground = painted(&app, 5, 30);
 
-    let (rival, _) = utils::create_entity(app.world_mut(), "grunt", utils::at_cell(5, 5), Some(1))
+    let (rival, _) = utils::create_entity(app.world_mut(), "grunt", utils::at_cell(5, 30), Some(1))
         .expect("the demo content defines a grunt");
     app.world_mut()
         .entity_mut(rival)
         .insert(Sighted(Sighting::Glimpsed));
     recompose(&mut app);
     assert_eq!(
-        painted(&app, 5, 5),
+        painted(&app, 5, 30),
         ground,
         "a glimpse is a shimmer on the field and nothing on the map"
     );
@@ -402,7 +402,7 @@ fn glimpsed_entity_paints_no_blip() {
         .entity_mut(rival)
         .insert(Sighted(Sighting::Seen));
     recompose(&mut app);
-    assert_ne!(painted(&app, 5, 5), ground, "made out, it is painted");
+    assert_ne!(painted(&app, 5, 30), ground, "made out, it is painted");
 }
 
 #[test]
@@ -411,10 +411,10 @@ fn power_tints_only_viewers_own_coverage() {
     let mut app = utils::view_app();
     *app.world_mut().resource_mut::<FogReveal>() = FogReveal::Revealed;
     utils::compose_minimap(&mut app);
-    let (rival_ground, own_ground) = (painted(&app, 13, 10), painted(&app, 33, 30));
+    let (rival_ground, own_ground) = (painted(&app, 13, 20), painted(&app, 33, 30));
 
     // A rival's pylon and player 0's own, each powering six cells about it.
-    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(10, 10), Some(1))
+    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(10, 20), Some(1))
         .expect("the demo content defines a pylon");
     utils::create_entity(app.world_mut(), "pylon", utils::at_cell(30, 30), Some(0))
         .expect("the demo content defines a pylon");
@@ -422,7 +422,7 @@ fn power_tints_only_viewers_own_coverage() {
     recompose(&mut app);
 
     assert_eq!(
-        painted(&app, 13, 10),
+        painted(&app, 13, 20),
         rival_ground,
         "a rival's power is its own"
     );

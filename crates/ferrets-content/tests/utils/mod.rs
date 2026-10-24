@@ -13,7 +13,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask};
+use ferrets_pathfinder::{layer_id::LayerId, layer_level::LayerLevel, layer_mask::LayerMask};
 
 /// The navigation layers these tests register, in the order a registry mints
 /// them: the first layer declared is `1`, and each next one takes the next bit.
@@ -33,10 +33,10 @@ pub const AIR_DOMAIN: DomainId = DomainId::new(2);
 /// "land" terrain and the [`GROUND_DOMAIN`] over it.
 pub fn ground_registry() -> ContentRegistry {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
+    let ground = registry.register_layer("ground", LayerLevel::At(1));
     registry.register_terrain("land");
     assert_eq!(
-        registry.register_domain("ground", DomainDef::new(ground, Terrains::Any)),
+        registry.register_domain("ground", DomainDef::new(ground, Terrains::Any, None)),
         GROUND_DOMAIN
     );
     registry

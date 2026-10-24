@@ -3,9 +3,13 @@
 
 mod utils;
 
+use ferrets_geometry::cell_size::CellSize;
 use ferrets_pathfinder::{
     hierarchy::{ClusterPos, NavHierarchy, Transition},
     mover_shape::MoverShape,
+    nav_grid::NavGrid,
+    relief::Relief,
+    slope::{Direction, Slope},
 };
 
 //
@@ -179,6 +183,29 @@ fn wide_shape_entrance_middle_respects_footprint_reach() {
     );
 }
 
+#[test]
+fn entrance_across_cliff_lies_only_at_its_ramp() {
+    // Two 4×4 clusters side by side, the east one a plateau one level up,
+    // and a ramp at (3, 0) rising onto it: a walker's only way across the
+    // border is the ramp's row, so its one transition sits there rather than
+    // at the border's middle.
+    let mut grid = NavGrid::new(8, 4, |_| utils::LAND);
+    grid.add_ranged_layer(utils::GROUND, 1, 2, |cell| Relief {
+        level: if cell.x >= 4 { 2 } else { 1 },
+        slope: match (cell.x, cell.y) {
+            (3, 0) => Some(Slope::Ramp(Direction::East)),
+            _ => None,
+        },
+    });
+
+    let hierarchy = utils::build_for(&grid, 4, &[utils::walker()]);
+
+    assert_eq!(
+        hierarchy.transitions(utils::walker()).collect::<Vec<_>>(),
+        vec![transition(3, 0, 4, 0)]
+    );
+}
+
 //
 // ─── Regions ──────────────────────────────────────────────────────────────────
 //
@@ -252,7 +279,13 @@ fn masks_have_independent_regions() {
         grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
     }
 
-    let both = MoverShape::point(utils::land(), utils::GROUND | utils::AIR);
+    let both = MoverShape::new(
+        utils::land(),
+        utils::GROUND,
+        utils::GROUND | utils::AIR,
+        CellSize::ONE,
+        None,
+    );
     let hierarchy = NavHierarchy::build(&grid, 4, &[utils::on_ground(), utils::in_air(), both]);
 
     assert_eq!(hierarchy.region_count(utils::on_ground()), 2);
@@ -266,12 +299,25 @@ fn terrains_have_independent_regions() {
     // shape over every terrain on the same layer is not.
     let strip: Vec<_> = (0..4).map(|y| utils::nav(4, y)).collect();
     let grid = utils::grid_with_water(8, 4, &strip);
-    let wading = MoverShape::point(utils::every_terrain(), utils::GROUND);
+    let wading = MoverShape::point(utils::every_terrain(), utils::GROUND, None);
 
     let hierarchy = NavHierarchy::build(&grid, 4, &[utils::on_ground(), wading]);
 
     assert_eq!(hierarchy.region_count(utils::on_ground()), 2);
     assert_eq!(hierarchy.region_count(wading), 1);
+}
+
+#[test]
+fn cliff_splits_regions_ramp_joins() {
+    let grid = utils::hill_grid();
+    let (walker, strider) = (utils::walker(), utils::strider());
+    let hierarchy = utils::build_for(&grid, 4, &[walker, strider]);
+
+    // Low ground and the plateau meet over the ramp; the mountain at 3 has
+    // none, so it is its own region for a walker and not for a cliff walker.
+    assert!(hierarchy.same_region(utils::nav(0, 0), walker, utils::nav(5, 3)));
+    assert!(!hierarchy.same_region(utils::nav(5, 0), walker, utils::nav(6, 0)));
+    assert!(hierarchy.same_region(utils::nav(5, 0), strider, utils::nav(6, 0)));
 }
 
 //
@@ -493,7 +539,9 @@ fn rebuilding_from_same_grid_yields_identical_hierarchy() {
 //
 
 #[test]
-#[should_panic(expected = "no hierarchy built for shape on terrains 0b11 and layers 0b10 at 1x1")]
+#[should_panic(
+    expected = "no hierarchy built for shape on terrains 0b11 and layers 0b10 at 1x1, cliff crossing None"
+)]
 fn querying_unserved_layer_panics() {
     let grid = utils::grid(4, 4);
     let hierarchy = utils::build_ground(&grid, 4);
@@ -502,7 +550,9 @@ fn querying_unserved_layer_panics() {
 }
 
 #[test]
-#[should_panic(expected = "no hierarchy built for shape on terrains 0b1 and layers 0b1 at 2x2")]
+#[should_panic(
+    expected = "no hierarchy built for shape on terrains 0b1 and layers 0b1 at 2x2, cliff crossing None"
+)]
 fn querying_unserved_footprint_panics() {
     // Same layer, wider footprint: a distinct abstraction, because a wide mover
     // genuinely has fewer ways through the map than a narrow one.
@@ -513,7 +563,9 @@ fn querying_unserved_footprint_panics() {
 }
 
 #[test]
-#[should_panic(expected = "no hierarchy built for shape on terrains 0b11 and layers 0b1 at 1x1")]
+#[should_panic(
+    expected = "no hierarchy built for shape on terrains 0b11 and layers 0b1 at 1x1, cliff crossing None"
+)]
 fn querying_unserved_terrains_panics() {
     // Same layer and footprint, more terrains: a distinct abstraction, because
     // a mover that also takes water has other ways through the map.
@@ -522,7 +574,7 @@ fn querying_unserved_terrains_panics() {
 
     hierarchy.region_of(
         utils::nav(0, 0),
-        MoverShape::point(utils::every_terrain(), utils::GROUND),
+        MoverShape::point(utils::every_terrain(), utils::GROUND, None),
     );
 }
 

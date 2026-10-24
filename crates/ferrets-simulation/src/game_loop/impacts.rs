@@ -218,7 +218,13 @@ fn land(
         .map_or(LayerMask::EMPTY, |weapon| weapon.targets());
     let direct: Vec<Entity> = direct
         .into_iter()
-        .filter(|&victim| targeting::reaches(targets, entity_def::of(world, victim)))
+        .filter(|&victim| {
+            targeting::reaches(
+                world.resource::<ContentRegistry>(),
+                targets,
+                entity_def::of(world, victim),
+            )
+        })
         .collect();
     // What the weapon leaves of what it kills. A shot whose weapon can no
     // longer be resolved is one nothing reached anyway: the loop below runs
@@ -284,7 +290,9 @@ fn blast_victims(
         let Some(location) = def.location else {
             continue;
         };
-        if targeting::targetable(def) & splash.layers() == LayerMask::EMPTY {
+        if targeting::targetable(world.resource::<ContentRegistry>(), def) & splash.layers()
+            == LayerMask::EMPTY
+        {
             continue;
         }
         // Without friendly fire the blast spares the attacker's own side. Neutrals

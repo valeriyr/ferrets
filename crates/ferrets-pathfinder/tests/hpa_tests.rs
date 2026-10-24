@@ -192,6 +192,99 @@ fn long_route_ignores_unit_claims() {
     );
 }
 
+#[test]
+fn walker_steps_to_edge_it_can_touch_target_across() {
+    // At (3, 0) the plateau's (4, 0) is a cell away but up a cliff, so the
+    // walk does not end where it starts: it climbs the ramp and stops on the
+    // plateau beside the goal.
+    let grid = utils::hill_grid();
+    let hierarchy = utils::build_for(&grid, 4, &[utils::walker()]);
+
+    let path = hpa::find_path(
+        &grid,
+        &hierarchy,
+        PROJECTION,
+        utils::nav(3, 0),
+        utils::walker(),
+        PlanTarget {
+            cell: utils::nav(4, 0),
+            size: CellSize::new(1, 1),
+            stop: 1,
+        },
+        hpa::PathShape::CellSteps,
+    )
+    .unwrap();
+
+    assert_eq!(path.segment, vec![utils::nav(3, 1), utils::nav(4, 1)]);
+}
+
+#[test]
+fn walker_sent_beside_mountain_it_cannot_touch_stops_where_it_reaches() {
+    // The mountain's (6, 0) at 3 is a cliff above every plateau cell within
+    // one of it, so none of them touches it: the goal is repaired to the
+    // nearest cell the walker reaches. In the first ring the mountain's own
+    // (6, 1), (7, 0) and (7, 1) are no walker's; the plateau's (5, 0) and
+    // (5, 1) tie at one and go by cell order, (5, 0) first.
+    let grid = utils::hill_grid();
+    let hierarchy = utils::build_for(&grid, 4, &[utils::walker()]);
+
+    let path = hpa::find_path(
+        &grid,
+        &hierarchy,
+        PROJECTION,
+        utils::nav(0, 0),
+        utils::walker(),
+        PlanTarget {
+            cell: utils::nav(6, 0),
+            size: CellSize::new(1, 1),
+            stop: 1,
+        },
+        hpa::PathShape::CellSteps,
+    )
+    .unwrap();
+
+    assert_eq!(
+        (path.target, path.segment.last().copied()),
+        (
+            PlanTarget {
+                cell: utils::nav(5, 0),
+                size: CellSize::new(1, 1),
+                stop: 0,
+            },
+            Some(utils::nav(5, 0))
+        )
+    );
+}
+
+#[test]
+fn smoothed_route_never_pulls_straight_up_cliff() {
+    // On the hill grid a walker from (2, 0) to the plateau's (5, 0) must go by
+    // the ramp at (3, 1); the straight line along row 0 runs up the cliff, so
+    // smoothing keeps the bend.
+    let grid = utils::hill_grid();
+    let hierarchy = utils::build_for(&grid, 4, &[utils::walker()]);
+
+    let path = hpa::find_path(
+        &grid,
+        &hierarchy,
+        PROJECTION,
+        utils::nav(2, 0),
+        utils::walker(),
+        PlanTarget {
+            cell: utils::nav(5, 0),
+            size: CellSize::new(1, 1),
+            stop: 0,
+        },
+        hpa::PathShape::CellSteps,
+    )
+    .unwrap();
+
+    assert_eq!(
+        path.segment,
+        vec![utils::nav(3, 1), utils::nav(4, 1), utils::nav(5, 0)]
+    );
+}
+
 //
 // ─── Detour ───────────────────────────────────────────────────────────────────
 //

@@ -13,7 +13,8 @@ pub enum Expansion {
     /// Finds the nearest free position regardless of obstacles between the
     /// start and the result. Use when any nearby free cell is acceptable.
     ThroughBlocked,
-    /// BFS only continues expanding from passable cells; blocked cells are dead ends.
+    /// BFS only continues expanding from passable cells, across edges a step
+    /// may cross; blocked cells are dead ends.
     ///
     /// The starting cell is always expanded even if it is blocked.
     /// Use when the result must be reachable without crossing walls.
@@ -23,11 +24,11 @@ pub enum Expansion {
 /// What ground a placement needs under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Footing {
-    /// Cells on its terrains nothing else holds: what a footprint claiming its
-    /// ground needs.
+    /// Ground its shape may stand on that nothing else holds: what a footprint
+    /// claiming its ground needs.
     Free,
-    /// Any cell on its terrains, whoever is standing there: what a footprint
-    /// that shares its ground needs.
+    /// Any ground its shape may stand on, whoever is standing there: what a
+    /// footprint that shares its ground needs.
     Shared,
 }
 
@@ -47,7 +48,8 @@ const DIRECTIONS: [(i32, i32); 8] = [
 /// to `max_radius`.
 ///
 /// `footing` says what counts as a placement: ground nobody holds, or ground
-/// the terrain merely allows.
+/// its shape may stand on whoever holds it; `accept` takes or refuses each
+/// anchor that footing admits.
 ///
 /// The scan order — rings outward, and within a ring the ground closest to the
 /// middle of `around` first, ties by row then column — is what makes the answer
@@ -61,6 +63,7 @@ pub fn find_placements_near(
     max_radius: u32,
     max_amount: usize,
     footing: Footing,
+    mut accept: impl FnMut(CellPos) -> bool,
 ) -> Vec<CellPos> {
     let mut found: Vec<CellPos> = Vec::with_capacity(max_amount);
     if max_amount == 0 {
@@ -74,6 +77,7 @@ pub fn find_placements_near(
         |candidate| {
             let rect = CellRect::new(candidate, shape.size);
             if fits(grid, shape, candidate, footing)
+                && accept(candidate)
                 && !found
                     .iter()
                     .any(|&taken| CellRect::new(taken, shape.size).intersects(rect))
@@ -90,10 +94,10 @@ pub fn find_placements_near(
     found
 }
 
-/// Finds the nearest placement for `shape` near the rectangle at `around`,
-/// searching outward ring by ring to `max_radius`; within a ring
-/// the ground closest to `toward` comes first, then the order
-/// [`find_placements_near`] keeps.
+/// Finds the nearest placement for `shape` near the rectangle at `around`
+/// that `footing` admits and `accept` takes, searching outward ring by ring
+/// to `max_radius`; within a ring the ground closest to `toward` comes first,
+/// then the order [`find_placements_near`] keeps.
 pub fn find_placement_near_toward(
     grid: &NavGrid,
     shape: MoverShape,
@@ -101,9 +105,10 @@ pub fn find_placement_near_toward(
     max_radius: u32,
     footing: Footing,
     toward: CellRect,
+    mut accept: impl FnMut(CellPos) -> bool,
 ) -> Option<CellPos> {
     find_placement_near_toward_where(grid, around, shape.size, max_radius, toward, |cell| {
-        fits(grid, shape, cell, footing)
+        fits(grid, shape, cell, footing) && accept(cell)
     })
 }
 
@@ -144,16 +149,18 @@ pub fn find_placement_near_toward_where(
     found
 }
 
-/// Finds the nearest placement for `shape` near the rectangle at `around`,
-/// searching outward ring by ring to `max_radius`.
+/// Finds the nearest placement for `shape` near the rectangle at `around`
+/// that `footing` admits and `accept` takes, searching outward ring by ring
+/// to `max_radius`.
 pub fn find_placement_near(
     grid: &NavGrid,
     shape: MoverShape,
     around: CellRect,
     max_radius: u32,
     footing: Footing,
+    accept: impl FnMut(CellPos) -> bool,
 ) -> Option<CellPos> {
-    find_placements_near(grid, shape, around, max_radius, 1, footing)
+    find_placements_near(grid, shape, around, max_radius, 1, footing, accept)
         .into_iter()
         .next()
 }
@@ -182,7 +189,11 @@ pub fn find_nearest_free_pos(
     let h = grid.height() as i32;
 
     while let Some(pos) = queue.pop_front() {
-        if expansion == Expansion::ThroughPassable && !grid.fits(pos, shape) && pos != around {
+        let expands = match expansion {
+            Expansion::ThroughPassable => pos == around || grid.fits(pos, shape),
+            Expansion::ThroughBlocked => true,
+        };
+        if !expands {
             continue;
         }
 
@@ -193,6 +204,13 @@ pub fn find_nearest_free_pos(
                 continue;
             }
             let neighbor = CellPos::new(nx as u32, ny as u32);
+            let steppable = match expansion {
+                Expansion::ThroughPassable => grid.can_step(pos, neighbor, shape),
+                Expansion::ThroughBlocked => true,
+            };
+            if !steppable {
+                continue;
+            }
             if !visited.insert(neighbor) {
                 continue;
             }
@@ -218,7 +236,7 @@ enum Walk {
 fn fits(grid: &NavGrid, shape: MoverShape, candidate: CellPos, footing: Footing) -> bool {
     match footing {
         Footing::Free => grid.fits(candidate, shape),
-        Footing::Shared => grid.fits_terrain(candidate, shape.terrains, shape.size),
+        Footing::Shared => grid.fits_ground(candidate, shape),
     }
 }
 

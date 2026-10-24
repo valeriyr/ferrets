@@ -1,6 +1,9 @@
 //! A map described as serializable data, from which a live map is built.
 
+use std::collections::BTreeMap;
+
 use ferrets_geometry::projection::Projection;
+use ferrets_pathfinder::{relief::Relief, slope::Slope};
 use serde::{Deserialize, Serialize};
 
 use crate::{movement_model::MovementModel, session::player_id::PlayerId};
@@ -59,6 +62,9 @@ pub struct MapData {
     /// Per-cell terrain as indices into `terrains`, row-major,
     /// `width × height` entries.
     terrain_cells: Vec<u8>,
+    /// Each layer spanning levels' relief, by layer name: per cell, row-major,
+    /// `width × height` entries.
+    reliefs: BTreeMap<String, Vec<Relief>>,
     /// The seats the map declares, indexed by slot id.
     slots: Vec<MapSlot>,
     /// The entities the map opens with, built in declared order.
@@ -66,8 +72,8 @@ pub struct MapData {
 }
 
 impl MapData {
-    /// Creates a `width × height` map with every cell of `terrain`, no seats
-    /// and no placements.
+    /// Creates a `width × height` map with every cell of `terrain`, no
+    /// layer reliefs, no seats and no placements.
     ///
     /// Panics if a dimension is zero.
     pub fn new(
@@ -89,6 +95,7 @@ impl MapData {
             height,
             terrains: vec![terrain.into()],
             terrain_cells: vec![0; width as usize * height as usize],
+            reliefs: BTreeMap::new(),
             slots: Vec::new(),
             placements: Vec::new(),
         }
@@ -142,6 +149,19 @@ impl MapData {
         &self.terrain_cells
     }
 
+    /// Returns a layer's relief, per cell, row-major, `width × height`
+    /// entries, or `None` where the map gives the layer none.
+    pub fn relief(&self, layer: &str) -> Option<&[Relief]> {
+        self.reliefs.get(layer).map(Vec::as_slice)
+    }
+
+    /// Returns every layer relief the map gives, by layer name, in name order.
+    pub fn reliefs(&self) -> impl Iterator<Item = (&str, &[Relief])> {
+        self.reliefs
+            .iter()
+            .map(|(layer, relief)| (layer.as_str(), relief.as_slice()))
+    }
+
     /// Returns the seats the map declares, indexed by slot id.
     pub fn slots(&self) -> &[MapSlot] {
         &self.slots
@@ -178,11 +198,7 @@ impl MapData {
     ///
     /// Panics if the cell is out of bounds, or the palette overflows.
     pub fn set_terrain(&mut self, cell: (u32, u32), terrain: &str) {
-        let (x, y) = cell;
-        assert!(
-            x < self.width && y < self.height,
-            "cell ({x}, {y}) is out of bounds"
-        );
+        let cell_index = self.cell_index(cell);
 
         let index = self
             .terrains
@@ -193,7 +209,36 @@ impl MapData {
                 self.terrains.len() - 1
             });
         let index = u8::try_from(index).expect("terrain palette overflow");
-        self.terrain_cells[(y * self.width + x) as usize] = index;
+        self.terrain_cells[cell_index] = index;
+    }
+
+    /// Gives `layer` a relief with every cell at `level` and no slopes.
+    ///
+    /// Panics if the map gives the layer a relief already.
+    pub fn add_relief(&mut self, layer: &str, level: u32) {
+        let cells = self.width as usize * self.height as usize;
+        let relief = vec![Relief { level, slope: None }; cells];
+        assert!(
+            self.reliefs.insert(layer.to_string(), relief).is_none(),
+            "map '{}' gives layer '{layer}' a relief twice",
+            self.name
+        );
+    }
+
+    /// Sets `layer`'s level at one cell.
+    ///
+    /// Panics if the cell is out of bounds or the map gives the layer no
+    /// relief.
+    pub fn set_cell_level(&mut self, layer: &str, cell: (u32, u32), level: u32) {
+        self.relief_at(layer, cell).level = level;
+    }
+
+    /// Makes one cell part of a slope on `layer`.
+    ///
+    /// Panics if the cell is out of bounds or the map gives the layer no
+    /// relief.
+    pub fn set_slope(&mut self, layer: &str, cell: (u32, u32), slope: Slope) {
+        self.relief_at(layer, cell).slope = Some(slope);
     }
 
     /// Declares the next seat as a player seat starting at `cell`, returning
@@ -236,5 +281,30 @@ impl MapData {
             );
         }
         self.placements.push(placement);
+    }
+
+    /// `layer`'s relief at `cell`.
+    ///
+    /// Panics if the cell is out of bounds or the map gives the layer no
+    /// relief.
+    fn relief_at(&mut self, layer: &str, cell: (u32, u32)) -> &mut Relief {
+        let index = self.cell_index(cell);
+        let name = &self.name;
+        &mut self
+            .reliefs
+            .get_mut(layer)
+            .unwrap_or_else(|| panic!("map '{name}' gives layer '{layer}' no relief"))[index]
+    }
+
+    /// The row-major index of `cell`.
+    ///
+    /// Panics if the cell is out of bounds.
+    fn cell_index(&self, cell: (u32, u32)) -> usize {
+        let (x, y) = cell;
+        assert!(
+            x < self.width && y < self.height,
+            "cell ({x}, {y}) is out of bounds"
+        );
+        (y * self.width + x) as usize
     }
 }

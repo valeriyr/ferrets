@@ -918,6 +918,25 @@ fn breeder_takes_rally_point_only_when_its_broodlings_produce() {
 }
 
 #[test]
+fn reserving_change_steps_out_where_new_form_settles_clear_of_breeder() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    utils::grant_gold(&mut app, 10);
+    utils::place(&mut app, "hatch", 10, 10, 0);
+    utils::run_ticks(&mut app, 10);
+    let grub = alive_of_type(&mut app, "grub")[0];
+
+    order_morph(&mut app, grub, "mound");
+    utils::run_ticks(&mut app, 12);
+
+    // From the berth's (10, 13) the 3×3 would settle centered at (9, 12), over
+    // the hatch's row 12. The first ring tries (10, 12) on the hatch, then
+    // (9, 13) and (11, 13), settling at (8, 12) and (10, 12), over it too, then
+    // (10, 14), whose 3×3 settles at (9, 13), clear of it.
+    assert_eq!(type_name_of(&app, grub), "mound");
+    assert_eq!(utils::cell_of(app.world(), grub), CellPos::new(9, 13));
+}
+
+#[test]
 fn refused_reserving_change_leaves_broodling_seated() {
     let mut app = utils::brood_app(MovementModel::Cell);
     utils::grant_gold(&mut app, 10);

@@ -64,7 +64,10 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask};
+use ferrets_pathfinder::{
+    cliff_crossing::CliffCrossing, layer_level::LayerLevel, layer_mask::LayerMask,
+    terrain_id::TerrainId, terrain_mask::TerrainMask,
+};
 use ferrets_script::{
     content,
     engine::{ScriptEngine, lua::LuaEngine},
@@ -122,7 +125,7 @@ fn loads_races_resources_and_entities() {
 #[test]
 fn declared_acquire_range_overrides_weapon_range_default() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -165,7 +168,7 @@ fn declared_acquire_range_overrides_weapon_range_default() {
 #[test]
 fn custom_stat_is_declared_and_seeded() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("morale", 0)
@@ -200,7 +203,7 @@ fn custom_player_stat_is_declared() {
 #[test]
 fn unknown_stat_name_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("gadget", {
@@ -220,7 +223,7 @@ fn unknown_stat_name_errors() {
 #[test]
 fn pool_written_among_stats_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("gadget", {
@@ -240,7 +243,7 @@ fn pool_written_among_stats_errors() {
 #[test]
 fn unknown_pool_name_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("gadget", {
@@ -260,7 +263,7 @@ fn unknown_pool_name_errors() {
 #[test]
 fn parses_armor_bonus_damage_vs_and_energy() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -317,7 +320,7 @@ fn parses_armor_bonus_damage_vs_and_energy() {
 #[test]
 fn pool_reads_initial() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("lamp", {
@@ -357,7 +360,7 @@ fn pool_reads_initial() {
 #[test]
 fn rise_reads_time_and_how_each_pool_is_held() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("tower", {
@@ -398,7 +401,7 @@ fn rise_reads_time_and_how_each_pool_is_held() {
 #[test]
 fn rise_pool_of_unknown_word_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
@@ -419,7 +422,7 @@ fn rise_pool_of_unknown_word_is_rejected() {
 #[test]
 fn rise_pool_following_work_without_initial_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
@@ -440,7 +443,7 @@ fn rise_pool_following_work_without_initial_is_rejected() {
 #[test]
 fn rise_pool_following_work_from_full_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
@@ -461,7 +464,7 @@ fn rise_pool_following_work_from_full_is_rejected() {
 #[test]
 fn rise_pool_of_unknown_name_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
@@ -482,7 +485,7 @@ fn rise_pool_of_unknown_name_is_rejected() {
 #[test]
 fn rise_pool_following_work_from_table_without_share_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
@@ -503,7 +506,7 @@ fn rise_pool_following_work_from_table_without_share_is_rejected() {
 #[test]
 fn rise_without_time_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
@@ -524,7 +527,7 @@ fn rise_without_time_is_rejected() {
 #[test]
 fn rise_without_pools_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hut", {
@@ -545,7 +548,7 @@ fn rise_without_pools_is_rejected() {
 #[test]
 fn pool_initial_of_unknown_word_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("lamp", {
@@ -565,7 +568,7 @@ fn pool_initial_of_unknown_word_is_rejected() {
 #[test]
 fn parses_repairer_and_repair_ratio() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
@@ -620,7 +623,7 @@ fn parses_repairer_and_repair_ratio() {
 #[test]
 fn parses_transporter() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
@@ -683,7 +686,7 @@ fn parses_transporter() {
 #[test]
 fn parses_sheltering_transporter() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
@@ -712,7 +715,7 @@ fn parses_sheltering_transporter() {
 #[test]
 fn unknown_passenger_conduct_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
@@ -738,7 +741,7 @@ fn unknown_passenger_conduct_errors() {
 #[test]
 fn unknown_boarding_affiliation_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
@@ -764,7 +767,7 @@ fn unknown_boarding_affiliation_errors() {
 #[test]
 fn unknown_passenger_fate_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("infantry")
@@ -871,7 +874,7 @@ fn gateway_of_undefined_tunnel_errors() {
 #[test]
 fn entity_holding_as_transporter_and_gateway_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_network("warren", {
@@ -941,7 +944,7 @@ fn unknown_passage_errors() {
 #[test]
 fn parses_flat_per_tick_repair_cost() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
@@ -983,7 +986,7 @@ fn parses_flat_per_tick_repair_cost() {
 #[test]
 fn parses_medic_paying_energy_at_flat_rate() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("biological")
@@ -1030,7 +1033,7 @@ fn parses_medic_paying_energy_at_flat_rate() {
 #[test]
 fn parses_skill_with_buff_effect() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -1083,7 +1086,7 @@ fn parses_skill_with_buff_effect() {
 #[test]
 fn parses_skill_requirements() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -1143,7 +1146,7 @@ fn requirement_naming_undeclared_research_is_rejected() {
 #[test]
 fn requirement_naming_no_kind_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mortar", {
@@ -1166,7 +1169,7 @@ fn requirement_naming_no_kind_is_rejected() {
 #[test]
 fn requirement_naming_two_kinds_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("workshop")
@@ -1190,7 +1193,7 @@ fn requirement_naming_two_kinds_is_rejected() {
 #[test]
 fn requirement_naming_two_kinds_reports_shape_before_lookup() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mortar", {
@@ -1215,7 +1218,7 @@ fn requirement_naming_two_kinds_reports_shape_before_lookup() {
 #[test]
 fn requirement_that_is_bare_name_is_rejected() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mortar", {
@@ -1493,7 +1496,7 @@ fn skill_with_unknown_buff_errors() {
 #[test]
 fn parses_projectile_and_splash() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_projectile("shell", { speed = "0.4", aim = "position" })
@@ -1588,7 +1591,7 @@ fn weapon_without_targets_is_rejected() {
     // The layers a weapon reaches are the one thing it cannot leave out: a weapon
     // that reaches nothing could never fire, so the rest says nothing without it.
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -1651,7 +1654,7 @@ fn unknown_projectile_aim_is_rejected() {
 #[test]
 fn parses_selection_priority_and_class() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -1681,7 +1684,7 @@ fn parses_selection_priority_and_class() {
 #[test]
 fn selection_class_defaults_to_type_name() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -1732,7 +1735,7 @@ fn wires_production_catalogues_across_entities() {
 #[test]
 fn parses_research_with_buff_and_requirements() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_resource("gold")
@@ -1779,7 +1782,7 @@ fn parses_research_with_buff_and_requirements() {
 #[test]
 fn loads_declared_requirements_onto_entities() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("blacksmith", {
@@ -1801,7 +1804,7 @@ fn loads_declared_requirements_onto_entities() {
 #[test]
 fn loads_requirement_nodes_and_state_leaves() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("keep", {
@@ -1860,7 +1863,7 @@ fn loads_requirement_nodes_and_state_leaves() {
 #[test]
 fn requirement_table_mixing_list_and_key_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_tag("hall")
@@ -1885,7 +1888,7 @@ fn requirement_table_mixing_list_and_key_errors() {
 #[test]
 fn requirement_list_with_stray_key_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_research("masonry", { time = 10 })
@@ -1906,7 +1909,7 @@ fn requirement_list_with_stray_key_errors() {
 #[test]
 fn requirement_node_list_naming_key_beside_entries_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("keep", {
@@ -1929,7 +1932,7 @@ fn requirement_node_list_naming_key_beside_entries_errors() {
 #[test]
 fn bare_list_inside_requirement_list_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_tag("hall")
@@ -1954,7 +1957,7 @@ fn bare_list_inside_requirement_list_errors() {
 #[test]
 fn requirement_list_with_several_stray_keys_names_first_in_sorted_order() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("keep", {
@@ -1977,7 +1980,7 @@ fn requirement_list_with_several_stray_keys_names_first_in_sorted_order() {
 #[test]
 fn requirement_list_with_hole_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_research("masonry", { time = 10 })
@@ -2001,7 +2004,7 @@ fn requirement_list_with_hole_errors() {
 #[test]
 fn requirement_list_with_index_past_its_length_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("keep", {
@@ -2042,7 +2045,7 @@ fn as_long_as_list_with_stray_key_errors() {
 #[test]
 fn requirement_string_other_than_risen_or_idle_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("knight", {
@@ -2124,7 +2127,7 @@ fn as_long_as_reads_bare_list_as_all() {
 #[test]
 fn bound_naming_two_thresholds_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("knight", {
@@ -2144,7 +2147,7 @@ fn bound_naming_two_thresholds_errors() {
 #[test]
 fn stat_requirement_with_unknown_stat_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("knight", {
@@ -2164,7 +2167,7 @@ fn stat_requirement_with_unknown_stat_errors() {
 #[test]
 fn loads_while_buff_and_passives() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity_buff("on_fire", {
@@ -2194,7 +2197,7 @@ fn loads_while_buff_and_passives() {
 #[test]
 fn passive_naming_unknown_buff_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("depot", {
@@ -2231,7 +2234,7 @@ fn research_with_unknown_buff_errors() {
 #[test]
 fn researcher_with_unknown_research_errors() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("lab", {
@@ -2254,7 +2257,7 @@ fn researcher_with_unknown_research_errors() {
 )]
 fn undeclared_requirement_panics_on_load() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("mortar", {
@@ -2272,7 +2275,7 @@ fn undeclared_requirement_panics_on_load() {
 #[test]
 fn loads_declared_tags_onto_entities() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_tag("flying")
@@ -2291,7 +2294,7 @@ fn loads_declared_tags_onto_entities() {
 #[should_panic(expected = "references unregistered tag 'flying'")]
 fn undeclared_tag_panics_on_load() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("gryphon", {
@@ -2309,13 +2312,12 @@ fn undeclared_tag_panics_on_load() {
 #[test]
 fn define_layer_returns_ids_in_declaration_order() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
-        local air = define_layer("air")
+        local air = define_layer("air", { level = 2 })
         assert(ground == 1)
         assert(air == 2)
-        assert(define_layer("ground") == 1)
     "#;
     let registry = content::load(&engine(), source).expect("load content");
 
@@ -2326,10 +2328,10 @@ fn define_layer_returns_ids_in_declaration_order() {
 #[test]
 fn loads_occupies_mask_combined_with_bitwise_or() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
-        local air = define_layer("air")
+        local air = define_layer("air", { level = 2 })
         define_entity("gryphon", {
             location = { domain = "ground", size = 1, solidity = "solid", occupies = ground | air },
         })
@@ -2348,8 +2350,8 @@ fn loads_occupies_mask_combined_with_bitwise_or() {
 #[test]
 fn location_without_occupies_occupies_its_domain_layer() {
     let source = r#"
-        define_layer("ground")
-        local AIR = define_layer("air")
+        define_layer("ground", { level = 1 })
+        local AIR = define_layer("air", { level = 2 })
         define_terrain("land")
         define_domain("aloft", { layer = AIR, terrains = "any" })
         define_entity("kite", {
@@ -2368,8 +2370,8 @@ fn location_without_occupies_occupies_its_domain_layer() {
 #[test]
 fn layer_id_looks_up_defined_layer() {
     let source = r#"
-        define_layer("ground")
-        define_layer("air")
+        define_layer("ground", { level = 1 })
+        define_layer("air", { level = 2 })
         define_terrain("land")
         define_domain("aloft", { layer = layer_id("air"), terrains = "any" })
     "#;
@@ -2400,7 +2402,7 @@ fn reports_undefined_layer_lookup_as_content_error() {
 #[should_panic(expected = "entity type 'gryphon' occupies unregistered layers")]
 fn undeclared_occupied_layer_panics_on_load() {
     let source = r#"
-        local ground = define_layer("ground")
+        local ground = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = ground, terrains = "any" })
         define_entity("gryphon", {
@@ -2429,8 +2431,8 @@ fn define_terrain_returns_bits_in_declaration_order() {
 #[test]
 fn loads_domain_terrains_as_mask_or_any() {
     let source = r#"
-        local GROUND = define_layer("ground")
-        local AIR = define_layer("air")
+        local GROUND = define_layer("ground", { level = 1 })
+        local AIR = define_layer("air", { level = 2 })
         local LAND = define_terrain("land")
         local SHALLOW_WATER = define_terrain("shallow_water")
         define_domain("ground", { layer = GROUND, terrains = LAND | SHALLOW_WATER })
@@ -2444,15 +2446,121 @@ fn loads_domain_terrains_as_mask_or_any() {
         DomainDef::new(
             utils::GROUND,
             Terrains::Only(TerrainMask::from(utils::LAND) | utils::SHALLOW_WATER),
+            None,
         )
     );
-    assert_eq!(domain("air"), DomainDef::new(utils::AIR, Terrains::Any));
+    assert_eq!(
+        domain("air"),
+        DomainDef::new(utils::AIR, Terrains::Any, None)
+    );
+}
+
+#[test]
+fn loads_layer_levels_and_domain_cliff_crossings() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = { from = 1, to = 3 } })
+        local AIR = define_layer("air", { level = 4 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = LAND, cliff_crossing = "ramp" })
+        define_domain("striding", { layer = GROUND, terrains = LAND, cliff_crossing = "cross" })
+        define_domain("air", { layer = AIR, terrains = "any" })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    assert_eq!(
+        registry.layer_level(utils::GROUND),
+        LayerLevel::Range { from: 1, to: 3 }
+    );
+    assert_eq!(registry.layer_level(utils::AIR), LayerLevel::At(4));
+    let cliff_crossing = |name: &str| {
+        registry
+            .domain_def(registry.domain(name).expect("defined"))
+            .cliff_crossing()
+    };
+    assert_eq!(cliff_crossing("ground"), Some(CliffCrossing::Ramp));
+    assert_eq!(cliff_crossing("striding"), Some(CliffCrossing::Cross));
+    assert_eq!(cliff_crossing("air"), None);
+}
+
+#[test]
+fn layer_without_level_errors() {
+    let source = r#"
+        define_layer("ground", {})
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a layer without a level");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "level must be a level or a { from, to } range, found nil"
+    );
+}
+
+#[test]
+fn negative_layer_level_errors() {
+    let source = r#"
+        define_layer("ground", { level = -1 })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a negative level");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(message, "level must be a level, found -1");
+}
+
+#[test]
+fn layer_range_without_top_errors() {
+    let source = r#"
+        define_layer("ground", { level = { from = 1 } })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a range without its top");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "field 'to': error converting Lua nil to u32 (expected number or string coercible to number)"
+    );
+}
+
+#[test]
+fn unknown_cliff_crossing_keyword_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = { from = 1, to = 3 } })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = LAND, cliff_crossing = "jump" })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject an unknown cliff_crossing keyword");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "cliff_crossing must be 'ramp' or 'cross', found 'jump'"
+    );
 }
 
 #[test]
 fn reports_undefined_domain_as_content_error() {
     let source = r#"
-        define_layer("ground")
+        define_layer("ground", { level = 1 })
         define_entity("gryphon", {
             location = { domain = "ground", size = 1, solidity = "solid" },
         })
@@ -2472,7 +2580,7 @@ fn reports_undefined_domain_as_content_error() {
 #[should_panic(expected = "domain 'naval' names unregistered terrains 0b1000")]
 fn domain_naming_undeclared_terrain_panics_on_load() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         define_terrain("land")
         define_domain("naval", { layer = GROUND, terrains = 8 })
     "#;
@@ -2482,7 +2590,7 @@ fn domain_naming_undeclared_terrain_panics_on_load() {
 #[test]
 fn reports_terrains_neither_any_nor_mask_as_content_error() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = { "land" } })
     "#;
@@ -2503,7 +2611,7 @@ fn reports_terrains_neither_any_nor_mask_as_content_error() {
 #[test]
 fn negative_terrain_mask_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = -1 })
     "#;
@@ -2525,7 +2633,7 @@ fn negative_terrain_mask_errors() {
 #[test]
 fn reports_unknown_enum_as_content_error() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("wall", {
@@ -2551,7 +2659,7 @@ fn repairer_without_rate_errors() {
     // No default: mending a structure against its rise time and patching up a
     // casualty at a flat rate are both ordinary, so content states which it is.
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("building")
@@ -2577,7 +2685,7 @@ fn repairer_without_cost_errors() {
     // Free work is a balance stance, not an absence — `{ mode = "free" }` says so,
     // and requiring it keeps a misspelled field from quietly meaning free.
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("building")
@@ -2605,7 +2713,7 @@ fn repairer_without_cost_errors() {
 #[test]
 fn unknown_repair_rate_mode_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("biological")
@@ -2633,7 +2741,7 @@ fn unknown_repair_rate_mode_errors() {
 #[test]
 fn unknown_work_presence_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("building")
@@ -2662,7 +2770,7 @@ fn unknown_work_presence_errors() {
 #[test]
 fn docks_and_annex_read_their_terms() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
@@ -2719,7 +2827,7 @@ fn docks_and_annex_read_their_terms() {
 #[test]
 fn watch_effect_reads_its_radius_and_duration() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -2753,7 +2861,7 @@ fn watch_effect_reads_its_radius_and_duration() {
 #[test]
 fn skill_reads_time_it_is_worked_over() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("ritual_time", 1)
@@ -2818,7 +2926,7 @@ fn skill_reads_time_it_is_worked_over() {
 #[test]
 fn delayed_cast_reads_when_it_pays_and_what_it_refunds() {
     let source = r#"
-        define_layer("ground")
+        define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = 1, terrains = "any" })
         define_skill("portal", {
@@ -2914,7 +3022,7 @@ fn entity_stat_without_floor_is_refused() {
 #[test]
 fn skill_reads_reach_it_is_cast_from() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("raise_range", 1)
@@ -2968,7 +3076,7 @@ fn skill_reads_reach_it_is_cast_from() {
 #[test]
 fn skill_reach_by_undefined_stat_errors() {
     let source = r#"
-        define_layer("ground")
+        define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = 1, terrains = "any" })
 
@@ -2990,7 +3098,7 @@ fn skill_reach_by_undefined_stat_errors() {
 #[test]
 fn summon_effect_reads_its_type_and_count() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -3032,7 +3140,7 @@ fn summon_effect_reads_its_type_and_count() {
 #[test]
 fn summon_effect_reads_its_landing_and_arrival() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -3070,7 +3178,7 @@ fn summon_effect_reads_its_landing_and_arrival() {
 #[test]
 fn summon_without_landing_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mound", {
@@ -3092,7 +3200,7 @@ fn summon_without_landing_errors() {
 #[test]
 fn summon_without_arrival_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mound", {
@@ -3114,10 +3222,10 @@ fn summon_without_arrival_errors() {
 #[test]
 fn summon_reads_its_field_rules() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("power", { terrains = "any", decay = "instant" })
+        define_field("power", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("mound", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
@@ -3157,7 +3265,7 @@ fn summon_reads_its_field_rules() {
 #[test]
 fn summon_naming_unknown_arrival_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("mound", {
@@ -3179,10 +3287,10 @@ fn summon_naming_unknown_arrival_errors() {
 #[test]
 fn warper_reads_its_catalogue_field_rules_and_landing() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("power", { terrains = "any", decay = "instant" })
+        define_field("power", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("recruit", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
@@ -3222,7 +3330,7 @@ fn warper_reads_its_catalogue_field_rules_and_landing() {
 #[test]
 fn warper_without_warps_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("relay", {
@@ -3240,7 +3348,7 @@ fn warper_without_warps_errors() {
 #[test]
 fn warper_without_landing_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("relay", {
@@ -3258,7 +3366,7 @@ fn warper_without_landing_errors() {
 #[test]
 fn trainer_without_trains_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("relay", {
@@ -3276,13 +3384,13 @@ fn trainer_without_trains_errors() {
 #[test]
 fn skill_numbers_read_stats() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("scan_radius", 0)
         define_entity_stat("scan_time", 1)
         define_entity_stat("host_size", 1)
-        define_field("creep", { terrains = "any", decay = "instant" })
+        define_field("creep", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("skeleton", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 20 } },
@@ -3346,7 +3454,7 @@ fn skill_numbers_read_stats() {
 #[test]
 fn summon_of_undefined_type_errors() {
     let source = r#"
-        define_layer("ground")
+        define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = 1, terrains = "any" })
 
@@ -3369,7 +3477,7 @@ fn summon_of_undefined_type_errors() {
 #[should_panic(expected = "a death that waits for nothing and leaves nothing is no dying at all")]
 fn empty_dying_block_panics_on_load() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("marine", {
@@ -3384,7 +3492,7 @@ fn empty_dying_block_panics_on_load() {
 #[test]
 fn dying_reads_what_it_leaves_and_deaths_that_leave_it() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -3471,7 +3579,7 @@ fn dying_reads_what_it_leaves_and_deaths_that_leave_it() {
 #[test]
 fn weapon_reads_what_it_leaves_of_what_it_kills() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -3513,7 +3621,7 @@ fn weapon_reads_what_it_leaves_of_what_it_kills() {
 #[test]
 fn lifetime_stat_parses() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -3536,7 +3644,7 @@ fn lifetime_stat_parses() {
 #[test]
 fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
@@ -3622,7 +3730,7 @@ fn presence_table_reads_crew_limit_and_harvest_reads_its_sources() {
 #[should_panic(expected = "a crew limit must admit at least one worker")]
 fn crew_limit_of_zero_panics() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
@@ -3648,7 +3756,7 @@ fn crew_limit_of_zero_panics() {
 #[test]
 fn attached_presence_reads_berths_and_stance() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("wood")
@@ -3744,7 +3852,7 @@ fn attached_presence_reads_berths_and_stance() {
 #[test]
 fn overbuilding_type_reads_its_source() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
@@ -3778,7 +3886,7 @@ fn overbuilding_type_reads_its_source() {
 #[test]
 fn orbit_stance_reads_radius_and_period() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("wood")
@@ -3902,7 +4010,7 @@ fn stance_table_of_two_movements_errors() {
 #[test]
 fn unknown_berth_stance_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("wood")
@@ -3936,7 +4044,7 @@ fn unknown_berth_stance_errors() {
 #[test]
 fn reports_malformed_number_as_number_error() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("archer", {
@@ -4046,6 +4154,10 @@ fn parses_fields_sources_placement_and_effects() {
         registry.field_def(creep).terrains(),
         Terrains::Only(utils::LAND.into())
     );
+    assert_eq!(
+        registry.field_def(creep).spreads_on(),
+        LayerMask::from(utils::GROUND)
+    );
 
     assert_eq!(
         registry.entity("hive").unwrap().field_sources,
@@ -4144,7 +4256,7 @@ fn parses_fields_sources_placement_and_effects() {
 #[test]
 fn unknown_field_name_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hive", {
@@ -4164,10 +4276,10 @@ fn unknown_field_name_errors() {
 #[test]
 fn field_placement_rule_names_exactly_one_verb() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("creep", { terrains = LAND, decay = "never" })
+        define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = "never" })
         define_entity("spore", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             field_placement = { { requires = "creep", forbids = "creep", of = "anyone", coverage = "any" } },
@@ -4183,10 +4295,10 @@ fn field_placement_rule_names_exactly_one_verb() {
 #[test]
 fn unknown_field_coverage_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("veil", { terrains = "any", decay = "instant" })
+        define_field("veil", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("zealot", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             field_effects = { { field = "veil", of = "allied", coverage = "half", inside = { "conceal" } } },
@@ -4204,10 +4316,10 @@ fn unknown_field_coverage_errors() {
 #[test]
 fn field_effect_without_coverage_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("veil", { terrains = "any", decay = "instant" })
+        define_field("veil", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("zealot", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             field_effects = { { field = "veil", of = "allied", inside = { "conceal" } } },
@@ -4229,10 +4341,10 @@ fn field_effect_without_coverage_errors() {
 #[test]
 fn unknown_field_vision_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("creep", { terrains = LAND, decay = "never", vision = "glowing" })
+        define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = "never", vision = "glowing" })
     "#;
     let error = content::load(&engine(), source).err().expect("bad vision");
     assert!(
@@ -4244,15 +4356,35 @@ fn unknown_field_vision_errors() {
 #[test]
 fn unknown_field_decay_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("creep", { terrains = LAND, decay = "slowly" })
+        define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = "slowly" })
     "#;
     let error = content::load(&engine(), source).err().expect("bad decay");
     assert!(
         matches!(&error, ScriptError::ContentError(message) if message.contains("field decay must be")),
         "{error:?}"
+    );
+}
+
+#[test]
+fn field_without_layers_it_spreads_on_errors() {
+    let source = r#"
+        local LAND = define_terrain("land")
+        define_field("creep", { terrains = LAND, decay = "never" })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a field without the layers it spreads on");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "field 'spreads_on': error converting Lua nil to u32 (expected number or string coercible to number)"
     );
 }
 
@@ -4263,7 +4395,7 @@ fn unknown_field_decay_errors() {
 #[test]
 fn breeder_and_broodling_round_trip() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("brood_period", 1)
@@ -4348,7 +4480,7 @@ fn breeder_and_broodling_round_trip() {
 #[test]
 fn unknown_orphan_fate_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hatch", {
@@ -4367,7 +4499,7 @@ fn unknown_orphan_fate_errors() {
 #[test]
 fn unknown_morph_reason_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
@@ -4389,7 +4521,7 @@ fn unknown_morph_reason_errors() {
 #[test]
 fn lingering_without_reseat_distance_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hatch", {
@@ -4410,7 +4542,7 @@ fn lingering_without_reseat_distance_errors() {
 #[test]
 fn brood_period_of_wrong_shape_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hatch", {
@@ -4429,7 +4561,7 @@ fn brood_period_of_wrong_shape_errors() {
 #[test]
 fn morph_interrupted_and_reason_read_and_default() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
@@ -4479,7 +4611,7 @@ fn morph_interrupted_and_reason_read_and_default() {
 #[test]
 fn morph_without_pool_carry_names_no_pool() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
@@ -4500,7 +4632,7 @@ fn morph_without_pool_carry_names_no_pool() {
 #[test]
 fn pool_carry_reads_each_keyword() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         local function form(name)
@@ -4549,7 +4681,7 @@ fn pool_carry_reads_each_keyword() {
 #[test]
 fn unknown_pool_carry_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
@@ -4574,7 +4706,7 @@ fn unknown_pool_carry_errors() {
 #[test]
 fn via_reads_form_entering_carries_and_reverts() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         local function form(name)
@@ -4624,7 +4756,7 @@ fn via_reads_form_entering_carries_and_reverts() {
 #[test]
 fn via_reads_initial_on_entering_and_reverting() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         local function form(name)
@@ -4664,7 +4796,7 @@ fn via_reads_initial_on_entering_and_reverting() {
 #[test]
 fn via_without_carries_names_no_pool_and_reads_dies() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         local function form(name)
@@ -4696,7 +4828,7 @@ fn via_without_carries_names_no_pool_and_reads_dies() {
 #[test]
 fn interrupted_beside_via_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("larva", {
@@ -4721,7 +4853,7 @@ fn interrupted_beside_via_errors() {
 #[test]
 fn unknown_revert_carry_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("larva", {
@@ -4745,7 +4877,7 @@ fn unknown_revert_carry_errors() {
 #[test]
 fn carry_of_undefined_pool_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("larva", {
@@ -4948,7 +5080,7 @@ fn pool_shift_beside_stats_errors() {
 #[test]
 fn unknown_morph_interrupted_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
@@ -4975,7 +5107,7 @@ fn unknown_morph_interrupted_errors() {
 #[test]
 fn type_reads_concealment_and_stands_exposed_unless_declared() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("shade", {
@@ -5000,7 +5132,7 @@ fn type_reads_concealment_and_stands_exposed_unless_declared() {
 #[test]
 fn unknown_concealment_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("shade", {
@@ -5034,10 +5166,10 @@ fn unknown_field_terrains_keyword_errors() {
 #[test]
 fn unknown_while_disabled_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("power", { terrains = LAND, decay = "instant" })
+        define_field("power", { terrains = LAND, spreads_on = GROUND, decay = "instant" })
         define_entity("pylon", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             field_sources = {
@@ -5201,10 +5333,10 @@ fn unknown_entity_effect_errors() {
 #[test]
 fn field_effect_reads_concealed() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("veil", { terrains = "any", decay = "instant" })
+        define_field("veil", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("zealot", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             field_effects = { { field = "veil", of = "allied", coverage = "every", inside = { "conceal" } } },
@@ -5228,10 +5360,10 @@ fn field_effect_reads_concealed() {
 #[test]
 fn field_effect_reads_both_sides() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("power", { terrains = "any", decay = "instant" })
+        define_field("power", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("zealot", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             field_effects = { { field = "power", of = "own", coverage = "every",
@@ -5256,10 +5388,10 @@ fn field_effect_reads_both_sides() {
 #[test]
 fn field_effect_reads_holds_while() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("creep", { terrains = "any", decay = "instant" })
+        define_field("creep", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("pit", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
@@ -5277,12 +5409,12 @@ fn field_effect_reads_holds_while() {
 #[test]
 fn parses_field_detection_and_watch_detection() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        local AIR = define_layer("air")
-        define_field("true_sight", { terrains = "any", decay = "instant", detection = GROUND | AIR })
-        define_field("veil", { terrains = "any", decay = "instant" })
+        local AIR = define_layer("air", { level = 2 })
+        define_field("true_sight", { terrains = "any", spreads_on = GROUND | AIR, decay = "instant", detection = GROUND | AIR })
+        define_field("veil", { terrains = "any", spreads_on = GROUND | AIR, decay = "instant" })
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
@@ -5300,6 +5432,7 @@ fn parses_field_detection_and_watch_detection() {
     );
     assert_eq!(field("true_sight").terrains(), Terrains::Any);
     assert_eq!(field("veil").detection(), Detection::Blind);
+    assert_eq!(field("veil").spreads_on(), ground | air);
 
     let scan = registry
         .skill("scan")
@@ -5328,7 +5461,7 @@ fn parses_field_detection_and_watch_detection() {
 #[test]
 fn relocate_effect_reads_journey_and_landing() {
     let source = r#"
-        define_layer("ground")
+        define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = 1, terrains = "any" })
         define_skill("blink", {
@@ -5400,7 +5533,7 @@ fn relocate_effect_reads_journey_and_landing() {
 #[test]
 fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_tag("undead")
@@ -5565,7 +5698,7 @@ fn relocate_gathering_with_unknown_sight_errors() {
 #[test]
 fn relocate_home_reads_its_kinds_from_either_spot() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("crypt", {
@@ -5711,7 +5844,7 @@ fn relocate_count_of_unknown_shape_errors() {
 #[test]
 fn relocate_landing_of_unknown_word_errors() {
     let source = r#"
-        define_layer("ground")
+        define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = 1, terrains = "any" })
         define_skill("blink", {
@@ -5741,7 +5874,7 @@ fn relocate_landing_of_unknown_word_errors() {
 fn carrier_content(points: &str, stance: &str) -> String {
     format!(
         r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", {{ level = 1 }})
         local LAND = define_terrain("land")
         define_domain("ground", {{ layer = GROUND, terrains = "any" }})
         define_resource("wood")
@@ -5768,7 +5901,7 @@ fn carrier_content(points: &str, stance: &str) -> String {
 
 /// One self-contained ranged unit (no production catalogue).
 const ARCHER: &str = r#"
-    local GROUND = define_layer("ground")
+    local GROUND = define_layer("ground", { level = 1 })
     local LAND = define_terrain("land")
     define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -5793,7 +5926,7 @@ const ARCHER: &str = r#"
 
 /// A worker and a hall referencing each other's catalogues.
 const BASE: &str = r#"
-    local GROUND = define_layer("ground")
+    local GROUND = define_layer("ground", { level = 1 })
     local LAND = define_terrain("land")
     define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -5830,13 +5963,13 @@ const BASE: &str = r#"
 "#;
 
 const FIELDS: &str = r#"
-    local GROUND = define_layer("ground")
+    local GROUND = define_layer("ground", { level = 1 })
     local LAND = define_terrain("land")
     define_domain("ground", { layer = GROUND, terrains = "any" })
 
-    define_field("creep", { terrains = LAND, decay = { cycle = 9 }, vision = "watched" })
-    define_field("power", { terrains = LAND, decay = "instant" })
-    define_field("blight", { terrains = LAND, decay = "never" })
+    define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 9 }, vision = "watched" })
+    define_field("power", { terrains = LAND, spreads_on = GROUND, decay = "instant" })
+    define_field("blight", { terrains = LAND, spreads_on = GROUND, decay = "never" })
 
     define_entity("hive", {
         location = { domain = "ground", size = 2, solidity = "solid" },
@@ -5897,7 +6030,7 @@ fn engine() -> impl ScriptEngine {
 fn attacker_with(block: &str) -> String {
     format!(
         r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", {{ level = 1 }})
         local LAND = define_terrain("land")
         define_domain("ground", {{ layer = GROUND, terrains = "any" }})
 
@@ -5913,7 +6046,7 @@ fn attacker_with(block: &str) -> String {
 #[test]
 fn morph_transitions_round_trip() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
@@ -6000,7 +6133,7 @@ fn morph_transitions_round_trip() {
 #[test]
 fn unknown_morph_placement_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
@@ -6023,7 +6156,7 @@ fn unknown_morph_placement_errors() {
 #[test]
 fn unknown_morph_cancel_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
@@ -6046,7 +6179,7 @@ fn unknown_morph_cancel_errors() {
 #[test]
 fn morph_time_of_wrong_shape_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
@@ -6069,7 +6202,7 @@ fn morph_time_of_wrong_shape_errors() {
 #[test]
 fn unknown_morph_time_stat_errors() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
@@ -6092,7 +6225,7 @@ fn unknown_morph_time_stat_errors() {
 #[test]
 fn parses_turret_and_its_mount() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -6156,7 +6289,7 @@ fn parses_turret_and_its_mount() {
 #[test]
 fn parses_turret_reading_its_own_stats() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("flak_damage", 0)
@@ -6194,7 +6327,7 @@ fn parses_turret_reading_its_own_stats() {
 #[test]
 fn rejects_unknown_weapon_conduct() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -6212,7 +6345,7 @@ fn rejects_unknown_weapon_conduct() {
 #[test]
 fn rejects_mount_of_undefined_turret() {
     let source = r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
 
@@ -6251,7 +6384,7 @@ fn entity_effect(registry: &ContentRegistry, name: &str) -> EntityCastEffect {
 fn casting_error(cast: &str) -> ScriptError {
     let source = format!(
         r#"
-        define_layer("ground")
+        define_layer("ground", {{ level = 1 }})
         local LAND = define_terrain("land")
         define_domain("ground", {{ layer = 1, terrains = "any" }})
         define_skill("trip", {{
@@ -6272,7 +6405,7 @@ fn casting_error(cast: &str) -> ScriptError {
 fn skill_error(effect: &str) -> ScriptError {
     let source = format!(
         r#"
-        define_layer("ground")
+        define_layer("ground", {{ level = 1 }})
         local LAND = define_terrain("land")
         define_domain("ground", {{ layer = 1, terrains = "any" }})
         define_tag("hall")
@@ -6290,7 +6423,7 @@ fn skill_error(effect: &str) -> ScriptError {
 fn relocation_error(journey: &str) -> ScriptError {
     let source = format!(
         r#"
-        define_layer("ground")
+        define_layer("ground", {{ level = 1 }})
         local LAND = define_terrain("land")
         define_domain("ground", {{ layer = 1, terrains = "any" }})
         define_skill("trip", {{
@@ -6324,7 +6457,7 @@ const HELD: &str = "load_range = 1, load_period = 2, unload_range = 1, unload_pe
 fn gateway_content(tunnel: &str, gateway: &str, stats: &str) -> String {
     format!(
         r#"
-        local GROUND = define_layer("ground")
+        local GROUND = define_layer("ground", {{ level = 1 }})
         local LAND = define_terrain("land")
         define_domain("ground", {{ layer = GROUND, terrains = "any" }})
         define_tag("ground")

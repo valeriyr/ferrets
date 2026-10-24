@@ -36,6 +36,7 @@ use ferrets_simulation::{
         cast::{self, AimRefusal},
         warp,
     },
+    ground,
     input::SYNC_LATENCY,
     landing,
     map::Map,
@@ -313,7 +314,7 @@ pub fn viewport_corners(
 
 /// What a click is looking for under the cursor.
 #[derive(Clone, Copy)]
-enum Clicked {
+pub(crate) enum Clicked {
     /// Whatever is standing there — what every order means.
     Standing,
     /// The body lying there, which only a cast that spends one means.
@@ -326,7 +327,7 @@ enum Clicked {
 /// footprint — the same box they are rendered in — so a mover resting
 /// between cell origins is picked by what is drawn, not by the cell its
 /// position truncates to.
-fn entity_at(
+pub(crate) fn entity_at(
     world: Vec2,
     looking_for: Clicked,
     registry: &ContentRegistry,
@@ -1611,21 +1612,20 @@ pub struct GhostView<'a> {
 
 impl GhostView<'_> {
     /// Whether the ghost of `def` anchored at `anchor` shows as fitting: on
-    /// terrains its domain takes, clear on a layer it occupies of every
-    /// footprint made out that claims its cells — and, for a footprint on the
-    /// static plane, of every one that holds its ground — and its type's field
-    /// rules met.
+    /// ground the simulation's [`ground::takes`] says it takes, clear on a
+    /// layer it occupies of every footprint made out that claims its cells —
+    /// and, for a footprint on the static plane, of every one that holds its
+    /// ground — and its type's field rules met.
     pub fn fits(&self, def: &EntityTypeDef, anchor: CellPos) -> bool {
         let location_def = def.location.expect("validated content defines a location");
         let shape = entity_def::mover_shape(self.registry, &location_def);
         let footprint = CellRect::new(anchor, shape.size);
-        let refused_underfoot = match OccupancyClass::of(def) {
+        let class = OccupancyClass::of(def);
+        let refused_underfoot = match class {
             OccupancyClass::Static => true,
             OccupancyClass::Claim => false,
         };
-        self.map
-            .nav_grid()
-            .fits_terrain(anchor, shape.terrains, shape.size)
+        ground::takes(self.map, anchor, shape, class)
             && !self.made_out.iter().any(|&(layers, standing, solidity)| {
                 layers & shape.layers != LayerMask::EMPTY
                     && standing.intersects(footprint)

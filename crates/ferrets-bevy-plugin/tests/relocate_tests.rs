@@ -962,6 +962,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
             "creep",
             FieldDef::new(
                 Terrains::Only(utils::LAND.into()),
+                utils::GROUND.into(),
                 FieldDecay::Never,
                 FieldVision::Dark,
                 Detection::Blind,

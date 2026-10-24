@@ -25,6 +25,7 @@ use ferrets_content::{
     turret::{TurretFire, WeaponConduct},
 };
 use ferrets_math::{FixedI64, FixedU64};
+use ferrets_pathfinder::cliff_crossing::CliffCrossing;
 
 use crate::{engine::ScriptEngine, error::ScriptError};
 
@@ -106,6 +107,18 @@ pub(crate) fn solidity(value: &str) -> crate::Result<Solidity> {
             ("solid", Solidity::Solid),
             ("underfoot", Solidity::Underfoot),
             ("passable", Solidity::Passable),
+        ],
+    )
+}
+
+/// Maps a domain's cliff crossing name to its enum.
+pub(crate) fn cliff_crossing(value: &str) -> crate::Result<CliffCrossing> {
+    keyword(
+        "cliff_crossing",
+        value,
+        &[
+            ("ramp", CliffCrossing::Ramp),
+            ("cross", CliffCrossing::Cross),
         ],
     )
 }

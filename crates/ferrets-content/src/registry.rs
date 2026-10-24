@@ -6,7 +6,8 @@ use bevy_ecs::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_pathfinder::{
-    layer_id::LayerId, layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask,
+    cliff_crossing::CliffCrossing, layer_id::LayerId, layer_level::LayerLevel,
+    layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask,
 };
 
 use crate::{
@@ -68,7 +69,10 @@ pub struct ContentRegistry {
     resources: BTreeSet<String>,
     races: BTreeSet<String>,
     tags: BTreeSet<String>,
+    /// Layer name → handle.
     layers: BTreeMap<String, LayerId>,
+    /// Each layer's levels, indexed by the layer's bit (registration order).
+    layer_levels: Vec<LayerLevel>,
     terrains: BTreeMap<String, TerrainId>,
     /// Domain name → handle.
     domains: BTreeMap<String, DomainId>,
@@ -114,6 +118,7 @@ impl Default for ContentRegistry {
             races: BTreeSet::new(),
             tags: BTreeSet::from([tags::BUILDING.to_string(), tags::REMAINS.to_string()]),
             layers: BTreeMap::new(),
+            layer_levels: Vec::new(),
             terrains: BTreeMap::new(),
             domains: BTreeMap::new(),
             domain_defs: Vec::new(),
@@ -339,20 +344,38 @@ impl ContentRegistry {
         self.tags.contains(tag)
     }
 
-    /// Registers a navigation layer (ground, air, …) and returns its assigned
-    /// [`LayerId`].
+    /// Registers a navigation layer (ground, air, …) at `level` and returns
+    /// its assigned [`LayerId`].
     ///
     /// Ids are assigned in registration order, so identical content registered
-    /// in the same order resolves to identical ids everywhere. Re-registering a
-    /// name returns its existing id.
+    /// in the same order resolves to identical ids everywhere.
     ///
-    /// Panics if `name` is empty or all layer ids are already assigned.
-    pub fn register_layer(&mut self, name: impl Into<String>) -> LayerId {
+    /// Panics if `name` is empty, the layer is already registered, its range
+    /// runs downward, it shares a level with a registered layer, or all layer
+    /// ids are already assigned.
+    pub fn register_layer(&mut self, name: impl Into<String>, level: LayerLevel) -> LayerId {
         let name = name.into();
         assert!(!name.is_empty(), "layer name must not be empty");
-
-        if let Some(&id) = self.layers.get(&name) {
-            return id;
+        assert!(
+            !self.layers.contains_key(&name),
+            "layer '{name}' is already registered"
+        );
+        match level {
+            LayerLevel::Range { from, to } => assert!(
+                from <= to,
+                "layer '{name}' spans levels {from} to {to}, which run downward"
+            ),
+            LayerLevel::At(_) => {}
+        }
+        if let Some((other, _)) = self
+            .layers
+            .iter()
+            .find(|(_, layer)| self.layer_level(**layer).meets(level))
+        {
+            panic!(
+                "layer '{name}' at {level} shares a level with layer '{other}' at {}",
+                self.layer_level(self.layers[other])
+            );
         }
 
         let bit = u32::try_from(self.layers.len()).unwrap();
@@ -363,7 +386,15 @@ impl ContentRegistry {
         );
         let id = LayerId::new(1 << bit);
         self.layers.insert(name, id);
+        self.layer_levels.push(level);
         id
+    }
+
+    /// The levels a registered layer is at.
+    ///
+    /// Panics if `layer` was not minted by this registry.
+    pub fn layer_level(&self, layer: LayerId) -> LayerLevel {
+        self.layer_levels[layer.trailing_zeros() as usize]
     }
 
     /// Returns `true` if `name` is a registered navigation layer.
@@ -925,6 +956,11 @@ impl ContentRegistry {
                                 self.field_name(rule.field()).is_some(),
                                 "skill '{name}' summons within an unregistered field"
                             );
+                            self.check_spreads_on(
+                                &format!("skill '{name}' summons '{}' within", summoned.name),
+                                rule.field(),
+                                summoned,
+                            );
                         }
                         let field_name = |field| {
                             self.field_name(field)
@@ -1146,6 +1182,12 @@ impl ContentRegistry {
         self.terrains.get(name).copied()
     }
 
+    /// Returns every registered terrain with its assigned id, in ascending
+    /// name order.
+    pub fn terrains(&self) -> impl Iterator<Item = (&str, TerrainId)> {
+        self.terrains.iter().map(|(name, &id)| (name.as_str(), id))
+    }
+
     /// Returns the mask of every registered terrain.
     pub fn registered_terrains(&self) -> TerrainMask {
         self.terrains
@@ -1159,7 +1201,9 @@ impl ContentRegistry {
     /// Its layer and terrains must be registered first.
     ///
     /// Panics if `name` is empty, the domain is already registered, its layer
-    /// is unregistered, or it names an unregistered terrain.
+    /// is unregistered, it names an unregistered terrain, or its cliff crossing
+    /// does not suit its layer: a layer spanning levels needs one, a layer at
+    /// one level has none.
     pub fn register_domain(&mut self, name: impl Into<String>, domain: DomainDef) -> DomainId {
         let name = name.into();
         assert!(!name.is_empty(), "domain name must not be empty");
@@ -1173,6 +1217,17 @@ impl ContentRegistry {
             domain.layer()
         );
         self.validate_terrains(&format!("domain '{name}'"), domain.terrains());
+        let level = self.layer_level(domain.layer());
+        match (level, domain.cliff_crossing()) {
+            (LayerLevel::At(_), None)
+            | (LayerLevel::Range { .. }, Some(CliffCrossing::Ramp | CliffCrossing::Cross)) => {}
+            (LayerLevel::At(_), Some(CliffCrossing::Ramp | CliffCrossing::Cross)) => panic!(
+                "domain '{name}' says how it crosses cliffs, but its layer is at the one level {level}"
+            ),
+            (LayerLevel::Range { .. }, None) => panic!(
+                "domain '{name}' must say how it crosses cliffs: its layer spans levels {level}"
+            ),
+        }
 
         let id = DomainId::from_index(self.domain_defs.len());
         self.domains.insert(name, id);
@@ -1198,10 +1253,12 @@ impl ContentRegistry {
     /// identical content registered in the same order resolves to identical
     /// ids everywhere.
     ///
-    /// The terrains the field lies on must be registered first.
+    /// The terrains it lies on and the layers it spreads on must be registered
+    /// first.
     ///
     /// Panics if `name` is empty, the field is already registered, it names an
-    /// unregistered terrain, or it detects on an unregistered layer.
+    /// unregistered terrain, spreads on an unregistered layer, or detects on an
+    /// unregistered layer.
     pub fn register_field(&mut self, name: impl Into<String>, field: FieldDef) -> FieldId {
         let name = name.into();
         assert!(!name.is_empty(), "field name must not be empty");
@@ -1210,6 +1267,11 @@ impl ContentRegistry {
             "field '{name}' is already registered"
         );
         self.validate_terrains(&format!("field '{name}'"), field.terrains());
+        let unregistered = field.spreads_on() & !self.registered_layers();
+        assert!(
+            unregistered == LayerMask::EMPTY,
+            "field '{name}' spreads on unregistered layers {unregistered}"
+        );
         self.validate_detection(&format!("field '{name}'"), field.detection());
 
         let id = FieldId::from_index(self.field_defs.len());
@@ -1769,6 +1831,11 @@ impl ContentRegistry {
                 "entity type '{}' reads an unregistered field for placement",
                 def.name
             );
+            self.check_spreads_on(
+                &format!("entity type '{}' is placed by", def.name),
+                rule.field(),
+                def,
+            );
         }
         if let Some(field) = contradicted_field(&def.field_placement, &def.field_placement) {
             panic!(
@@ -1810,6 +1877,11 @@ impl ContentRegistry {
                 known(field_effect.field()),
                 "entity type '{}' answers to an unregistered field",
                 def.name
+            );
+            self.check_spreads_on(
+                &format!("entity type '{}' answers to", def.name),
+                field_effect.field(),
+                def,
             );
             assert!(
                 field_effect.effects().next().is_some(),
@@ -2883,6 +2955,13 @@ impl ContentRegistry {
                 "entity type '{}' warps in '{type_name}', which is an annex",
                 def.name
             );
+            for rule in warper.within() {
+                self.check_spreads_on(
+                    &format!("entity type '{}' warps in '{type_name}' within", def.name),
+                    rule.field(),
+                    warped,
+                );
+            }
             let name = |field| {
                 self.field_name(field)
                     .expect("a placement rule reads a registered field")
@@ -3299,7 +3378,8 @@ impl ContentRegistry {
     /// Checks that every attachment a type's capabilities declare names a
     /// berth group the jobs it reaches offer: every type a builder raises, at
     /// least one source of a kind a carrier attaches for, and at least one type
-    /// a repairer mends.
+    /// a repairer mends; and that every job offering the group stands on the
+    /// worker's layer.
     ///
     /// Runs in [`validate`](Self::validate) rather than at registration, because
     /// a worker may be registered before the jobs it attaches to.
@@ -3322,6 +3402,11 @@ impl ContentRegistry {
                     def.name,
                     attachment.berths()
                 );
+                self.check_seated_layer(
+                    &format!("entity type '{}' building", def.name),
+                    self.entity(type_name).expect("checked above"),
+                    def,
+                );
             }
         }
         if let Some(carrier) = &def.resource_carrier {
@@ -3333,42 +3418,63 @@ impl ContentRegistry {
                     // Only the sources the carrier's kind admits count: a group
                     // offered by a seam it may not work is a group it can never
                     // sit in.
-                    let offered = self.entities().any(|source| {
-                        source
-                            .resource_source
-                            .as_ref()
-                            .is_some_and(|resource| resource.kind() == kind)
-                            && data.sources().admits(source)
-                            && offers(source, attachment.berths())
-                    });
+                    let offering = || {
+                        self.entities().filter(|source| {
+                            source
+                                .resource_source
+                                .as_ref()
+                                .is_some_and(|resource| resource.kind() == kind)
+                                && data.sources().admits(source)
+                                && offers(source, attachment.berths())
+                        })
+                    };
+                    let offered = offering().next().is_some();
                     assert!(
                         offered,
                         "entity type '{}' attaches to berth group '{}' of {kind} sources, and no {kind} source it may work declares such a group",
                         def.name,
                         attachment.berths()
                     );
+                    for source in offering() {
+                        self.check_seated_layer(
+                            &format!("entity type '{}' harvesting", def.name),
+                            source,
+                            def,
+                        );
+                    }
                 }
             }
         }
         if let Some(repairer) = &def.repairer
             && let WorkPresence::Attached(attachment) = repairer.presence()
         {
-            let offered = self.entities().any(|target| {
-                repairer.repairs().admits(target) && offers(target, attachment.berths())
-            });
+            let offering = || {
+                self.entities().filter(|target| {
+                    repairer.repairs().admits(target) && offers(target, attachment.berths())
+                })
+            };
             assert!(
-                offered,
+                offering().next().is_some(),
                 "entity type '{}' attaches to berth group '{}' of what it mends, and no registered type it mends declares such a group",
                 def.name,
                 attachment.berths()
             );
+            for target in offering() {
+                self.check_seated_layer(
+                    &format!("entity type '{}' mending", def.name),
+                    target,
+                    def,
+                );
+            }
         }
     }
 
     /// Checks what a breeder declares: the type it breeds is registered, stands
     /// somewhere, is not the breeder itself and is a broodling that sits in a
-    /// group the breeder offers, with at least the limit in slots, and is one
-    /// cell across; a period read from a stat names one the breeder carries.
+    /// group the breeder offers, with at least the limit in slots, is one cell
+    /// across and stands on the layer of the breeder and of every form it
+    /// changes into or through that seats it; a period read from a stat names
+    /// one the breeder carries.
     ///
     /// Runs in [`validate`](Self::validate) rather than at registration, because
     /// a breeder may be registered before what it breeds.
@@ -3411,6 +3517,25 @@ impl ContentRegistry {
             location.size() == CellSize::ONE,
             "{owner} seats a type wider than one cell in a berth"
         );
+        self.check_seated_layer(&owner, def, bred);
+        // The forms the breeder changes into or through keep its brood seated
+        // when they declare the group.
+        for transition in &def.morphs {
+            for form in transition
+                .via_type()
+                .into_iter()
+                .chain([transition.into_type()])
+            {
+                if let Some(form) = self.entity(form)
+                    && form
+                        .berths
+                        .as_ref()
+                        .is_some_and(|berths| berths.group(attachment.berths()).is_some())
+                {
+                    self.check_seated_layer(&owner, form, bred);
+                }
+            }
+        }
         if let Quantity::Stat(stat) = brood.period() {
             assert!(
                 def.base_stat(stat).is_some(),
@@ -3925,6 +4050,39 @@ impl ContentRegistry {
             .iter()
             .enumerate()
             .map(|(index, def)| (PoolId::from_index(index), def))
+    }
+
+    /// Checks that `field` spreads on the layer of `def`'s domain, the layer
+    /// its bodies are in; `whose` names who reads the field for `def`. A type
+    /// with no location has no body on any layer.
+    fn check_spreads_on(&self, whose: &str, field: FieldId, def: &EntityTypeDef) {
+        if let Some(location) = &def.location {
+            let layer = self.domain_def(location.domain()).layer();
+            assert!(
+                self.field_def(field).spreads_on() & layer != LayerMask::EMPTY,
+                "{whose} field '{}', which does not spread on layer {layer}, its domain's",
+                self.field_name(field)
+                    .expect("a field read for a type is registered")
+            );
+        }
+    }
+
+    /// Checks that `seated`, sitting in a berth of `host`, stands on its host's
+    /// layer, its domain's; `whose` names who seats it. A type with no location
+    /// stands on no layer.
+    fn check_seated_layer(&self, whose: &str, host: &EntityTypeDef, seated: &EntityTypeDef) {
+        let layer = |def: &EntityTypeDef| {
+            def.location
+                .map(|location| self.domain_def(location.domain()).layer())
+        };
+        if let (Some(host_layer), Some(seated_layer)) = (layer(host), layer(seated)) {
+            assert!(
+                host_layer == seated_layer,
+                "{whose} seats '{}' on layer {seated_layer} in a berth of '{}' on layer {host_layer}",
+                seated.name,
+                host.name
+            );
+        }
     }
 
     /// The terrains the domain of `location` takes.

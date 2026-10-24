@@ -1409,8 +1409,8 @@ fn solidity_app() -> App {
     // a footprint on the other.
     {
         let mut grid = NavGrid::new(32, 32, |_| utils::LAND);
-        grid.add_layer(utils::GROUND);
-        grid.add_layer(utils::AIR);
+        grid.add_flat_layer(utils::GROUND, 1);
+        grid.add_flat_layer(utils::AIR, 2);
         ferrets_bevy_plugin::map::install_map(
             app.world_mut(),
             Map::new(

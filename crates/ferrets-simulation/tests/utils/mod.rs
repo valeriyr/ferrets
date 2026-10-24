@@ -9,7 +9,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::nav_grid::NavGrid;
+use ferrets_pathfinder::{layer_level::LayerLevel, nav_grid::NavGrid};
 use ferrets_simulation::{
     control_groups::ControlGroups,
     entity_index::EntityIndex,
@@ -40,9 +40,9 @@ const PLAYERS: usize = 1;
 /// and the stores a spawn and its stat fold read.
 pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground");
+    let ground = registry.register_layer("ground", LayerLevel::At(1));
     let land = registry.register_terrain("land");
-    let domain = registry.register_domain("ground", DomainDef::new(ground, Terrains::Any));
+    let domain = registry.register_domain("ground", DomainDef::new(ground, Terrains::Any, None));
     let unit = pools.into_iter().fold(
         EntityTypeDef::new("unit").with_location(domain, CellSize::ONE, Solidity::Solid, ground),
         EntityTypeDef::with_pool,
@@ -50,7 +50,7 @@ pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
     registry.register(unit);
     registry.validate();
     let mut nav_grid = NavGrid::new(16, 16, |_| land);
-    nav_grid.add_layer(ground);
+    nav_grid.add_flat_layer(ground, 1);
 
     let mut world = World::new();
     world.insert_resource(registry);

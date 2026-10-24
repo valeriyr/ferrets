@@ -52,18 +52,14 @@ pub fn find_path(
     let start = CellPos::from(start);
     let goal = CellPos::from(goal);
 
-    let accepted = CellRect::new(goal, goal_size).accepted_by(shape.size, stop_distance);
-    if projection.in_range_of_rect(start, accepted, stop_distance) {
+    let goal_rect = CellRect::new(goal, goal_size);
+    if grid.accepts(projection, start, shape, goal_rect, stop_distance) {
         return Some(vec![]);
     }
 
     // Stopping at no distance at all means standing somewhere on the destination
     // footprint, which cannot happen with every cell of it occupied.
-    if stop_distance == 0
-        && CellRect::new(goal, goal_size)
-            .cells()
-            .all(|cell| !grid.cell_fits(cell, shape.terrains, shape.layers))
-    {
+    if stop_distance == 0 && goal_rect.cells().all(|cell| !grid.cell_fits(cell, shape)) {
         return None;
     }
 
@@ -73,16 +69,17 @@ pub fn find_path(
             passable_neighbors(grid, pos, profile)
                 .map(|(neighbor, step)| (neighbor, projection.step_cost(step)))
         },
-        |&pos| heuristic(projection, pos, accepted, stop_distance),
-        |pos| projection.in_range_of_rect(*pos, accepted, stop_distance),
+        |&pos| heuristic(projection, pos, goal_rect, shape.size, stop_distance),
+        |&pos| grid.accepts(projection, pos, shape, goal_rect, stop_distance),
     );
 
     result.map(|(path, _cost)| path.into_iter().skip(1).map(|p| p.into()).collect())
 }
 
 /// The passable neighbors of `pos` for `profile`, in fixed direction order,
-/// each with its step class, with the corner rule applied — the one
-/// connectivity definition every search and flood fill must share.
+/// each with its step class, with the corner rule and the step rule across
+/// levels applied — the one connectivity definition every search and flood
+/// fill must share.
 pub(crate) fn passable_neighbors(
     grid: &NavGrid,
     pos: CellPos,
@@ -95,7 +92,7 @@ pub(crate) fn passable_neighbors(
             return None;
         }
         let neighbor = CellPos::new(nx as u32, ny as u32);
-        if !grid.fits_for(neighbor, profile) {
+        if !grid.fits_for(neighbor, profile) || !grid.can_step(pos, neighbor, profile.shape) {
             return None;
         }
         let step = if dx != 0 && dy != 0 {
@@ -190,8 +187,7 @@ pub(crate) fn bounded_search(
     stop_distance: u32,
     extra_cost: impl Fn(CellPos) -> u32,
 ) -> Option<(Vec<CellPos>, u32)> {
-    let accepted = goal.accepted_by(profile.shape.size, stop_distance);
-    if projection.in_range_of_rect(start, accepted, stop_distance) {
+    if grid.accepts(projection, start, profile.shape, goal, stop_distance) {
         return Some((vec![], 0));
     }
 
@@ -206,8 +202,8 @@ pub(crate) fn bounded_search(
                     (neighbor, projection.step_cost(step) + extra_cost(neighbor))
                 })
         },
-        |&pos| heuristic(projection, pos, accepted, stop_distance),
-        |pos| projection.in_range_of_rect(*pos, accepted, stop_distance),
+        |&pos| heuristic(projection, pos, goal, profile.shape.size, stop_distance),
+        |&pos| grid.accepts(projection, pos, profile.shape, goal, stop_distance),
     );
 
     result.map(|(path, cost)| (path.into_iter().skip(1).collect(), cost))
@@ -234,14 +230,20 @@ pub(crate) fn lane_bias(from: CellPos, toward: CellPos) -> impl Fn(CellPos) -> u
     }
 }
 
-/// A* cost estimate from `from` toward the accepted `goal` rectangle —
-/// already grown for the searcher's footprint — adjusted for `stop_distance`.
+/// A* cost estimate from the anchor `from` of a `size` footprint toward
+/// stopping within `stop_distance` of `goal`.
 ///
-/// Measured to the nearest cell of the rectangle, which is what the goal test
-/// accepts — estimating against a far corner instead would overshoot and could send
-/// the search the long way round.
-fn heuristic(projection: Projection, from: CellPos, goal: CellRect, stop_distance: u32) -> u32 {
-    let nearest = from.clamp_to_rect(goal);
+/// Measured to the nearest cell of the rectangle the goal test measures the
+/// anchor against — estimating against a far corner instead would overshoot
+/// and could send the search the long way round.
+fn heuristic(
+    projection: Projection,
+    from: CellPos,
+    goal: CellRect,
+    size: CellSize,
+    stop_distance: u32,
+) -> u32 {
+    let nearest = from.clamp_to_rect(goal.accepted_by(size, stop_distance));
     match projection {
         // The stop distance is credited at the LARGEST possible per-cell step
         // cost, so the estimate can only err downward — a smaller credit

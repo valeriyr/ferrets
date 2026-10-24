@@ -3,7 +3,9 @@
 //! side's detection.
 
 use bevy_ecs::prelude::*;
-use ferrets_content::{affiliation::Affiliation, entity_type_def::EntityTypeDef};
+use ferrets_content::{
+    affiliation::Affiliation, entity_type_def::EntityTypeDef, registry::ContentRegistry,
+};
 
 use crate::{
     components::{concealed::ConcealedComponent, hidden::HiddenComponent, owner},
@@ -267,10 +269,12 @@ pub fn sighting_of(
     let detected = match detection {
         AiDetection::Everywhere => true,
         AiDetection::Detectors => {
-            let standing_on = def
-                .location
-                .expect("validated content stands somewhere")
-                .occupies();
+            let location = def.location.expect("validated content stands somewhere");
+            let standing_on = world
+                .resource::<ContentRegistry>()
+                .domain_def(location.domain())
+                .layer()
+                .into();
             footprint.cells().any(|cell| {
                 fields::detects(world, player, cell, standing_on)
                     || watches::detects(world, player, cell, standing_on)

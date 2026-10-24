@@ -299,17 +299,21 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     let arrived = if range == 0 && size == CellSize::ONE && move_component.frustration == 0 {
         position == target
     } else {
-        // One check serves both contracts, because the two distances differ
-        // on purpose: the goal expands by the mover's footprint only for a
-        // ranged order (`accepted_by` is the identity at range 0, keeping a
-        // point destination an anchor contract), while the measured distance
-        // is the effective acceptance — the order's own range for a ranged
-        // walk, the frustration ring for a crowded point move.
-        projection.in_range_of_rect(
-            current_cell,
-            CellRect::new(CellPos::from(target), size).accepted_by(shape.size, range),
-            effective_range,
-        )
+        // A crowded point move accepts its anchor within the frustration
+        // ring of the spot; a ranged walk accepts as every search does,
+        // reaching from its footprint, a touch only across an edge it could
+        // step.
+        let goal = CellRect::new(CellPos::from(target), size);
+        match range {
+            0 => projection.in_range_of_rect(current_cell, goal, effective_range),
+            _ => world.resource::<Map>().nav_grid().accepts(
+                projection,
+                current_cell,
+                shape,
+                goal,
+                range,
+            ),
+        }
     };
     if arrived {
         return OrderState::Finished;
@@ -631,7 +635,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
             if move_component.path.is_empty()
                 && cell_walk_done(
                     &move_component,
-                    projection,
+                    world.resource::<Map>(),
                     CellPos::from(new_pos),
                     shape,
                     target,
@@ -651,7 +655,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     // into a ring; ranged walks keep their exact contract — a chase that
     // finished short would break its parent order's range semantics.
     if cell_arrived(
-        projection,
+        world.resource::<Map>(),
         CellPos::from(position),
         shape,
         target,
@@ -755,7 +759,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
         if move_component.path.is_empty()
             && cell_walk_done(
                 &move_component,
-                projection,
+                world.resource::<Map>(),
                 CellPos::from(new_pos),
                 shape,
                 target,
@@ -797,7 +801,9 @@ fn next_segment(
         let map = world.resource::<Map>();
         let projection = map.projection();
         if move_component.corridor.is_empty()
-            && projection.in_reach(from, shape.size, plan.rect(), plan.stop)
+            && map
+                .nav_grid()
+                .accepts(projection, from, shape, plan.rect(), plan.stop)
         {
             // As close as the plan gets; the caller already checked the
             // order's own goal and found it unsatisfied.
@@ -965,7 +971,7 @@ fn acceptance(range: u32, frustration: u32) -> u32 {
 /// told to finish.
 fn cell_walk_done(
     move_component: &MoveComponent,
-    projection: Projection,
+    map: &Map,
     cell: CellPos,
     shape: MoverShape,
     target: FixedUVec2,
@@ -974,7 +980,7 @@ fn cell_walk_done(
 ) -> bool {
     move_component.winding_down
         || cell_arrived(
-            projection,
+            map,
             cell,
             shape,
             target,
@@ -984,13 +990,11 @@ fn cell_walk_done(
         )
 }
 
-/// Whether a cell-model walk's goal is satisfied from `cell`.
-///
-/// The expansion is keyed on the order's own range while the distance uses the
-/// effective acceptance; the two differ on purpose, for the reasons the arrival
-/// check under the continuous model spells out.
+/// Whether a cell-model walk's goal is satisfied from `cell`: a point move
+/// within the frustration ring of its spot, a ranged walk as every search
+/// accepts.
 fn cell_arrived(
-    projection: Projection,
+    map: &Map,
     cell: CellPos,
     shape: MoverShape,
     target: FixedUVec2,
@@ -998,11 +1002,15 @@ fn cell_arrived(
     range: u32,
     frustration: u32,
 ) -> bool {
-    projection.in_range_of_rect(
-        cell,
-        CellRect::new(CellPos::from(target), size).accepted_by(shape.size, range),
-        acceptance(range, frustration),
-    )
+    let goal = CellRect::new(CellPos::from(target), size);
+    match range {
+        0 => map
+            .projection()
+            .in_range_of_rect(cell, goal, acceptance(range, frustration)),
+        _ => map
+            .nav_grid()
+            .accepts(map.projection(), cell, shape, goal, range),
+    }
 }
 
 /// Works down the crowd ladder when the next cell of a crossing is held:
@@ -1136,7 +1144,7 @@ fn resolve_blocked_crossing(
         } else if blocker_at_rest
             && !entity_def::walking(world, blocker)
             && cell_arrived(
-                projection,
+                world.resource::<Map>(),
                 next_cell,
                 shape,
                 target,
@@ -1280,7 +1288,7 @@ fn swap_crossings(
         if move_component.path.is_empty()
             && cell_walk_done(
                 &move_component,
-                projection,
+                world.resource::<Map>(),
                 CellPos::from(new_pos),
                 shape,
                 target,

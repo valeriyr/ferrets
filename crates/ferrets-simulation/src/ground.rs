@@ -1,10 +1,13 @@
-//! Whether the ground takes a footprint: free on the navigation grid, and
-//! clear of what stands underfoot there without claiming its cells.
+//! Whether the ground takes a footprint: ground its shape may stand on, free
+//! on the navigation grid, and clear of what stands underfoot there without
+//! claiming its cells.
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{location::LocationDef, registry::ContentRegistry};
-use ferrets_geometry::cell_rect::CellRect;
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
+use ferrets_pathfinder::{
+    cliff_crossing::CliffCrossing, layer_mask::LayerMask, mover_shape::MoverShape,
+};
 use ferrets_physics::body;
 
 use crate::{
@@ -25,10 +28,25 @@ pub(crate) struct UnderfootBody {
     footprint: CellRect,
 }
 
+/// Whether the ground at `anchor` takes a footprint of `shape` on the plane
+/// `occupancy` selects, whoever stands there: every cell ground the shape may
+/// stand on, the shape crossing between its own cells, and a static footprint
+/// on one level and no slope where its domain's layer spans levels.
+pub fn takes(map: &Map, anchor: CellPos, shape: MoverShape, occupancy: OccupancyClass) -> bool {
+    let grid = map.nav_grid();
+    let flat = match (occupancy, shape.cliff_crossing) {
+        (OccupancyClass::Static, Some(CliffCrossing::Ramp | CliffCrossing::Cross)) => {
+            grid.is_flat(anchor, shape)
+        }
+        (OccupancyClass::Static, None) | (OccupancyClass::Claim, _) => true,
+    };
+    grid.fits_ground(anchor, shape) && grid.holds_together(anchor, shape) && flat
+}
+
 /// Whether the ground takes a footprint of `to` at `placed` on the plane
-/// `occupancy` selects: every cell free on the grid but for what `lifted`
-/// marks — what the bodies being placed mark on it already (see
-/// [`entity_def::grid_mark`]) — and nothing standing underfoot in it but
+/// `occupancy` selects: ground it [`takes`], every cell free on the grid but
+/// for what `lifted` marks — what the bodies being placed mark on it already
+/// (see [`entity_def::grid_mark`]) — and nothing standing underfoot in it but
 /// `ignored`, those bodies themselves.
 pub fn can_place(
     world: &World,
@@ -38,7 +56,7 @@ pub fn can_place(
     lifted: &[GridMark],
     ignored: &[Entity],
 ) -> bool {
-    on_grid(world, placed, to, lifted)
+    on_free_ground(world, placed, to, occupancy, lifted)
         && match occupancy {
             OccupancyClass::Claim => true,
             OccupancyClass::Static => is_clear(&standing_underfoot(world, ignored), placed, to),
@@ -55,7 +73,7 @@ pub(crate) fn can_place_clear_of(
     lifted: &[GridMark],
     underfoot: &[UnderfootBody],
 ) -> bool {
-    on_grid(world, placed, to, lifted)
+    on_free_ground(world, placed, to, occupancy, lifted)
         && match occupancy {
             OccupancyClass::Claim => true,
             OccupancyClass::Static => is_clear(underfoot, placed, to),
@@ -90,19 +108,20 @@ pub(crate) fn standing_underfoot(world: &World, ignored: &[Entity]) -> Vec<Under
         .collect()
 }
 
-/// Whether every cell of a footprint of `to` at `placed` is free on the grid
-/// but for what `lifted` marks.
-fn on_grid(
+/// Whether the ground [`takes`] a footprint of `to` at `placed` on the plane
+/// `occupancy` selects, every cell free on the grid but for what `lifted`
+/// marks.
+fn on_free_ground(
     world: &World,
     placed: &LocationComponent,
     to: LocationDef,
+    occupancy: OccupancyClass,
     lifted: &[GridMark],
 ) -> bool {
-    world.resource::<Map>().can_place_entity_over_lifted(
-        placed,
-        entity_def::mover_shape(world.resource::<ContentRegistry>(), &to),
-        lifted,
-    )
+    let map = world.resource::<Map>();
+    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &to);
+    takes(map, body::anchor(placed.position), shape, occupancy)
+        && map.is_free_over_lifted(placed, shape, lifted)
 }
 
 /// Whether none of `underfoot` stands on the ground a static footprint of

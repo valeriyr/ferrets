@@ -51,8 +51,7 @@ pub struct LocationDef {
     /// Whether the footprint also claims the occupied layers.
     solidity: Solidity,
     /// The layers whose cells the footprint takes, and in which it blocks and
-    /// collides: its domain's layer, and any further layers it stands in as
-    /// well.
+    /// collides: its domain's layer, and any further layers it towers into.
     occupies: LayerMask,
 }
 
@@ -92,7 +91,7 @@ impl LocationDef {
 
     /// Returns the layers whose cells the footprint takes, and in which it
     /// blocks and collides: its domain's layer, and any further layers it
-    /// stands in as well.
+    /// towers into.
     #[inline]
     pub fn occupies(&self) -> LayerMask {
         self.occupies

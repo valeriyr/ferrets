@@ -199,6 +199,40 @@ fn ghost_is_blocked_only_by_what_side_makes_out() {
     }
 }
 
+#[test]
+fn ghost_refuses_building_across_cliff_and_over_ramp() {
+    let app = utils::demo_map_app(MovementModel::Continuous);
+    let registry = app.world().resource::<ContentRegistry>();
+    let farm = registry
+        .entity("farm")
+        .expect("the demo content defines a farm");
+    let fits = |x, y| with_view(&app, &[], |view| view.fits(farm, CellPos::new(x, y)));
+
+    // The east plateau rises at column 56, its ramp at (55, 28) to (55, 30):
+    // a 2×2 at (55, 24) spans the cliff, one at (54, 28) covers the ramp, one
+    // at (58, 24) stands on the plateau and one at (50, 24) on low ground.
+    assert!(!fits(55, 24));
+    assert!(!fits(54, 28));
+    assert!(fits(58, 24));
+    assert!(fits(50, 24));
+}
+
+#[test]
+fn ghost_of_mover_stands_across_cliff_only_if_it_crosses_cliffs() {
+    let app = utils::demo_map_app(MovementModel::Continuous);
+    let registry = app.world().resource::<ContentRegistry>();
+    let fits = |name: &str| {
+        let def = registry
+            .entity(name)
+            .expect("the demo content defines the type");
+        with_view(&app, &[], |view| view.fits(def, CellPos::new(55, 24)))
+    };
+
+    // Anchored at (55, 24), a 2×2 spans low ground and the east plateau.
+    assert!(!fits("tank"));
+    assert!(fits("stilt_walker"));
+}
+
 //
 // ─── Overbuild snap ───────────────────────────────────────────────────────────
 //
@@ -206,23 +240,23 @@ fn ghost_is_blocked_only_by_what_side_makes_out() {
 #[test]
 fn ghost_snaps_to_seen_source_under_cursor_and_to_no_other() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    // The mine spans (10, 10) to (11, 11): a cursor on its far cell snaps to
+    // The mine spans (10, 20) to (11, 21): a cursor on its far cell snaps to
     // its origin, one beside it to nothing.
     let (mine, _) =
-        utils::create_entity(app.world_mut(), "gold_mine", utils::at_cell(10, 10), None)
+        utils::create_entity(app.world_mut(), "gold_mine", utils::at_cell(10, 20), None)
             .expect("the demo content defines a gold mine");
 
     let seen = Sighted(Sighting::Seen);
     assert_eq!(
-        snap(&app, mine, "gold_mine", CellPos::new(11, 11), &seen),
-        Some(CellPos::new(10, 10))
+        snap(&app, mine, "gold_mine", CellPos::new(11, 21), &seen),
+        Some(CellPos::new(10, 20))
     );
     assert_eq!(
-        snap(&app, mine, "gold_mine", CellPos::new(12, 11), &seen),
+        snap(&app, mine, "gold_mine", CellPos::new(12, 21), &seen),
         None
     );
     assert_eq!(
-        snap(&app, mine, "barracks", CellPos::new(11, 11), &seen),
+        snap(&app, mine, "barracks", CellPos::new(11, 21), &seen),
         None,
         "only a source of the overbuilt type snaps"
     );
@@ -231,7 +265,7 @@ fn ghost_snaps_to_seen_source_under_cursor_and_to_no_other() {
             &app,
             mine,
             "gold_mine",
-            CellPos::new(11, 11),
+            CellPos::new(11, 21),
             &Sighted(Sighting::Glimpsed)
         ),
         None,
@@ -243,7 +277,7 @@ fn ghost_snaps_to_seen_source_under_cursor_and_to_no_other() {
 fn ghost_snapped_to_source_fits_only_as_its_field_rules_say() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
     let (mine, _) =
-        utils::create_entity(app.world_mut(), "gold_mine", utils::at_cell(10, 10), None)
+        utils::create_entity(app.world_mut(), "gold_mine", utils::at_cell(10, 20), None)
             .expect("the demo content defines a gold mine");
     let world = app.world();
     let registry = world.resource::<ContentRegistry>();
@@ -267,10 +301,10 @@ fn ghost_snapped_to_source_fits_only_as_its_field_rules_say() {
     assert_eq!(
         with_view(&app, &[], |view| view.placed(
             &def,
-            CellPos::new(11, 11),
+            CellPos::new(11, 21),
             [(info, location, &Visibility::Visible, Some(&seen))]
         )),
-        (CellPos::new(10, 10), false)
+        (CellPos::new(10, 20), false)
     );
 }
 
@@ -278,7 +312,7 @@ fn ghost_snapped_to_source_fits_only_as_its_field_rules_say() {
 fn ghost_of_type_raised_over_source_stands_on_seen_source_under_cursor() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
     let (mine, _) =
-        utils::create_entity(app.world_mut(), "gold_mine", utils::at_cell(10, 10), None)
+        utils::create_entity(app.world_mut(), "gold_mine", utils::at_cell(10, 20), None)
             .expect("the demo content defines a gold mine");
     let world = app.world();
     let def = world
@@ -295,10 +329,10 @@ fn ghost_of_type_raised_over_source_stands_on_seen_source_under_cursor() {
     assert_eq!(
         with_view(&app, &[], |view| view.placed(
             def,
-            CellPos::new(11, 11),
+            CellPos::new(11, 21),
             sources()
         )),
-        (CellPos::new(10, 10), true)
+        (CellPos::new(10, 20), true)
     );
     assert_eq!(
         with_view(&app, &[], |view| view.placed(

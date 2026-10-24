@@ -12,7 +12,7 @@ use crate::{
     simulation_id::SimulationId,
     visibility::{self, Senses},
 };
-use ferrets_content::{pool_def::PoolId, targeting};
+use ferrets_content::{pool_def::PoolId, registry::ContentRegistry, targeting};
 use ferrets_pathfinder::layer_mask::LayerMask;
 
 /// Ticks between acquisition scans for one entity. Scans are staggered by
@@ -142,7 +142,7 @@ pub(super) fn qualifies(
     // A weapon that cannot reach the target's layers never acquires it, so a
     // melee unit ignores what flies over it instead of following it forever.
     let target_def = entity_def::of(world, target);
-    if !targeting::reaches(targets, target_def) {
+    if !targeting::reaches(world.resource::<ContentRegistry>(), targets, target_def) {
         return false;
     }
 
@@ -151,10 +151,14 @@ pub(super) fn qualifies(
     // narrow one to count as in range of the same thing. Reaching from every
     // cell the seeker stands on to every cell the target stands on is the
     // chase's measure exactly — a seeker must not pick out a target its
-    // chase then declines to reach, nor pass over one it could already hit.
-    // Range first: it is a few subtractions, where the sighting below reads
-    // the grid and the fields, and most of a battle stands out of range.
-    if !world.resource::<Map>().projection().in_range_for_rects(
+    // chase then declines to reach, nor pass over one it could already hit —
+    // a touch across an edge the seeker could not step included. Range first:
+    // it is a few subtractions, with the seeker's shape and an edge walk only
+    // within range, where the sighting below reads the grid and the fields,
+    // and most of a battle stands out of range.
+    if !entity_def::reaches(
+        world,
+        seeker,
         entity_def::standing_rect(world, seeker),
         entity_def::standing_rect(world, target),
         range,

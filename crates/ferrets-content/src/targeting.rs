@@ -3,7 +3,7 @@
 //! Nothing here is stored. A weapon names the layers it reaches — a required
 //! declaration on every armed type, because any default aims the weapon
 //! somewhere the author never said — and a victim names the layers it can be
-//! attacked on, defaulting to the layers it occupies. The two are matched by
+//! attacked on, defaulting to the layer it stands on. The two are matched by
 //! intersection: any layer in common is enough.
 //!
 //! Intersection, not containment: a victim answerable on two layers is
@@ -12,17 +12,18 @@
 
 use ferrets_pathfinder::layer_mask::LayerMask;
 
-use crate::entity_type_def::EntityTypeDef;
+use crate::{entity_type_def::EntityTypeDef, registry::ContentRegistry};
 
-/// The layers `def` can be attacked on: its own declaration, or the layers it
-/// occupies.
+/// The layers `def` can be attacked on: its own declaration, or the layer it
+/// stands on, its domain's.
 ///
 /// A type with no location at all is answerable on no layer, which only arises
 /// for content the registry would already have rejected.
-pub fn targetable(def: &EntityTypeDef) -> LayerMask {
+pub fn targetable(registry: &ContentRegistry, def: &EntityTypeDef) -> LayerMask {
     def.targetable.unwrap_or_else(|| {
-        def.location
-            .map_or(LayerMask::EMPTY, |location| location.occupies())
+        def.location.map_or(LayerMask::EMPTY, |location| {
+            registry.domain_def(location.domain()).layer().into()
+        })
     })
 }
 
@@ -32,6 +33,6 @@ pub fn targetable(def: &EntityTypeDef) -> LayerMask {
 /// with no weapon at all — the registry requires every armed type to declare what
 /// its weapons reach — and an unarmed type never gets past the capability checks
 /// that guard every attack path, so the arm is a fail-closed residue.
-pub fn reaches(targets: LayerMask, victim: &EntityTypeDef) -> bool {
-    targets & targetable(victim) != LayerMask::EMPTY
+pub fn reaches(registry: &ContentRegistry, targets: LayerMask, victim: &EntityTypeDef) -> bool {
+    targets & targetable(registry, victim) != LayerMask::EMPTY
 }

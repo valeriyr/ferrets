@@ -13,10 +13,13 @@ use ferrets_script::{content, engine::lua::LuaEngine};
 /// over them. Fractional stats are decimal strings so they parse
 /// straight to fixed-point (no `f64`).
 pub const CONTENT: &str = r#"
-    local GROUND = define_layer("ground")
-    local AIR = define_layer("air")
+    -- The ground spans three levels: low ground, plateaus and mountains.
+    -- Fliers are over all of them.
+    local GROUND = define_layer("ground", { level = { from = 1, to = 3 } })
+    local AIR = define_layer("air", { level = 4 })
 
-    -- The ground is land, shallow water at the lake's edge, and deep water.
+    -- The ground is land, shallow water at the sea's coast and a river's
+    -- banks, and deep water.
     local LAND = define_terrain("land")
     local SHALLOW_WATER = define_terrain("shallow_water")
     local DEEP_WATER = define_terrain("deep_water")
@@ -27,12 +30,19 @@ pub const CONTENT: &str = r#"
     -- stand on land; the naga swims; ships keep to the water; the sea fortress
     -- needs deep water. A flier is over every terrain, and passes over
     -- whatever stands on the ground, because nothing there occupies the air
-    -- but the fortress.
-    define_domain("land", { layer = GROUND, terrains = LAND })
-    define_domain("ground", { layer = GROUND, terrains = LAND | SHALLOW_WATER })
-    define_domain("amphibious", { layer = GROUND, terrains = LAND | SHALLOW_WATER | DEEP_WATER })
-    define_domain("naval", { layer = GROUND, terrains = SHALLOW_WATER | DEEP_WATER })
-    define_domain("deep_naval", { layer = GROUND, terrains = DEEP_WATER })
+    -- but the fortress. On the ground a cliff stops everything but the
+    -- stilt walker, which strides up and down one level over it; every
+    -- other body climbs only by a ramp and keeps off a cliff's cells.
+    define_domain("land", { layer = GROUND, terrains = LAND, cliff_crossing = "ramp" })
+    define_domain("ground", { layer = GROUND, terrains = LAND | SHALLOW_WATER, cliff_crossing = "ramp" })
+    define_domain("striding", { layer = GROUND, terrains = LAND | SHALLOW_WATER, cliff_crossing = "cross" })
+    define_domain("amphibious", {
+        layer = GROUND,
+        terrains = LAND | SHALLOW_WATER | DEEP_WATER,
+        cliff_crossing = "ramp",
+    })
+    define_domain("naval", { layer = GROUND, terrains = SHALLOW_WATER | DEEP_WATER, cliff_crossing = "ramp" })
+    define_domain("deep_naval", { layer = GROUND, terrains = DEEP_WATER, cliff_crossing = "ramp" })
     define_domain("air", { layer = AIR, terrains = "any" })
 
     define_race("human")
@@ -52,23 +62,25 @@ pub const CONTENT: &str = r#"
 
     -- Creep covers the ground and recedes ring by ring, half a second a ring,
     -- once nothing sustains it, and whoever spreads it sees every cell of it;
-    -- power is there while its pylon stands and gone the tick it falls.
-    define_field("creep", { terrains = LAND, decay = { cycle = 10 }, vision = "watched" })
-    define_field("power", { terrains = LAND, decay = "instant" })
+    -- it spreads on the ground alone, so nothing in the air answers to it.
+    -- Power is there while its pylon stands and gone the tick it falls, for
+    -- whatever stands or flies in it.
+    define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 10 }, vision = "watched" })
+    define_field("power", { terrains = LAND, spreads_on = GROUND | AIR, decay = "instant" })
     -- Blight is the ground the undead build on: it spreads from every
     -- structure they raise, heals what stands on it, and recedes slowly once
     -- nothing sustains it. Unlike creep it watches nothing — the dead see by
     -- their own eyes.
-    define_field("blight", { terrains = LAND, decay = { cycle = 40 } })
+    define_field("blight", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 40 } })
     -- True sight is what a detector projects. It grants no sight of its own —
     -- a turret sees by its own eyes — but whatever hides on the ground or in
     -- the air under it is seen by whoever covers it. Lying on every terrain,
-    -- it reaches over the lake, so a cloaked flier gets no shelter there.
-    define_field("true_sight", { terrains = "any", decay = "instant", detection = GROUND | AIR })
+    -- it reaches over the sea, so a cloaked flier gets no shelter there.
+    define_field("true_sight", { terrains = "any", spreads_on = GROUND | AIR, decay = "instant", detection = GROUND | AIR })
     -- The veil an arbiter casts over the ground and the air it flies over:
     -- gone the tick it moves on, seeing nothing, detecting nothing; what it
     -- does for those inside is theirs to declare.
-    define_field("veil", { terrains = "any", decay = "instant" })
+    define_field("veil", { terrains = "any", spreads_on = GROUND | AIR, decay = "instant" })
 
     -- What a structure that will not stand on creep declares, and what the
     -- elves add to it: neither the swarm's ground nor the undead's.
@@ -257,28 +269,29 @@ pub const CONTENT: &str = r#"
     -- the ground layer over deep water and occupies the air over it too, so fliers
     -- must go around a keep that ships must also go around. It is the only
     -- thing on the map that closes the air, which is what gives the air layer
-    -- any shape at all. Occupying the air also makes it a legal target for
-    -- anti-air, since a body is targetable where it occupies unless its type
-    -- says otherwise.
+    -- any shape at all. Occupying the air only blocks it; the keep declares
+    -- itself targetable from the air too, so anti-air may answer it, while it is
+    -- detected, as every body is, on the ground layer it stands on.
     -- Four guns, one at each corner, which is what a building has instead of
-    -- turning: the keep stands square to the map wherever it was put and only the
-    -- guns come about — at sixty degrees a second, so bringing one onto something
-    -- behind it takes three seconds, and the corner already facing a
-    -- threat is the one that answers it. Their reach clears the lake it sits in
-    -- (nine cells of water from the middle) and a couple of cells of shore beyond,
-    -- so approaching the boss by land is answered rather than merely watched; it
-    -- sees further still, since a gun that acquires what it cannot see is a gun
-    -- waiting for a target to walk into it. Each fires through sixty degrees,
-    -- thirty either side of where it points, so a raid on one side is worked by
-    -- the two guns that bear and ignored by the two that do not. The shell is slow
-    -- and aimed at a place rather than a body, so one laboriously-aimed round is a
-    -- round a moving target can walk out from under.
+    -- turning: the keep stands square to the map wherever it was put and only
+    -- the guns come about — at sixty degrees a second, so bringing one onto
+    -- something behind it takes three seconds, and the corner already facing a
+    -- threat is the one that answers it. Their reach of twelve clears the lake
+    -- around it and reaches its shore, so approaching the boss by land is
+    -- answered rather than merely watched; it sees further still, since a gun
+    -- that acquires what it cannot see is a gun waiting for a target to walk
+    -- into it. Each fires through sixty degrees, thirty either side of where it
+    -- points, so a raid on one side is worked by the two guns that bear and
+    -- ignored by the two that do not. The shell is slow and aimed at a place
+    -- rather than a body, so one laboriously-aimed round is a round a moving
+    -- target can walk out from under.
     define_turret("keep_gun", {
         targets = GROUND | AIR,
         projectile = "shell",
     })
     define_entity("sea_fortress", {
         location = { domain = "deep_naval", size = { 5, 5 }, solidity = "solid", occupies = GROUND | AIR },
+        targetable = GROUND | AIR,
         stats = { sight_range = 16, supply_provided = 5,
             damage = 10, attack_range = 12, acquire_range = 14, attack_period = 30,
             damage_point = 12, aim_rate = 3, attack_arc = 60,
@@ -1561,7 +1574,9 @@ pub const CONTENT: &str = r#"
         price = { gold = 200, wood = 100 },
         rise = { time = 120, pools = { health = "initial" } },
         repair_ratio = "0.5",
-        trainer = { trains = { "zealot", "stalker", "dark_templar", "observer", "arbiter" } },
+        trainer = {
+            trains = { "zealot", "stalker", "stilt_walker", "dark_templar", "observer", "arbiter" },
+        },
         tags = { "building" },
         field_placement = { POWERED, NOT_ON_CREEP },
         field_effects = { UNPOWERED_IDLES },
@@ -1688,6 +1703,31 @@ pub const CONTENT: &str = r#"
         passives = { "warping_in" },
         selection = { priority = 10 },
         skills = { "blink" },
+        field_effects = { VEILED },
+    })
+
+    -- The stilt walker: tall legs carry it up and down a cliff of one level
+    -- where everything else on the ground needs a ramp, and it is tall
+    -- enough for anti-air to reach. It takes two cells each way, so it can
+    -- stand across a cliff's edge mid-stride.
+    define_entity("stilt_walker", {
+        race = "conclave",
+        location = { domain = "striding", size = { 2, 2 }, solidity = "solid" },
+        targetable = GROUND | AIR,
+        stats = {
+            speed = "0.2", turn_rate = 20, pivot_rate = 20, radius = "1", weight = 8,
+            damage = 18, attack_range = 6, acquire_range = 7, attack_period = 30, damage_point = 6,
+            armor = 1,
+            sight_range = 10,
+            supply_cost = 4,
+        },
+        pools = { health = { maximum = 200 } },
+        dying = FALLS,
+        tags = { "mechanical" },
+        attack = { targets = GROUND, projectile = "arrow" },
+        price = { gold = 300, wood = 200 },
+        train_time = 120,
+        selection = { priority = 10 },
         field_effects = { VEILED },
     })
 
@@ -1881,9 +1921,10 @@ pub const CONTENT: &str = r#"
     })
 
     -- A rooted form and the walker it uproots into, as one pair: the same
-    -- footprint both ways, so the ground under a settling walker is exactly
-    -- the ground it walked on. Rooting reserves that ground the moment it is
-    -- ordered; uprooting checks nothing, since the cells are already its own.
+    -- footprint both ways, the walker wading shallow water where the rooted
+    -- form stands only on land, so it roots only off the water. Rooting
+    -- reserves that ground the moment it is ordered; uprooting checks
+    -- nothing, since the cells are already its own.
     -- Both take two seconds, cost nothing, and can be called off. The walker
     -- keeps the building tag and the headroom the rooted form gives, and
     -- bites at what it reaches.
@@ -1908,7 +1949,7 @@ pub const CONTENT: &str = r#"
         })
         define_entity(uprooted, {
             race = "elves",
-            location = { domain = "land", size = size, solidity = "solid" },
+            location = { domain = "ground", size = size, solidity = "solid" },
             stats = walker.stats,
             pools = walker.pools,
             dying = { time = 2 },
@@ -2025,9 +2066,9 @@ pub const CONTENT: &str = r#"
         passives = { "shadowmeld" },
     })
 
-    -- The naga walks the land and swims deep water alike: the one elven body the
-    -- lake does not stop. Its spear reaches what stands on the ground or
-    -- floats, nothing that flies.
+    -- The naga walks the land and swims deep water alike: the one elven body
+    -- the sea and the rivers do not stop. Its spear reaches what stands on the
+    -- ground or floats, nothing that flies.
     define_entity("naga", {
         race = "elves",
         location = { domain = "amphibious", size = 1, solidity = "solid" },

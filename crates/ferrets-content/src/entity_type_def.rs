@@ -119,9 +119,7 @@ pub struct EntityTypeDef {
     /// become and on what terms. Empty means instances cannot morph.
     pub morphs: Vec<MorphTransition>,
     /// The navigation layers this type can be attacked on. `None` reads as the
-    /// layers it occupies, which is what makes a flier answerable only by
-    /// anti-air; declaring it separately is how a thing rooted on one layer is
-    /// reached from another.
+    /// layer it stands on, its domain's.
     pub targetable: Option<LayerMask>,
     /// Activated skills instances of this type can use, by registered id.
     pub skills: Vec<SkillId>,
@@ -572,7 +570,7 @@ impl EntityTypeDef {
     }
 
     /// Sets the navigation layers this type can be attacked on, overriding the
-    /// layers it occupies (see [`targetable`](Self::targetable)).
+    /// layer it stands on (see [`targetable`](Self::targetable)).
     ///
     /// Panics if `targetable` is empty, which would make instances invulnerable.
     pub fn with_targetable(mut self, targetable: impl Into<LayerMask>) -> Self {

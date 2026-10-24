@@ -46,7 +46,11 @@ use ferrets_content::{
 use ferrets_demo::{content::CONTENT, map};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::mover_shape::MoverShape;
+use ferrets_pathfinder::{
+    layer_mask::LayerMask,
+    mover_shape::MoverShape,
+    slope::{Direction, Slope},
+};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{entity_def, map::Map};
 
@@ -725,6 +729,29 @@ fn swarmling_grows_into_ravager_inside_cocoon() {
 }
 
 #[test]
+fn swarm_and_undead_ground_spreads_on_ground_alone() {
+    // Creep and blight are ground for walkers to stand and build on; what
+    // flies over them answers to neither. Power, the veil and true sight are
+    // for whatever stands or flies in them.
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let ground = registry
+        .layer(map::GROUND)
+        .expect("ground layer is registered");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+    let spreads_on = |name: &str| {
+        let field = registry.field(name).expect("the field is registered");
+        registry.field_def(field).spreads_on()
+    };
+
+    for name in ["creep", "blight"] {
+        assert_eq!(spreads_on(name), LayerMask::from(ground), "{name}");
+    }
+    for name in ["power", "veil", "true_sight"] {
+        assert_eq!(spreads_on(name), ground | air, "{name}");
+    }
+}
+
+#[test]
 fn creep_watches_for_its_spreader_and_power_does_not() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let creep = registry.field("creep").expect("creep field is registered");
@@ -866,18 +893,33 @@ fn grunt_and_shaman_carry_their_abilities() {
 }
 
 #[test]
-fn map_builds_against_content_with_lake_of_deep_water_in_shallow_rim() {
+fn map_builds_against_content_with_sea_lake_rivers_and_levels() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let live = Map::from_data(&map::data(), &registry);
-    let terrain = |x, y| live.nav_grid().terrain(CellPos::new(x, y));
+    let grid = live.nav_grid();
+    let ground = registry
+        .layer("ground")
+        .expect("the demo registers a ground");
+    let terrain = |x, y| grid.terrain(CellPos::new(x, y));
+    let level = |x, y| grid.cell_level(ground, CellPos::new(x, y));
 
+    // The sea along the top-left: deep down to row 9, a shallow coast on rows
+    // 10 and 11, land from row 12.
+    assert_eq!(terrain(10, 5), registry.terrain("deep_water"), "the sea");
+    assert_eq!(
+        terrain(10, 10),
+        registry.terrain("shallow_water"),
+        "its coast"
+    );
+    assert_eq!(terrain(10, 12), registry.terrain("land"), "the shore");
+    // The rivers meet in the lake: deep water at its middle, a shallow rim
+    // around it. (52, 40) lies 4 across and 8 up from the middle, off the
+    // rivers: 4² + 8² = 80, past the deep water's 49 and within the lake's 81.
     assert_eq!(
         terrain(48, 48),
         registry.terrain("deep_water"),
         "the lake's middle"
     );
-    // (52, 40) lies 4 across and 8 up from the middle, off the rivers:
-    // 4² + 8² = 80, past the deep water's 49 and within the lake's 81.
     assert_eq!(
         terrain(52, 40),
         registry.terrain("shallow_water"),
@@ -887,18 +929,104 @@ fn map_builds_against_content_with_lake_of_deep_water_in_shallow_rim() {
     // 1² + 3² = 10 from the lake's middle, within its deep water's 49: the
     // deeper wins.
     assert_eq!(terrain(47, 45), registry.terrain("deep_water"));
-    assert_eq!(terrain(1, 1), registry.terrain("land"), "a corner");
+    // Low ground at 1, the east plateau at 2, the mountain on it at 3, and
+    // the low half of its west ramp rising east onto it.
+    assert_eq!(level(10, 30), Some(1));
+    assert_eq!(level(58, 24), Some(2));
+    assert_eq!(level(64, 29), Some(3));
+    assert_eq!(level(55, 29), Some(1));
+    assert_eq!(
+        grid.slope(ground, CellPos::new(55, 29)),
+        Some(Slope::Ramp(Direction::East))
+    );
+    // The south ramp onto the east plateau, two wide and four long rising
+    // north: its lower half on low ground, its upper half on the plateau.
+    for y in 36..=39 {
+        assert_eq!(
+            grid.slope(ground, CellPos::new(62, y)),
+            Some(Slope::Ramp(Direction::North))
+        );
+    }
+    assert_eq!(
+        [level(62, 39), level(62, 38), level(62, 37), level(62, 36)],
+        [Some(1), Some(1), Some(2), Some(2)]
+    );
+    // Beside the ramp the cliff goes on, its low and high edge rising east,
+    // and turns at the plateau's corner, rising southeast.
+    assert_eq!(
+        [
+            grid.slope(ground, CellPos::new(55, 27)),
+            grid.slope(ground, CellPos::new(56, 27))
+        ],
+        [Some(Slope::Cliff(Direction::East)); 2]
+    );
+    assert_eq!(
+        [
+            grid.slope(ground, CellPos::new(55, 21)),
+            grid.slope(ground, CellPos::new(56, 22))
+        ],
+        [Some(Slope::Cliff(Direction::SouthEast)); 2]
+    );
+    // The mesa at 3, straight up from low ground at 1.
+    assert_eq!([level(11, 37), level(12, 37)], [Some(1), Some(3)]);
+    assert_eq!(
+        [
+            grid.slope(ground, CellPos::new(11, 37)),
+            grid.slope(ground, CellPos::new(12, 37))
+        ],
+        [Some(Slope::Cliff(Direction::East)); 2]
+    );
 }
 
 #[test]
-fn soldiers_wade_rim_and_ships_keep_off_land() {
+fn cliff_bands_ring_plateaus_mountain_and_mesa() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let live = Map::from_data(&map::data(), &registry);
+    let grid = live.nav_grid();
+    let ground = registry
+        .layer("ground")
+        .expect("the demo registers a ground");
+
+    // A cliff cell has a neighbor at another level, and no walker stands on it.
+    let walker = shape_of(&registry, "grunt");
+    let mut cliffs = 0;
+    for y in 0..96 {
+        for x in 0..96 {
+            let cell = CellPos::new(x, y);
+            let Some(Slope::Cliff(_)) = grid.slope(ground, cell) else {
+                continue;
+            };
+            cliffs += 1;
+            let off = (-1..=1)
+                .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                .any(|(dx, dy)| {
+                    x.checked_add_signed(dx)
+                        .zip(y.checked_add_signed(dy))
+                        .and_then(|(nx, ny)| grid.cell_level(ground, CellPos::new(nx, ny)))
+                        .is_some_and(|level| Some(level) != grid.cell_level(ground, cell))
+                });
+            assert!(off, "the cliff at {cell:?} borders no other level");
+            assert!(!grid.cell_fits(cell, walker), "a walker stands on {cell:?}");
+        }
+    }
+    // Each 16×16 plateau's band is its outer ring of 4 × 16 + 4 = 68 low
+    // cells and inner ring of 4 × 15 = 60 high ones, less its ramps' cells
+    // on them: the east plateau's 3 + 3 and 2 + 2 leave 118, the west's
+    // 3 + 3 and 3 + 3 leave 116. The 5×5 mountain's is 4 × 5 + 4 = 24 low
+    // and 4 × 4 = 16 high, 40; the 4×4 mesa's 4 × 4 + 4 = 20 low and
+    // 4 × 3 = 12 high, 32. 118 + 116 + 40 + 32 = 306.
+    assert_eq!(cliffs, 306);
+}
+
+#[test]
+fn soldiers_and_walkers_wade_rim_and_ships_keep_off_land() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let live = Map::from_data(&map::data(), &registry);
     let fits = |name: &str, x, y| {
         live.nav_grid()
             .fits(CellPos::new(x, y), shape_of(&registry, name))
     };
-    let (deep, rim, land) = ((48, 48), (52, 40), (1, 1));
+    let (deep, rim, land) = ((10, 5), (10, 10), (10, 30));
 
     assert!(fits("grunt", rim.0, rim.1) && fits("grunt", land.0, land.1));
     assert!(!fits("grunt", deep.0, deep.1), "a soldier does not swim");
@@ -908,6 +1036,20 @@ fn soldiers_wade_rim_and_ships_keep_off_land() {
     assert!(
         !fits("farm", rim.0, rim.1),
         "nothing is built in the shallows"
+    );
+    // An uprooted ancient walks the ground domain and wades: its 3×3 at the
+    // rim covers coast rows 10 and 11 and the shore on row 12, where its rooted
+    // form, on land alone, is refused. The stilt walker's 2×2 there stands in
+    // the coast alone, and not in the deep sea.
+    assert!(fits("tree_of_life_uprooted", rim.0, rim.1));
+    assert!(
+        !fits("tree_of_life", rim.0, rim.1),
+        "a rooted ancient keeps to land"
+    );
+    assert!(fits("stilt_walker", rim.0, rim.1));
+    assert!(
+        !fits("stilt_walker", deep.0, deep.1),
+        "a stilt walker does not swim"
     );
 }
 
@@ -1060,12 +1202,12 @@ fn missile_rack_bursts_in_air_sparing_its_side() {
     for name in ["zeppelin", "gryphon", "watch_tower", "guard_tower"] {
         let def = registry.entity(name).expect("the type is defined");
         assert!(
-            targeting::reaches(air.into(), def),
+            targeting::reaches(&registry, air.into(), def),
             "'{name}' is out of the burst"
         );
     }
     let grunt = registry.entity("grunt").expect("the grunt is defined");
-    assert!(!targeting::reaches(air.into(), grunt));
+    assert!(!targeting::reaches(&registry, air.into(), grunt));
 }
 
 //
@@ -1080,9 +1222,9 @@ fn only_melee_shells_and_flat_guns_exclude_air() {
     // Every weapon declares its layers; what stays deliberate per type is what
     // it leaves out. Only the melee blades and bites — the dark templar's
     // among them — the shells, the flat guns of the wagon and the tank, the
-    // naga's spear, and the undead's flat gun and raised blades cannot answer
-    // what flies. The swarm's spawn bites like the swarmling it is too young
-    // to be.
+    // naga's spear, the stilt walker's gun, and the undead's flat gun and
+    // raised blades cannot answer what flies. The swarm's spawn bites like the
+    // swarmling it is too young to be.
     let grounded: Vec<&str> = registry
         .entities()
         .filter(|def| def.can_attack())
@@ -1107,6 +1249,7 @@ fn only_melee_shells_and_flat_guns_exclude_air() {
             "ravager",
             "siege_tank",
             "skeleton",
+            "stilt_walker",
             "swarmling",
             "tank",
             "tree_of_life_uprooted",
@@ -1224,7 +1367,7 @@ fn narrowed_weapons_still_reach_lake_boss() {
         for victim in ["ship", "sea_fortress"] {
             let victim = registry.entity(victim).expect("victim is registered");
             assert!(
-                targeting::reaches(registry.targets_of(attacker), victim),
+                targeting::reaches(&registry, registry.targets_of(attacker), victim),
                 "'{}' can no longer reach '{}', so the lake boss is unfightable",
                 attacker.name,
                 victim.name
@@ -1234,12 +1377,32 @@ fn narrowed_weapons_still_reach_lake_boss() {
 }
 
 #[test]
+fn lake_boss_towers_into_air_and_answers_to_anti_air_by_declaration() {
+    // The fortress occupies the air to close it to fliers; that alone does not
+    // make it an air target — its declaration does.
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let ground = registry.layer(map::GROUND).unwrap();
+    let air = registry.layer(map::AIR).unwrap();
+    let fortress = registry
+        .entity("sea_fortress")
+        .expect("the fortress is registered");
+
+    assert_eq!(
+        fortress.location.expect("the fortress stands").occupies(),
+        ground | air
+    );
+    // A weapon reaching the air alone answers it.
+    assert!(targeting::reaches(&registry, air.into(), fortress));
+}
+
+#[test]
 fn melee_cannot_reach_flier_but_ranged_can() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let flier = registry.entity("gryphon_aloft").expect("flier");
 
     assert!(
         !targeting::reaches(
+            &registry,
             registry.targets_of(registry.entity("grunt").expect("grunt")),
             flier
         ),
@@ -1247,6 +1410,7 @@ fn melee_cannot_reach_flier_but_ranged_can() {
     );
     assert!(
         !targeting::reaches(
+            &registry,
             registry.targets_of(registry.entity("mortar").expect("mortar")),
             flier
         ),
@@ -1259,7 +1423,7 @@ fn melee_cannot_reach_flier_but_ranged_can() {
     for answer in ["archer", "ship", "guard_tower"] {
         let answer = registry.entity(answer).expect("anti-air is registered");
         assert!(
-            targeting::reaches(registry.targets_of(answer), flier),
+            targeting::reaches(&registry, registry.targets_of(answer), flier),
             "'{}' cannot reach a flier, so nothing on that side answers one",
             answer.name
         );
@@ -1279,7 +1443,7 @@ fn watch_tower_stands_on_ground_and_answers_to_anti_air() {
     assert_eq!(occupied, *ground);
     // ...yet it is answerable in the air, which what it occupies could not
     // have said.
-    assert_eq!(targeting::targetable(tower), ground | air);
+    assert_eq!(targeting::targetable(&registry, tower), ground | air);
 }
 
 #[test]
@@ -1892,7 +2056,7 @@ fn true_sight_is_dark_and_reveals_ground_and_air() {
     let air = registry.layer(map::AIR).expect("air layer is registered");
 
     // A detector sees by its own eyes; the field only says what hides under
-    // it is seen. Over any cell, so a lake shelters no cloaked flier.
+    // it is seen. Over any cell, so the sea shelters no cloaked flier.
     let true_sight = field_def(&registry, "true_sight");
     assert_eq!(true_sight.vision(), FieldVision::Dark);
     assert_eq!(true_sight.detection(), Detection::Reveals(ground | air));

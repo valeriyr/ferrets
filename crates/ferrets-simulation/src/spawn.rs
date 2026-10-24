@@ -16,7 +16,7 @@ use ferrets_content::{
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::FieldSourceDef,
     gateway::{GatewayDef, Joins},
-    location::{LocationDef, Solidity},
+    location::LocationDef,
     morph::MorphReason,
     pool::PoolInitial,
     pool_def::PoolId,
@@ -28,7 +28,6 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
-use ferrets_pathfinder::mover_shape::MoverShape;
 use ferrets_physics::body;
 
 use crate::{
@@ -494,7 +493,7 @@ pub(crate) fn spawn_bequest(
     fallen: Fallen,
     slain: Slain,
 ) {
-    let (location_def, left) = {
+    let (location_def, occupancy, left) = {
         let registry = world.resource::<ContentRegistry>();
         let def = registry
             .entity(type_name)
@@ -510,6 +509,7 @@ pub(crate) fn spawn_bequest(
         };
         (
             def.location.expect("a registered type stands somewhere"),
+            OccupancyClass::of(def),
             left,
         )
     };
@@ -527,6 +527,7 @@ pub(crate) fn spawn_bequest(
         around_size,
         entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def),
         location_def.solidity(),
+        occupancy,
         count as usize,
     );
 
@@ -967,8 +968,7 @@ pub fn place_back_beside(world: &mut World, entity: Entity, beside: Beside, lean
     let location_def = entity_def::of(world, entity)
         .location
         .expect("only entities with LocationDef can be placed back");
-    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
-    match cell_back_beside(world, entity, beside, lean, shape, location_def.solidity()) {
+    match cell_back_beside(world, entity, beside, lean) {
         Some(cell) => {
             place_back_at(world, entity, cell, &location_def);
             SetDown::Placed
@@ -1056,41 +1056,6 @@ pub(crate) fn place_back_beside_admitted(
     }
 }
 
-/// The cell [`place_back_beside`] would stand `entity` on, or `None` when
-/// nothing within the search radius takes a footprint of `shape` and
-/// `solidity`: an attached entity searches around the cell of the berth it
-/// sits at; any other beside `beside`, the cells `lean` names first.
-///
-/// Panics for a `Lean::WentIn` on an entity that is not hidden.
-pub(crate) fn cell_back_beside(
-    world: &World,
-    entity: Entity,
-    beside: Beside,
-    lean: Lean,
-    shape: MoverShape,
-    solidity: Solidity,
-) -> Option<CellPos> {
-    let map = world.resource::<Map>();
-    if entity_def::attached(world, entity) {
-        let berth = body::anchor(entity_def::position(world, entity));
-        return map.find_placement_near(berth, CellSize::new(1, 1), shape, solidity);
-    }
-    let around = entity_def::beside_rect(world, entity, beside);
-    match lean {
-        Lean::WentIn => map.find_placement_near_toward(
-            around.origin,
-            around.size,
-            shape,
-            solidity,
-            entity_def::went_in_rect(world, entity),
-        ),
-        Lean::Toward(toward) => {
-            map.find_placement_near_toward(around.origin, around.size, shape, solidity, toward)
-        }
-        Lean::Nothing => map.find_placement_near(around.origin, around.size, shape, solidity),
-    }
-}
-
 /// Like [`place_back_beside`], with the return deferred when no cell is free:
 /// the entity waits off the map — a seated one gives its berth back and is
 /// hidden — and [`game_loop::pending_reveal::process_pending_reveals`] retries
@@ -1140,8 +1105,7 @@ pub(crate) fn stand_or_retry(world: &mut World, entity: Entity, beside: Beside, 
     let location_def = entity_def::of(world, entity)
         .location
         .expect("only entities with LocationDef can stand");
-    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
-    match cell_back_beside(world, entity, beside, lean, shape, location_def.solidity()) {
+    match cell_back_beside(world, entity, beside, lean) {
         Some(cell) => place_back_at(world, entity, cell, &location_def),
         None => wait_off_map(world, entity, beside, lean),
     }
@@ -2481,5 +2445,46 @@ fn check_starts(registry: &ContentRegistry, def: &EntityTypeDef, starts: &[(Pool
             def.name
         );
         declared.validate_initial(*initial, &format!("'{}' starts the {name} pool", def.name));
+    }
+}
+
+/// The cell [`place_back_beside`] would stand `entity` on, or `None` when
+/// nothing within the search radius takes its footprint: an attached entity
+/// searches around the cell of the berth it sits at; any other beside
+/// `beside`, the cells `lean` names first.
+///
+/// Panics for a `Lean::WentIn` on an entity that is not hidden.
+fn cell_back_beside(world: &World, entity: Entity, beside: Beside, lean: Lean) -> Option<CellPos> {
+    let def = entity_def::of(world, entity);
+    let location_def = def.location.expect("only entities with LocationDef stand");
+    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
+    let solidity = location_def.solidity();
+    let occupancy = OccupancyClass::of(def);
+    let map = world.resource::<Map>();
+    if entity_def::attached(world, entity) {
+        let berth = body::anchor(entity_def::position(world, entity));
+        return map.find_placement_near(berth, CellSize::new(1, 1), shape, solidity, occupancy);
+    }
+    let around = entity_def::beside_rect(world, entity, beside);
+    match lean {
+        Lean::WentIn => map.find_placement_near_toward(
+            around.origin,
+            around.size,
+            shape,
+            solidity,
+            occupancy,
+            entity_def::went_in_rect(world, entity),
+        ),
+        Lean::Toward(toward) => map.find_placement_near_toward(
+            around.origin,
+            around.size,
+            shape,
+            solidity,
+            occupancy,
+            toward,
+        ),
+        Lean::Nothing => {
+            map.find_placement_near(around.origin, around.size, shape, solidity, occupancy)
+        }
     }
 }

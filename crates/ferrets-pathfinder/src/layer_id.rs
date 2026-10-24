@@ -13,7 +13,7 @@ use crate::layer_mask::LayerMask;
 ///
 /// Each value is a non-zero power of two. Use `|` to union layers into a [`LayerMask`],
 /// or `&` to intersect them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LayerId(u32);
 
 impl LayerId {

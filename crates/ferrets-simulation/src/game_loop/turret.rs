@@ -215,6 +215,7 @@ fn work_turret(world: &mut World, entity: Entity, gun: &Gun, state: &mut TurretS
     // the guns is in range of all of them.
     if !attack::within(
         world,
+        entity,
         position,
         size,
         attack::reached(target, target_position, target_size),
@@ -290,7 +291,11 @@ fn bears(world: &World, entity: Entity, gun: &Gun, ordered: AttackTarget) -> boo
     };
     match target {
         Some(target) => {
-            if !targeting::reaches(gun.targets, entity_def::of(world, target)) {
+            if !targeting::reaches(
+                world.resource::<ContentRegistry>(),
+                gun.targets,
+                entity_def::of(world, target),
+            ) {
                 return false;
             }
         }
@@ -306,6 +311,7 @@ fn bears(world: &World, entity: Entity, gun: &Gun, ordered: AttackTarget) -> boo
     let (position, size) = entity_def::footprint(world, entity);
     attack::within(
         world,
+        entity,
         position,
         size,
         attack::reached(target, target_position, target_size),

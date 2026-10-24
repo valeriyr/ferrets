@@ -482,17 +482,32 @@ pub fn grid_mark_of(
     })
 }
 
-/// The shape a body of `location_def` stands and routes with: its domain's
-/// terrains, the layers it occupies, and its size.
+/// The shape a body of `location_def` stands and routes with.
 pub fn mover_shape(registry: &ContentRegistry, location_def: &LocationDef) -> MoverShape {
+    let domain = registry.domain_def(location_def.domain());
     MoverShape::new(
-        registry
-            .domain_def(location_def.domain())
-            .terrains()
-            .mask(registry),
+        domain.terrains().mask(registry),
+        domain.layer(),
         location_def.occupies(),
         location_def.size(),
+        domain.cliff_crossing(),
     )
+}
+
+/// Whether `entity`, standing on the cells `from`, reaches `goal` within
+/// `range`: a touch needs an edge between them its domain could step. Its
+/// shape is read only once `goal` lies within `range`.
+pub fn reaches(world: &World, entity: Entity, from: CellRect, goal: CellRect, range: u32) -> bool {
+    let map = world.resource::<Map>();
+    if !map.projection().in_range_for_rects(from, goal, range) {
+        return false;
+    }
+    let location = of(world, entity)
+        .location
+        .expect("only entities with a location reach");
+    let shape = mover_shape(world.resource::<ContentRegistry>(), &location);
+    map.nav_grid()
+        .reaches(map.projection(), from, shape, goal, range)
 }
 
 /// Returns where `entity` stands.
@@ -867,7 +882,7 @@ pub fn notice_range_serving(world: &World, entity: Entity, target: Option<Entity
 /// layers, or, for a bare cell (`None`), its shots are sent to a place.
 fn serves(world: &World, target: Option<Entity>) -> impl Fn(&ContentRegistry, &Weapon) -> bool {
     move |registry, weapon| match target {
-        Some(target) => targeting::reaches(weapon.targets(), of(world, target)),
+        Some(target) => targeting::reaches(registry, weapon.targets(), of(world, target)),
         None => registry.weapon_aims_at_cells(weapon),
     }
 }

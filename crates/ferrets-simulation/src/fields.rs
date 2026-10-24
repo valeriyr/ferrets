@@ -250,6 +250,11 @@ pub fn allows_placement(
         .location
         .expect("validated content defines a location")
         .size();
+    debug_assert_spreads_on(
+        world.resource::<ContentRegistry>(),
+        def,
+        def.field_placement.iter().map(FieldPlacement::field),
+    );
     rules_allow(
         world,
         player,
@@ -380,6 +385,11 @@ pub fn entity_modifiers_of(
     if def.field_effects.is_empty() || entity_def::hidden(world, entity) {
         return Vec::new();
     }
+    debug_assert_spreads_on(
+        world.resource::<ContentRegistry>(),
+        def,
+        def.field_effects.iter().map(FieldEffect::field),
+    );
     let grid = world.resource::<FieldGrid>();
     let session = world.resource::<GameSession>();
     let player = entity_def::owner(world, entity);
@@ -400,6 +410,25 @@ pub fn entity_modifiers_of(
             EntityEffect::Disable | EntityEffect::Conceal => None,
         })
         .collect()
+}
+
+/// Panics in debug builds if one of `fields`, read for a body of `def`, does
+/// not spread on the layer of its domain.
+pub(crate) fn debug_assert_spreads_on(
+    registry: &ContentRegistry,
+    def: &EntityTypeDef,
+    fields: impl IntoIterator<Item = FieldId>,
+) {
+    if let Some(location) = &def.location {
+        let layer = registry.domain_def(location.domain()).layer();
+        for field in fields {
+            debug_assert!(
+                registry.field_def(field).spreads_on() & layer != LayerMask::EMPTY,
+                "the registry admits a field read for '{}' only where it spreads on its domain's layer",
+                def.name
+            );
+        }
+    }
 }
 
 /// Whether enough of `rect` answers `test` for `coverage` to be satisfied.
@@ -430,6 +459,11 @@ fn holds_effect(
     if candidates.peek().is_none() {
         return false;
     }
+    debug_assert_spreads_on(
+        world.resource::<ContentRegistry>(),
+        def,
+        def.field_effects.iter().map(FieldEffect::field),
+    );
     let grid = world.resource::<FieldGrid>();
     let session = world.resource::<GameSession>();
     let player = entity_def::owner(world, entity);

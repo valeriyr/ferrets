@@ -373,6 +373,21 @@ fn detection_finds_body_where_it_stands_not_where_it_is_attacked() {
 }
 
 #[test]
+fn detection_finds_body_where_it_stands_not_where_it_towers() {
+    // The spire occupies the air over its cell but stands on the ground: an
+    // eye naming the air alone glimpses it, one naming the ground names it.
+    let mut app = concealment_app(rivals());
+    utils::create_owned(&mut app, "air_eye", 5, 5, 0);
+    let (spire, _) = utils::create_owned(&mut app, "spire", 5, 8, 1);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(utils::sighting_of(&app, 0, spire), Sighting::Glimpsed);
+
+    utils::create_owned(&mut app, "ground_eye", 6, 5, 0);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(utils::sighting_of(&app, 0, spire), Sighting::Seen);
+}
+
+#[test]
 fn disabled_detector_detects_nothing() {
     let mut app = concealment_app(rivals());
     // The rival's tower names the local shade beside it, until the local
@@ -1568,27 +1583,29 @@ fn walker(name: &str, domain: DomainId, health: u32, sight: u32) -> EntityTypeDe
 /// App with concealment content and the session started: a `scout` that sees
 /// six, a `sniper` that shoots and sees eight, a `marksman` that shoots ten and
 /// sees four, a `runner` too tough to die, a permanently concealed `shade` and
-/// a `wight` that is the shade too tough to die and rooted where it stands, a concealed `phantom` in the
-/// air, a `dummy`, a 3×3 `hall` and a concealed 3×3 `crypt`; a `tower` and a
-/// `ground_eye` detecting to six on every layer and on the ground alone, the
-/// tower blind and halted under an enemy veil; an `arbiter` veiling allied
-/// units around it, a `nest` breeding one veiled `nestling` into its berth,
-/// a `zealot` that answers to the veil and changes into a
-/// `sentinel` that answers to it too, and a 2×2 `phalanx` and `rabble` that
-/// answer to it over every cell and over any; a `mage` with the `cloak`,
-/// `decloak`, `ambush`, `daze`, `focus`, `sweep`, `ground_sweep` and `bolt`
-/// skills; a weaponless `lurker` with `cloak`, `ambush` and `hire`; a
-/// `spearman` whose swing takes ten ticks to land, a `gunner` whose turret
-/// shoots the ground and a `lobber` whose turret lobs a shell at a cell, all
-/// three with `ambush`; a `mortar` that sends a bursting shell to a cell; and
-/// a `sprinter` that outruns anything following it.
+/// a `wight` that is the shade too tough to die and rooted where it stands, a
+/// concealed `phantom` in the air, a concealed `spire` standing on the ground
+/// and towering into the air, a `dummy`, a 3×3 `hall` and a concealed 3×3
+/// `crypt`; a `tower`, a `ground_eye` and an `air_eye` detecting to six on
+/// every layer, on the ground alone and in the air alone, the tower blind and
+/// halted under an enemy veil; an `arbiter` veiling allied units around it, a
+/// `nest` breeding one veiled `nestling` into its berth, a `zealot` that
+/// answers to the veil and changes into a `sentinel` that answers to it too,
+/// and a 2×2 `phalanx` and `rabble` that answer to it over every cell and over
+/// any; a `mage` with the `cloak`, `decloak`, `ambush`, `daze`, `focus`,
+/// `sweep`, `ground_sweep` and `bolt` skills; a weaponless `lurker` with
+/// `cloak`, `ambush` and `hire`; a `spearman` whose swing takes ten ticks to
+/// land, a `gunner` whose turret shoots the ground and a `lobber` whose turret
+/// lobs a shell at a cell, all three with `ambush`; a `mortar` that sends a
+/// bursting shell to a cell; and a `sprinter` that outruns anything following
+/// it.
 fn concealment_app(slots: Vec<PlayerSlot>) -> App {
     let mut app = utils::make_app(slots);
     // The air layer the phantom and the arbiter live on, over the same ground.
     {
         let mut grid = NavGrid::new(32, 32, |_| utils::LAND);
-        grid.add_layer(utils::GROUND);
-        grid.add_layer(utils::AIR);
+        grid.add_flat_layer(utils::GROUND, 1);
+        grid.add_flat_layer(utils::AIR, 2);
         map::install_map(
             app.world_mut(),
             Map::new(
@@ -1609,6 +1626,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
             "true_sight",
             FieldDef::new(
                 Terrains::Any,
+                utils::GROUND | utils::AIR,
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Reveals(LayerMask::EMPTY | utils::GROUND | air),
@@ -1618,15 +1636,27 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
             "ground_sight",
             FieldDef::new(
                 Terrains::Any,
+                utils::GROUND | utils::AIR,
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Reveals(utils::GROUND.into()),
+            ),
+        );
+        let air_sight = registry.register_field(
+            "air_sight",
+            FieldDef::new(
+                Terrains::Any,
+                utils::GROUND | utils::AIR,
+                FieldDecay::Instant,
+                FieldVision::Dark,
+                Detection::Reveals(air.into()),
             ),
         );
         let veil = registry.register_field(
             "veil",
             FieldDef::new(
                 Terrains::Any,
+                utils::GROUND | utils::AIR,
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -1961,6 +1991,38 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                     Emission::Nothing,
                     Emission::Nothing,
                 )]),
+        );
+        registry.register(
+            EntityTypeDef::new("air_eye")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(50))
+                .with_dying(1, [])
+                .with_sight_range(8)
+                .with_field_sources([FieldSourceDef::new(
+                    air_sight,
+                    6,
+                    FieldGrowth::Instant,
+                    Emission::Nothing,
+                    Emission::Nothing,
+                )]),
+        );
+        // Concealed, standing on the ground and towering into the air.
+        registry.register(
+            EntityTypeDef::new("spire")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND | air,
+                )
+                .with_pool(Pool::health(50))
+                .with_dying(1, [])
+                .with_concealment(Concealment::Concealed),
         );
         registry.register(
             walker("arbiter", utils::AIR_DOMAIN, 100, 6).with_field_sources([FieldSourceDef::new(

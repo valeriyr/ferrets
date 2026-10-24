@@ -3,7 +3,7 @@
 //! unit's train time.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_content::{price::Price, registry::ContentRegistry};
+use ferrets_content::{field::FieldPlacement, price::Price, registry::ContentRegistry};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
@@ -116,6 +116,11 @@ pub fn judge(
     if !landing::sees(world, player, warper_def.landing(), footprint) {
         return Err(WarpRefusal::Unseen);
     }
+    fields::debug_assert_spreads_on(
+        world.resource::<ContentRegistry>(),
+        unit,
+        warper_def.within().iter().map(FieldPlacement::field),
+    );
     if !fields::rules_allow(world, Some(player), warper_def.within(), footprint)
         || !fields::allows_placement(world, Some(player), unit, anchor)
     {

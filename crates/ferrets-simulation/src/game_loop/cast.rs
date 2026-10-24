@@ -184,19 +184,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
                         target,
                         range,
                     ),
-                    CastAim::Cell(_) => {
-                        let projection = world.resource::<Map>().projection();
-                        let (own_position, own_size) = entity_def::footprint(world, entity);
-                        chase::advance_to_point(
-                            &mut state.last_chase,
-                            projection,
-                            own_position,
-                            own_size,
-                            goal_position,
-                            goal_size,
-                            range,
-                        )
-                    }
+                    CastAim::Cell(_) => chase::advance_to_point(
+                        &mut state.last_chase,
+                        world,
+                        entity,
+                        goal_position,
+                        goal_size,
+                        range,
+                    ),
                 };
                 match destination {
                     Destination::OutOfReach => {

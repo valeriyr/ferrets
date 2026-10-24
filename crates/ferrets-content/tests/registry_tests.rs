@@ -68,7 +68,8 @@ use ferrets_content::{
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_pathfinder::{
-    layer_id::LayerId, layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask,
+    cliff_crossing::CliffCrossing, layer_id::LayerId, layer_level::LayerLevel,
+    layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask,
 };
 
 //
@@ -336,6 +337,89 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
 
 #[test]
 #[should_panic(
+    expected = "entity type 'sprite' harvesting seats 'sprite' on layer 2 in a berth of 'vein' on layer 1"
+)]
+fn validate_rejects_harvester_attaching_to_source_off_its_layer() {
+    let mut registry = water_registry();
+    registry.register_resource("gold");
+    registry.register(
+        utils::sized("vein", utils::GROUND_DOMAIN, CellSize::new(2, 2))
+            .with_resource_source("gold", DepletionPolicy::Destroy)
+            .with_berths([("rim", BerthGroup::new([point("0.5", "0.5")], 1))]),
+    );
+    registry.register(
+        utils::standing("sprite", utils::WATER_DOMAIN)
+            .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+            .with_resource_carrier([(
+                "gold",
+                HarvestData::new(
+                    5,
+                    5,
+                    2,
+                    WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
+                    Banking::Direct,
+                    Kinds::Any,
+                ),
+            )]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'sprite' building seats 'sprite' on layer 2 in a berth of 'depot' on layer 1"
+)]
+fn validate_rejects_builder_attaching_to_site_off_its_layer() {
+    let mut registry = water_registry();
+    registry.register(
+        utils::sized("depot", utils::GROUND_DOMAIN, CellSize::new(2, 2))
+            .with_rise(6, [])
+            .with_berths([("rim", BerthGroup::new([point("0.5", "0.5")], 1))]),
+    );
+    registry.register(
+        utils::standing("sprite", utils::WATER_DOMAIN)
+            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+            .with_builder(
+                ["depot"],
+                BuilderAttendance::Crew(WorkPresence::Attached(Attachment::new(
+                    "rim",
+                    BerthStance::Still,
+                ))),
+            ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'mender' mending seats 'mender' on layer 2 in a berth of 'hut' on layer 1"
+)]
+fn validate_rejects_repairer_attaching_to_target_off_its_layer() {
+    let mut registry = water_registry();
+    registry.register(
+        utils::standing("hut", utils::GROUND_DOMAIN)
+            .with_pool(Pool::health(100))
+            .with_berths([("rim", BerthGroup::new([point("0.5", "0.5")], 1))]),
+    );
+    registry.register(
+        utils::standing("mender", utils::WATER_DOMAIN)
+            .with_pool(Pool::health(20))
+            .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+            .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+            .with_repairer(
+                Kinds::Any,
+                RepairRate::Production,
+                WorkPresence::Attached(Attachment::new("rim", BerthStance::Still)),
+                false,
+                RepairCost::Free,
+                None,
+            ),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
     expected = "entity type 'sprite' attaches to berth group 'rim' of 'depot', which declares no such group"
 )]
 fn validate_rejects_builder_attaching_to_group_its_site_lacks() {
@@ -501,8 +585,8 @@ fn validate_rejects_overbuilding_source_of_another_kind() {
 fn validate_rejects_overbuilding_source_on_other_layers() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
-    let air = registry.register_layer("air");
-    let aloft = registry.register_domain("aloft", DomainDef::new(air, Terrains::Any));
+    let air = registry.register_layer("air", LayerLevel::At(2));
+    let aloft = registry.register_domain("aloft", DomainDef::new(air, Terrains::Any, None));
     registry.register(
         utils::standing("mine", utils::GROUND_DOMAIN)
             .with_resource_source("gold", DepletionPolicy::Destroy),
@@ -529,7 +613,7 @@ fn validate_rejects_overbuilding_source_on_terrain_overbuilder_refuses() {
     let land = registry.terrain("land").unwrap();
     let dry = registry.register_domain(
         "dry",
-        DomainDef::new(utils::GROUND, Terrains::Only(land.into())),
+        DomainDef::new(utils::GROUND, Terrains::Only(land.into()), None),
     );
     registry.register(
         utils::standing("mine", utils::GROUND_DOMAIN)
@@ -554,7 +638,7 @@ fn validate_accepts_overbuilding_source_on_fewer_terrains() {
     let land = registry.terrain("land").unwrap();
     let dry = registry.register_domain(
         "dry",
-        DomainDef::new(utils::GROUND, Terrains::Only(land.into())),
+        DomainDef::new(utils::GROUND, Terrains::Only(land.into()), None),
     );
     registry.register(
         EntityTypeDef::new("mine")
@@ -1164,30 +1248,92 @@ fn reserved_building_tag_is_registered_by_default() {
 fn register_layer_assigns_ids_in_registration_order() {
     let mut registry = ContentRegistry::default();
 
-    assert_eq!(registry.register_layer("ground"), LayerId::new(1));
-    assert_eq!(registry.register_layer("air"), LayerId::new(2));
-    assert_eq!(registry.register_layer("water"), LayerId::new(4));
+    assert_eq!(
+        registry.register_layer("ground", LayerLevel::At(1)),
+        LayerId::new(1)
+    );
+    assert_eq!(
+        registry.register_layer("air", LayerLevel::At(2)),
+        LayerId::new(2)
+    );
+    assert_eq!(
+        registry.register_layer("water", LayerLevel::At(3)),
+        LayerId::new(4)
+    );
 }
 
 #[test]
-fn registered_layer_round_trips_and_keeps_its_id_on_re_registration() {
+fn registered_layer_round_trips_with_its_level() {
     let mut registry = ContentRegistry::default();
 
-    let ground = registry.register_layer("ground");
-    registry.register_layer("air");
+    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    let air = registry.register_layer("air", LayerLevel::At(4));
 
     assert_eq!(registry.layer("ground"), Some(ground));
     assert!(registry.has_layer("ground"));
-    assert_eq!(registry.register_layer("ground"), ground);
-
+    assert_eq!(
+        registry.layer_level(ground),
+        LayerLevel::Range { from: 1, to: 3 }
+    );
+    assert_eq!(registry.layer_level(air), LayerLevel::At(4));
     assert_eq!(registry.layer("water"), None);
     assert!(!registry.has_layer("water"));
 }
 
 #[test]
+#[should_panic(expected = "layer 'ground' is already registered")]
+fn re_registered_layer_panics() {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("ground", LayerLevel::At(1));
+    registry.register_layer("ground", LayerLevel::At(2));
+}
+
+#[test]
+#[should_panic(expected = "layer 'air' at 3 shares a level with layer 'ground' at 1..=3")]
+fn layer_sharing_level_panics() {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    registry.register_layer("air", LayerLevel::At(3));
+}
+
+#[test]
+#[should_panic(expected = "layer 'ground' at 1..=3 shares a level with layer 'air' at 2")]
+fn layer_range_over_registered_level_panics() {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("air", LayerLevel::At(2));
+    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+}
+
+#[test]
+#[should_panic(expected = "layer 'highland' at 3..=5 shares a level with layer 'ground' at 1..=3")]
+fn layer_ranges_overlapping_panics() {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    registry.register_layer("highland", LayerLevel::Range { from: 3, to: 5 });
+}
+
+#[test]
+fn adjacent_layer_ranges_register() {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    let highland = registry.register_layer("highland", LayerLevel::Range { from: 4, to: 6 });
+
+    assert_eq!(
+        registry.layer_level(highland),
+        LayerLevel::Range { from: 4, to: 6 }
+    );
+}
+
+#[test]
+#[should_panic(expected = "layer 'ground' spans levels 3 to 1, which run downward")]
+fn layer_range_running_downward_panics() {
+    ContentRegistry::default().register_layer("ground", LayerLevel::Range { from: 3, to: 1 });
+}
+
+#[test]
 #[should_panic(expected = "layer name must not be empty")]
 fn empty_layer_name_panics() {
-    ContentRegistry::default().register_layer("");
+    ContentRegistry::default().register_layer("", LayerLevel::At(1));
 }
 
 #[test]
@@ -1195,8 +1341,49 @@ fn empty_layer_name_panics() {
 fn register_layer_rejects_exhausted_ids() {
     let mut registry = ContentRegistry::default();
     for n in 0..=32 {
-        registry.register_layer(format!("layer_{n}"));
+        registry.register_layer(format!("layer_{n}"), LayerLevel::At(n));
     }
+}
+
+#[test]
+#[should_panic(
+    expected = "domain 'striding' must say how it crosses cliffs: its layer spans levels 1..=3"
+)]
+fn domain_over_layer_spanning_levels_without_cliff_crossing_panics() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    registry.register_terrain("land");
+    registry.register_domain("striding", DomainDef::new(ground, Terrains::Any, None));
+}
+
+#[test]
+#[should_panic(
+    expected = "domain 'aloft' says how it crosses cliffs, but its layer is at the one level 4"
+)]
+fn domain_over_layer_at_one_level_with_cliff_crossing_panics() {
+    let mut registry = ContentRegistry::default();
+    let air = registry.register_layer("air", LayerLevel::At(4));
+    registry.register_terrain("land");
+    registry.register_domain(
+        "aloft",
+        DomainDef::new(air, Terrains::Any, Some(CliffCrossing::Cross)),
+    );
+}
+
+#[test]
+fn domain_keeps_its_cliff_crossing() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    registry.register_terrain("land");
+    let striding = registry.register_domain(
+        "striding",
+        DomainDef::new(ground, Terrains::Any, Some(CliffCrossing::Cross)),
+    );
+
+    assert_eq!(
+        registry.domain_def(striding).cliff_crossing(),
+        Some(CliffCrossing::Cross)
+    );
 }
 
 #[test]
@@ -1223,7 +1410,7 @@ fn register_rejects_occupied_mask_mixing_in_unregistered_layer() {
 )]
 fn register_rejects_occupied_mask_leaving_out_domain_layer() {
     let mut registry = utils::ground_registry();
-    let air = registry.register_layer("air");
+    let air = registry.register_layer("air", LayerLevel::At(2));
     registry.register(EntityTypeDef::new("gryphon").with_location(
         utils::GROUND_DOMAIN,
         CellSize::ONE,
@@ -1250,6 +1437,21 @@ fn register_terrain_assigns_bits_in_registration_order() {
     assert!(registry.has_terrain("land"));
     assert!(!registry.has_terrain("lava"));
     assert_eq!(*registry.registered_terrains(), 0b111);
+}
+
+#[test]
+fn terrains_are_listed_in_name_order_with_their_ids() {
+    let mut registry = ContentRegistry::default();
+    registry.register_terrain("land");
+    registry.register_terrain("deep_water");
+
+    assert_eq!(
+        registry.terrains().collect::<Vec<_>>(),
+        vec![
+            ("deep_water", TerrainId::new(2)),
+            ("land", TerrainId::new(1))
+        ]
+    );
 }
 
 #[test]
@@ -1286,7 +1488,7 @@ fn domain_terrains_resolve_any_to_every_registered_terrain() {
     let land = registry.terrain("land").unwrap();
     let naval = registry.register_domain(
         "naval",
-        DomainDef::new(utils::GROUND, Terrains::Only(water.into())),
+        DomainDef::new(utils::GROUND, Terrains::Only(water.into()), None),
     );
 
     let terrains = |domain| registry.domain_def(domain).terrains().mask(&registry);
@@ -1304,27 +1506,31 @@ fn domain_terrains_resolve_any_to_every_registered_terrain() {
 #[test]
 #[should_panic(expected = "domain name must not be empty")]
 fn empty_domain_name_panics() {
-    utils::ground_registry().register_domain("", DomainDef::new(utils::GROUND, Terrains::Any));
+    utils::ground_registry()
+        .register_domain("", DomainDef::new(utils::GROUND, Terrains::Any, None));
 }
 
 #[test]
 #[should_panic(expected = "domain 'ground' is already registered")]
 fn register_domain_rejects_duplicate_name() {
     let mut registry = utils::ground_registry();
-    registry.register_domain("ground", DomainDef::new(utils::GROUND, Terrains::Any));
+    registry.register_domain("ground", DomainDef::new(utils::GROUND, Terrains::Any, None));
 }
 
 #[test]
 #[should_panic(expected = "domain 'aloft' is in unregistered layer 2")]
 fn register_domain_rejects_unregistered_layer() {
     let mut registry = utils::ground_registry();
-    registry.register_domain("aloft", DomainDef::new(LayerId::new(2), Terrains::Any));
+    registry.register_domain(
+        "aloft",
+        DomainDef::new(LayerId::new(2), Terrains::Any, None),
+    );
 }
 
 #[test]
 #[should_panic(expected = "a domain over no terrain holds nothing; declare it over \"any\"")]
 fn domain_over_no_terrain_panics() {
-    DomainDef::new(utils::GROUND, Terrains::Only(TerrainMask::EMPTY));
+    DomainDef::new(utils::GROUND, Terrains::Only(TerrainMask::EMPTY), None);
 }
 
 #[test]
@@ -1336,6 +1542,7 @@ fn register_domain_rejects_unregistered_terrain() {
         DomainDef::new(
             utils::GROUND,
             Terrains::Only(TerrainMask::from(TerrainId::new(2))),
+            None,
         ),
     );
 }
@@ -5318,6 +5525,7 @@ fn validate_rejects_transition_through_form_on_fewer_terrains() {
         DomainDef::new(
             utils::GROUND,
             Terrains::Only(registry.terrain("land").unwrap().into()),
+            None,
         ),
     );
     registry.register(
@@ -5348,6 +5556,7 @@ fn validate_accepts_transition_through_form_on_more_terrains() {
         DomainDef::new(
             utils::GROUND,
             Terrains::Only(registry.terrain("land").unwrap().into()),
+            None,
         ),
     );
     registry.register(
@@ -5569,6 +5778,7 @@ fn register_rejects_standing_act_on_foreign_field() {
         "blight",
         FieldDef::new(
             Terrains::Any,
+            utils::GROUND.into(),
             FieldDecay::Never,
             FieldVision::Dark,
             Detection::Blind,
@@ -5619,6 +5829,7 @@ fn register_keeps_field_vision() {
         "creep",
         FieldDef::new(
             Terrains::Any,
+            utils::GROUND.into(),
             FieldDecay::Never,
             FieldVision::Watched,
             Detection::Blind,
@@ -5628,6 +5839,7 @@ fn register_keeps_field_vision() {
         "power",
         FieldDef::new(
             Terrains::Any,
+            utils::GROUND.into(),
             FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Blind,
@@ -5653,6 +5865,7 @@ fn register_rejects_field_on_unregistered_terrain() {
         "creep",
         FieldDef::new(
             Terrains::Only(TerrainMask::from(TerrainId::new(2))),
+            utils::GROUND.into(),
             FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Blind,
@@ -5699,10 +5912,150 @@ fn register_rejects_effect_of_foreign_field() {
 }
 
 #[test]
+fn register_keeps_layers_field_spreads_on() {
+    let mut registry = utils::ground_registry();
+    let tide = tide_field(&mut registry);
+
+    assert_eq!(
+        registry.field_def(tide).spreads_on(),
+        LayerMask::from(utils::WATER)
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "a field spreading on no layer is for nobody; declare the layers it spreads on"
+)]
+fn field_spreading_on_no_layer_panics() {
+    FieldDef::new(
+        Terrains::Any,
+        LayerMask::EMPTY,
+        FieldDecay::Instant,
+        FieldVision::Dark,
+        Detection::Blind,
+    );
+}
+
+#[test]
+#[should_panic(expected = "field 'tide' spreads on unregistered layers 0b10")]
+fn register_rejects_field_spreading_on_unregistered_layer() {
+    utils::ground_registry().register_field(
+        "tide",
+        FieldDef::new(
+            Terrains::Any,
+            utils::WATER.into(),
+            FieldDecay::Instant,
+            FieldVision::Dark,
+            Detection::Blind,
+        ),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'crawler' answers to field 'tide', which does not spread on layer 1, its domain's"
+)]
+fn register_rejects_effect_of_field_off_its_layer() {
+    let mut registry = utils::ground_registry();
+    let tide = tide_field(&mut registry);
+    registry.register(
+        utils::standing("crawler", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
+            tide,
+            Affiliation::Own,
+            FieldCoverage::Every,
+            Vec::new(),
+            vec![EntityEffect::Disable],
+            None,
+        )]),
+    );
+}
+
+#[test]
+fn register_accepts_effect_of_field_spreading_on_its_layer_among_others() {
+    let mut registry = utils::ground_registry();
+    tide_field(&mut registry);
+    let shoal = registry.register_field(
+        "shoal",
+        FieldDef::new(
+            Terrains::Any,
+            utils::GROUND | utils::WATER,
+            FieldDecay::Instant,
+            FieldVision::Dark,
+            Detection::Blind,
+        ),
+    );
+    registry.register(
+        utils::standing("wader", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
+            shoal,
+            Affiliation::Own,
+            FieldCoverage::Every,
+            Vec::new(),
+            vec![EntityEffect::Disable],
+            None,
+        )]),
+    );
+
+    assert_eq!(
+        registry
+            .entity("wader")
+            .expect("the wader registers")
+            .field_effects[0]
+            .field(),
+        shoal
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'spore' is placed by field 'tide', which does not spread on layer 1, its domain's"
+)]
+fn register_rejects_placement_by_field_off_its_layer() {
+    let mut registry = utils::ground_registry();
+    let tide = tide_field(&mut registry);
+    registry.register(
+        utils::standing("spore", utils::GROUND_DOMAIN)
+            .with_field_placement([FieldPlacement::Forbids { field: tide }]),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'raise_recruit' summons 'recruit' within field 'tide', which does not spread on layer 1, its domain's"
+)]
+fn register_rejects_summon_within_field_off_summoned_layer() {
+    let mut registry = utils::ground_registry();
+    let tide = tide_field(&mut registry);
+    registry.register(rising_recruit());
+    register_summon(
+        &mut registry,
+        "raise_recruit",
+        "recruit",
+        vec![powered(tide)],
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'relay' warps in 'recruit' within field 'tide', which does not spread on layer 1, its domain's"
+)]
+fn validate_rejects_warp_within_field_off_warped_layer() {
+    let mut registry = utils::ground_registry();
+    let tide = tide_field(&mut registry);
+    registry.register(rising_recruit());
+    registry.register(utils::standing("relay", utils::GROUND_DOMAIN).with_warper(
+        ["recruit"],
+        vec![powered(tide)],
+        Landing::Sighted,
+    ));
+    registry.validate();
+}
+
+#[test]
 #[should_panic(expected = "decay cycle must be positive")]
 fn field_rejects_zero_decay_cycle() {
     FieldDef::new(
         Terrains::Any,
+        utils::GROUND.into(),
         FieldDecay::Gradual { cycle: 0 },
         FieldVision::Dark,
         Detection::Blind,
@@ -6677,6 +7030,7 @@ fn register_keeps_field_detection() {
         "true_sight",
         FieldDef::new(
             Terrains::Any,
+            utils::GROUND.into(),
             FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Reveals(utils::GROUND.into()),
@@ -6693,6 +7047,7 @@ fn register_keeps_field_detection() {
 fn field_on_no_terrain_panics() {
     FieldDef::new(
         Terrains::Only(TerrainMask::EMPTY),
+        utils::GROUND.into(),
         FieldDecay::Instant,
         FieldVision::Dark,
         Detection::Blind,
@@ -6704,6 +7059,7 @@ fn field_on_no_terrain_panics() {
 fn field_rejects_detection_revealing_no_layer() {
     FieldDef::new(
         Terrains::Any,
+        utils::GROUND.into(),
         FieldDecay::Instant,
         FieldVision::Dark,
         Detection::Reveals(LayerMask::EMPTY),
@@ -6717,6 +7073,7 @@ fn register_rejects_field_detecting_unregistered_layer() {
         "sonar",
         FieldDef::new(
             Terrains::Any,
+            utils::GROUND.into(),
             FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Reveals(utils::WATER.into()),
@@ -6875,6 +7232,47 @@ fn validate_rejects_brood_limit_above_slots() {
     let mut registry = utils::ground_registry();
     registry.register(hatch("hatch", 2, 3));
     registry.register(grub("grub"));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hatch' breeding 'grub' seats 'grub' on layer 2 in a berth of 'hatch' on layer 1"
+)]
+fn validate_rejects_breeder_seating_broodling_off_its_layer() {
+    let mut registry = water_registry();
+    registry.register(hatch("hatch", 3, 2));
+    registry.register(
+        EntityTypeDef::new("grub")
+            .with_location(
+                utils::WATER_DOMAIN,
+                CellSize::ONE,
+                Solidity::Passable,
+                utils::WATER,
+            )
+            .with_pool(Pool::health(25))
+            .with_broodling(Attachment::new("brood", BerthStance::Still)),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hatch' breeding 'grub' seats 'grub' on layer 1 in a berth of 'raft' on layer 2"
+)]
+fn validate_rejects_breeder_changing_into_form_seating_brood_off_its_layer() {
+    let mut registry = water_registry();
+    registry.register(hatch("hatch", 3, 2).with_morphs([morph_through("husk", "raft")]));
+    registry.register(grub("grub"));
+    registry.register(utils::sized(
+        "husk",
+        utils::GROUND_DOMAIN,
+        CellSize::new(3, 3),
+    ));
+    registry.register(
+        utils::sized("raft", utils::WATER_DOMAIN, CellSize::new(3, 3))
+            .with_berths([("brood", BerthGroup::new([point("0.5", "3.5")], 1))]),
+    );
     registry.validate();
 }
 
@@ -7447,7 +7845,39 @@ fn creep_field(registry: &mut ContentRegistry) -> FieldId {
         "creep",
         FieldDef::new(
             Terrains::Any,
+            utils::GROUND.into(),
             FieldDecay::Gradual { cycle: 4 },
+            FieldVision::Dark,
+            Detection::Blind,
+        ),
+    )
+}
+
+/// [`utils::ground_registry`] with a second layer, "water", and the
+/// [`utils::WATER_DOMAIN`] on it.
+fn water_registry() -> ContentRegistry {
+    let mut registry = utils::ground_registry();
+    let water = registry.register_layer("water", LayerLevel::At(2));
+    assert_eq!(
+        registry.register_domain("water", DomainDef::new(water, Terrains::Any, None)),
+        utils::WATER_DOMAIN
+    );
+    registry
+}
+
+/// A field named "tide" spreading on a second layer, "water", alone —
+/// registered into `registry` with that layer.
+fn tide_field(registry: &mut ContentRegistry) -> FieldId {
+    assert_eq!(
+        registry.register_layer("water", LayerLevel::At(2)),
+        utils::WATER
+    );
+    registry.register_field(
+        "tide",
+        FieldDef::new(
+            Terrains::Any,
+            utils::WATER.into(),
+            FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Blind,
         ),
@@ -7710,6 +8140,7 @@ fn register_power(registry: &mut ContentRegistry) -> FieldId {
         "power",
         FieldDef::new(
             Terrains::Any,
+            utils::GROUND.into(),
             FieldDecay::Instant,
             FieldVision::Dark,
             Detection::Blind,

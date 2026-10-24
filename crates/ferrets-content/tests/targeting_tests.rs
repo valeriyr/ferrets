@@ -5,12 +5,17 @@
 mod utils;
 
 use ferrets_content::{
-    attack::AttackDef, domain::DomainId, entity_type_def::EntityTypeDef, location::Solidity,
+    attack::AttackDef,
+    domain::{DomainDef, DomainId},
+    entity_type_def::EntityTypeDef,
+    location::Solidity,
+    registry::ContentRegistry,
     targeting,
+    terrains::Terrains,
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_pathfinder::{layer_level::LayerLevel, layer_mask::LayerMask};
 
 //
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -18,6 +23,7 @@ use ferrets_pathfinder::layer_mask::LayerMask;
 
 #[test]
 fn type_without_weapon_reaches_nothing() {
+    let registry = layered_registry();
     // The fail-closed residue: `targets` is required on every armed type, so
     // `None` only ever means "no weapon", and no weapon reaches nothing.
     let bystander = walker("peasant", utils::GROUND_DOMAIN);
@@ -27,7 +33,7 @@ fn type_without_weapon_reaches_nothing() {
         flier(),
     ] {
         assert!(
-            !targeting::reaches(targets_of(&bystander), &victim),
+            !targeting::reaches(&registry, targets_of(&bystander), &victim),
             "a type with no weapon reached '{}'",
             victim.name
         );
@@ -35,16 +41,20 @@ fn type_without_weapon_reaches_nothing() {
 }
 
 #[test]
-fn undeclared_victim_is_answerable_where_it_occupies() {
-    assert_eq!(targeting::targetable(&flier()), LayerMask::from(utils::AIR));
+fn undeclared_victim_is_answerable_where_it_stands() {
+    let registry = layered_registry();
     assert_eq!(
-        targeting::targetable(&walker("grunt", utils::GROUND_DOMAIN)),
+        targeting::targetable(&registry, &flier()),
+        LayerMask::from(utils::AIR)
+    );
+    assert_eq!(
+        targeting::targetable(&registry, &walker("grunt", utils::GROUND_DOMAIN)),
         LayerMask::from(utils::GROUND)
     );
     assert_eq!(
-        targeting::targetable(&keep()),
-        utils::WATER | utils::AIR,
-        "a body occupying more than its domain's layer is answerable on all of them"
+        targeting::targetable(&registry, &keep()),
+        LayerMask::from(utils::WATER),
+        "a body occupying more than its domain's layer is answerable only where it stands"
     );
 }
 
@@ -54,6 +64,7 @@ fn undeclared_victim_is_answerable_where_it_occupies() {
 
 #[test]
 fn narrowed_weapon_reaches_only_named_layers() {
+    let registry = layered_registry();
     let melee = attacker(
         "grunt",
         utils::GROUND_DOMAIN,
@@ -61,31 +72,38 @@ fn narrowed_weapon_reaches_only_named_layers() {
     );
 
     assert!(targeting::reaches(
+        &registry,
         targets_of(&melee),
         &walker("footman", utils::GROUND_DOMAIN)
     ));
     assert!(targeting::reaches(
+        &registry,
         targets_of(&melee),
         &walker("ship", utils::WATER_DOMAIN)
     ));
     assert!(
-        !targeting::reaches(targets_of(&melee), &flier()),
+        !targeting::reaches(&registry, targets_of(&melee), &flier()),
         "a ground-and-water weapon must not reach the air"
     );
 }
 
 #[test]
 fn weapon_excluding_layer_still_reaches_multi_layer_victim() {
-    // A tall keep holding water and air at once is answerable by anything that
-    // reaches either, which is why the match is an intersection and not a
-    // containment: a ground-and-water weapon still gets to shoot it.
+    let registry = layered_registry();
+    // A tall keep declared answerable on water and air at once is answerable by
+    // anything that reaches either, which is why the match is an intersection
+    // and not a containment: a ground-and-water weapon still gets to shoot it.
     let melee = attacker(
         "grunt",
         utils::GROUND_DOMAIN,
         utils::weapon(utils::GROUND | utils::WATER),
     );
 
-    assert!(targeting::reaches(targets_of(&melee), &keep()));
+    assert!(targeting::reaches(
+        &registry,
+        targets_of(&melee),
+        &keep().with_targetable(utils::WATER | utils::AIR)
+    ));
 }
 
 //
@@ -93,7 +111,8 @@ fn weapon_excluding_layer_still_reaches_multi_layer_victim() {
 //
 
 #[test]
-fn declared_targetability_overrides_occupied_layers() {
+fn declared_targetability_overrides_standing_layer() {
+    let registry = layered_registry();
     // The tower stands on the ground and blocks only the ground, but answers to
     // anti-air as well — the case what it occupies cannot express.
     let tower = utils::standing("watch_tower", utils::GROUND_DOMAIN)
@@ -101,19 +120,23 @@ fn declared_targetability_overrides_occupied_layers() {
     let anti_air_only = attacker("interceptor", utils::AIR_DOMAIN, utils::weapon(utils::AIR));
     let melee = attacker("grunt", utils::GROUND_DOMAIN, utils::weapon(utils::GROUND));
 
-    assert_eq!(targeting::targetable(&tower), utils::GROUND | utils::AIR);
+    assert_eq!(
+        targeting::targetable(&registry, &tower),
+        utils::GROUND | utils::AIR
+    );
     assert!(
-        targeting::reaches(targets_of(&anti_air_only), &tower),
+        targeting::reaches(&registry, targets_of(&anti_air_only), &tower),
         "an air-only weapon must reach a tower that declares itself an air target"
     );
     assert!(
-        targeting::reaches(targets_of(&melee), &tower),
+        targeting::reaches(&registry, targets_of(&melee), &tower),
         "declaring an extra layer must not cost the tower its ground answerability"
     );
 }
 
 #[test]
 fn declared_targetability_can_exclude_own_ground() {
+    let registry = layered_registry();
     // The declaration is an override, not a union: a thing standing on the
     // ground that names only the air is out of every ground weapon's reach,
     // and only anti-air answers it.
@@ -121,19 +144,38 @@ fn declared_targetability_can_exclude_own_ground() {
     let melee = attacker("grunt", utils::GROUND_DOMAIN, utils::weapon(utils::GROUND));
     let anti_air = attacker("interceptor", utils::AIR_DOMAIN, utils::weapon(utils::AIR));
 
-    assert_eq!(targeting::targetable(&totem), LayerMask::from(utils::AIR));
+    assert_eq!(
+        targeting::targetable(&registry, &totem),
+        LayerMask::from(utils::AIR)
+    );
     assert!(
-        !targeting::reaches(targets_of(&melee), &totem),
+        !targeting::reaches(&registry, targets_of(&melee), &totem),
         "a ground weapon reached a victim that declared itself away from the ground"
     );
-    assert!(targeting::reaches(targets_of(&anti_air), &totem));
+    assert!(targeting::reaches(&registry, targets_of(&anti_air), &totem));
+}
+
+#[test]
+fn air_only_weapon_never_reaches_body_only_towering_into_air() {
+    // The keep occupies the air over its water, blocking fliers there, but
+    // stands on the water: occupying a layer is not being answerable on it.
+    let registry = layered_registry();
+    let anti_air_only = attacker("interceptor", utils::AIR_DOMAIN, utils::weapon(utils::AIR));
+
+    assert!(!targeting::reaches(
+        &registry,
+        targets_of(&anti_air_only),
+        &keep()
+    ));
 }
 
 #[test]
 fn air_only_weapon_cannot_reach_plain_ground() {
+    let registry = layered_registry();
     let anti_air_only = attacker("interceptor", utils::AIR_DOMAIN, utils::weapon(utils::AIR));
 
     assert!(!targeting::reaches(
+        &registry,
         targets_of(&anti_air_only),
         &walker("grunt", utils::GROUND_DOMAIN)
     ));
@@ -192,6 +234,24 @@ fn keep() -> EntityTypeDef {
         Solidity::Solid,
         utils::WATER | utils::AIR,
     )
+}
+
+/// A registry with the ground, water and air layers and a domain in each, as
+/// the test helpers' layer and domain handles name them.
+fn layered_registry() -> ContentRegistry {
+    let mut registry = utils::ground_registry();
+    let water = registry.register_layer("water", LayerLevel::At(2));
+    let air = registry.register_layer("air", LayerLevel::At(3));
+    assert_eq!((water, air), (utils::WATER, utils::AIR));
+    assert_eq!(
+        registry.register_domain("water", DomainDef::new(water, Terrains::Any, None)),
+        utils::WATER_DOMAIN
+    );
+    assert_eq!(
+        registry.register_domain("air", DomainDef::new(air, Terrains::Any, None)),
+        utils::AIR_DOMAIN
+    );
+    registry
 }
 
 /// What the weapon `def` points reaches, or nothing at all where it points none.

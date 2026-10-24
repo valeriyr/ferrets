@@ -13,6 +13,7 @@ use crate::{
     },
     entity_def,
     map::Map,
+    occupancy::OccupancyClass,
     order::Order,
     rally,
     spawn::{self, FieldReach},
@@ -103,7 +104,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         .as_ref()
         .is_some_and(|t| t.can_train(&type_name));
 
-    let (train_time, unit_location_def) = {
+    let (train_time, unit_location_def, unit_class) = {
         let registry = world.resource::<ContentRegistry>();
         let type_def = if allowed {
             registry.entity(&type_name)
@@ -127,6 +128,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             type_def
                 .location
                 .expect("validated content defines a location"),
+            OccupancyClass::of(type_def),
         )
     };
 
@@ -143,6 +145,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             size,
             entity_def::mover_shape(content_registry, &unit_location_def),
             unit_location_def.solidity(),
+            unit_class,
         );
 
         // No free cell around the trainer — hold the finished unit and retry.

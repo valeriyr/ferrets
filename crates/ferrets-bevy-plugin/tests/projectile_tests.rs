@@ -2,6 +2,7 @@
 //! band, and it outlives the unit that fired it.
 
 use bevy::prelude::*;
+use ferrets_bevy_plugin::map;
 use ferrets_content::{
     attack::{AttackDef, Delivery, Slain, Weapon},
     entity_type_def::EntityTypeDef,
@@ -11,12 +12,15 @@ use ferrets_content::{
     registry::ContentRegistry,
     splash::{SplashDef, SplashShape},
 };
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
+use ferrets_pathfinder::nav_grid::NavGrid;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::location::LocationComponent,
     impacts::PendingImpacts,
+    map::Map,
+    movement_model::MovementModel,
     order::AttackTarget,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
@@ -109,6 +113,32 @@ fn blast_spares_body_targetable_off_its_layers() {
     // The shell landed: the target took the full 20.
     assert_eq!(utils::health_as_u32(&app, target), 80);
     assert_eq!(utils::health_as_u32(&app, skimmer), 100);
+}
+
+#[test]
+fn air_blast_spares_ground_body_towering_into_air() {
+    let mut app = app();
+    let (_, flak) = utils::create_entity(app.world_mut(), "flak", utils::pos(5, 20), Some(0))
+        .expect("flak spawns");
+    let (target, target_id) =
+        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+            .expect("target spawns");
+    // One cell either side of the impact, both bursting in the air's half
+    // band: the skimmer declares itself attacked in the air, the pylon only
+    // towers into it and is attacked on the ground it stands on.
+    let (skimmer, _) = utils::create_entity(app.world_mut(), "skimmer", utils::pos(8, 20), Some(1))
+        .expect("skimmer spawns");
+    let (pylon, _) = utils::create_entity(app.world_mut(), "pylon", utils::pos(10, 20), Some(1))
+        .expect("pylon spawns");
+
+    utils::attack(&mut app, flak, target_id);
+    utils::run_ticks(&mut app, 14);
+
+    // The shell hits the target for the full 20 and bursts in the air for
+    // 20 × 0.5 = 10 one cell out: 100 − 20 = 80, 100 − 10 = 90, 100.
+    assert_eq!(utils::health_as_u32(&app, target), 80);
+    assert_eq!(utils::health_as_u32(&app, skimmer), 90);
+    assert_eq!(utils::health_as_u32(&app, pylon), 100);
 }
 
 #[test]
@@ -366,13 +396,30 @@ fn shot_lands_after_its_attacker_dies() {
 //
 
 /// Two players and a roster with a `gunner` firing slow bursting shells, a
-/// stationary 100-hp `dummy` to catch them, and a `skimmer` on the ground that
-/// is attacked only in the air.
+/// `flak` gun whose shell bursts in the air, a stationary 100-hp `dummy` to
+/// catch them, a `skimmer` on the ground that is attacked only in the air, and
+/// a `pylon` on the ground towering into the air.
 fn app() -> App {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
+    // The air over the ground, which the flak's burst and the pylon reach.
+    {
+        let mut grid = NavGrid::new(32, 32, |_| utils::LAND);
+        grid.add_flat_layer(utils::GROUND, 1);
+        grid.add_flat_layer(utils::AIR, 2);
+        map::install_map(
+            app.world_mut(),
+            Map::new(
+                "test",
+                Projection::Isometric,
+                MovementModel::Cell,
+                grid,
+                vec![],
+            ),
+        );
+    }
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_tag("armored");
@@ -476,6 +523,46 @@ fn app() -> App {
         );
         // On the ground, attacked only in the air.
         utils::register_air(&mut registry);
+        registry.register(
+            EntityTypeDef::new("flak")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_sight_range(12)
+                .with_pool(Pool::health(40))
+                .with_attack(
+                    AttackDef::new(Weapon::new(
+                        utils::GROUND,
+                        Delivery::Projectile(shell),
+                        Some(SplashDef::new(
+                            SplashShape::Circular,
+                            vec![(1, FixedU64::from_num(0.5))],
+                            utils::AIR,
+                            false,
+                        )),
+                        Slain::Remains,
+                    )),
+                    20,
+                    6,
+                    6,
+                    4,
+                    2,
+                ),
+        );
+        // On the ground and towering into the air, declaring nothing.
+        registry.register(
+            EntityTypeDef::new("pylon")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND | utils::AIR,
+                )
+                .with_pool(Pool::health(100)),
+        );
         registry.register(
             EntityTypeDef::new("skimmer")
                 .with_location(

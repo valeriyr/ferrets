@@ -99,8 +99,8 @@ struct ShapeHierarchy {
 /// fixed-size square clusters, the transitions crossing their borders, and
 /// flood-filled connectivity regions over the cells.
 ///
-/// The hierarchy sees the grid's **static** plane only — terrain and standing
-/// footprints, never unit claims. It is derived state: writers of static
+/// The hierarchy sees the grid's **static** plane only — terrain, relief and
+/// standing footprints, never unit claims. It is derived state: writers of static
 /// occupancy report their cells through [`mark_dirty`](Self::mark_dirty), and
 /// one [`refresh`](Self::refresh) call at a fixed point of the game tick
 /// folds the changes in. Queries never mutate the hierarchy's observable
@@ -452,8 +452,8 @@ impl NavHierarchy {
             .find(|abstraction| abstraction.shape == shape)
             .unwrap_or_else(|| {
                 panic!(
-                    "no hierarchy built for shape on terrains {} and layers {} at {}x{}",
-                    shape.terrains, shape.layers, shape.size.width, shape.size.height
+                    "no hierarchy built for shape on terrains {} and layers {} at {}x{}, cliff crossing {:?}",
+                    shape.terrains, shape.layers, shape.size.width, shape.size.height, shape.cliff_crossing
                 )
             })
     }
@@ -538,7 +538,10 @@ fn border_transitions(
     };
 
     for pair in pairs {
-        if grid.fits_statically(pair.a, shape) && grid.fits_statically(pair.b, shape) {
+        if grid.fits_statically(pair.a, shape)
+            && grid.fits_statically(pair.b, shape)
+            && grid.can_step(pair.a, pair.b, shape)
+        {
             run.push(pair);
         } else {
             emit_entrance(&run, &mut transitions);

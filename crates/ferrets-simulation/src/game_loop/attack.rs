@@ -28,7 +28,6 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     impacts::FiredFrom,
-    map::Map,
     order::{AttackTarget, Order},
     visibility::{self, Senses},
 };
@@ -154,7 +153,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             // leaves this weapon's layers, and chasing it would swing forever at
             // something no hit can land on.
             let target_def = entity_def::of(world, target);
-            if !targeting::reaches(entity_def::weapon_targets(world, entity), target_def) {
+            if !targeting::reaches(
+                world.resource::<ContentRegistry>(),
+                entity_def::weapon_targets(world, entity),
+                target_def,
+            ) {
                 return Processing::state(OrderState::Finished);
             }
             // Sight is re-judged every tick too: a target that walks into fog
@@ -197,7 +200,9 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // must not read as leashed to the leash and out of range to the chase,
         // or the one extra walk breaks a stand-ground stance's never-move
         // promise.
-        if !world.resource::<Map>().projection().in_range_for_rects(
+        if !entity_def::reaches(
+            world,
+            entity,
             body::standing_rect(leash.anchor, size),
             reached,
             leash.radius,
@@ -211,9 +216,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     // own initiative, so it tracks what it might yet shoot and lets go of the rest
     // — and never consults the chase, whose patience is about walks that get
     // nowhere and would end a fight a turret is right to be holding.
-    if !entity_def::of(world, entity).can_move() && !within(world, position, size, reached, range) {
+    if !entity_def::of(world, entity).can_move()
+        && !within(world, entity, position, size, reached, range)
+    {
         let notice = entity_def::notice_range_serving(world, entity, target);
-        if !within(world, position, size, reached, notice) {
+        if !within(world, entity, position, size, reached, notice) {
             return Processing::state(OrderState::Finished);
         }
         // The swing resets while out of range, as it does for a walker, and the
@@ -241,9 +248,8 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // A bare point is reached at the cell it lies in.
         None => chase::advance_to_point(
             &mut attack_component.last_chase,
-            world.resource::<Map>().projection(),
-            position,
-            size,
+            world,
+            entity,
             target_position,
             target_size,
             range,
@@ -275,6 +281,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     // it holds while the guns it arrived for keep working from [`super::turret`].
     let body_serves = match target {
         Some(target) => targeting::reaches(
+            world.resource::<ContentRegistry>(),
             entity_def::body_weapon_targets(world, entity),
             entity_def::of(world, target),
         ),
@@ -288,7 +295,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             registry.weapon_aims_at_cells(weapon)
         }
     };
-    if !body_serves || !within(world, position, size, reached, stats.range) {
+    if !body_serves || !within(world, entity, position, size, reached, stats.range) {
         // Out of its own reach the swing waits at its start, as every weapon's
         // does, and the body still comes round on what it is waiting for.
         attack_component.phase = 0;
@@ -331,17 +338,21 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     Processing::state(OrderState::InProcessing)
 }
 
-/// Whether `range` reaches from every cell the attacker at `position` of
-/// `size` stands on to the cells `reached`, judged exactly as the chase judges
-/// arrival, so a wide attacker reaches from its nearest edge.
+/// Whether `range` reaches from every cell the attacker `entity` at
+/// `position` of `size` stands on to the cells `reached`, judged exactly as the
+/// chase judges arrival, so a wide attacker reaches from its nearest edge and
+/// a touch only across an edge it could step.
 pub(super) fn within(
     world: &World,
+    entity: Entity,
     position: FixedUVec2,
     size: CellSize,
     reached: CellRect,
     range: u32,
 ) -> bool {
-    world.resource::<Map>().projection().in_range_for_rects(
+    entity_def::reaches(
+        world,
+        entity,
         body::standing_rect(position, size),
         reached,
         range,
@@ -459,6 +470,7 @@ pub(super) fn swing(
 /// Whether `attacker`'s weapon can reach the layers `target` is answerable on.
 fn reaches(world: &World, attacker: Entity, target: Entity) -> bool {
     targeting::reaches(
+        world.resource::<ContentRegistry>(),
         world
             .resource::<ContentRegistry>()
             .targets_of(entity_def::of(world, attacker)),

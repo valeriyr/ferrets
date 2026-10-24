@@ -16,6 +16,7 @@ use ferrets_simulation::{
     },
     input::{InputFrames, PlayerFrame},
     map::Map,
+    map_data::MapData,
     movement_model::MovementModel,
     session::{
         GameSession, ai_hosting::AiHosting, authority::Authority, drop_policy::DropPolicy,
@@ -108,49 +109,31 @@ pub fn scenario_app(model: MovementModel) -> App {
 }
 
 /// A headless game on the **demo skirmish map** — the 96×96 field with its
-/// central lake and the rivers that split it — and no placements at all, so a
-/// test sees only the terrain and whatever it spawns itself.
+/// sea, lake, rivers, plateaus and mesa — and no placements at all, so a test
+/// sees only the terrain and whatever it spawns itself.
 ///
 /// Two seats are occupied and on no team, so slots `0` and `1` are hostile to
 /// each other and a test can stage a fight by choosing owners. The built-in
-/// mission's map is 32×32 and all land, so anything about water, rivers, fords
-/// or two sides has to be tested here instead.
+/// mission's map is 32×32 and all land, so anything about water, rivers, fords,
+/// levels or two sides has to be tested here instead.
 pub fn demo_map_app(model: MovementModel) -> App {
     demo_map_app_as(LocalRole::Player(0), model)
 }
 
 /// [`demo_map_app`] on a node playing `role`.
 pub fn demo_map_app_as(role: LocalRole, model: MovementModel) -> App {
-    let slots = vec![
-        PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
-        PlayerSlot::occupied(1, PlayerType::Human, Some("orc"), None),
-    ];
     let mut data = ferrets_demo::map::data();
     data.set_movement_model(model);
-    let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
-    let game_map = Map::from_data(&data, &registry);
+    two_seat_app(role, data)
+}
 
-    let mut app = App::new();
-    app.add_plugins(SimulationPlugin::new(
-        GameSession::configured(
-            role,
-            slots,
-            ferrets_demo::map::NAME,
-            Authority::Host {
-                ai_hosting: AiHosting::Replicated,
-            },
-            DropPolicy::Automatic,
-            FinishPolicy::Endless,
-            ruleset::demo(),
-        ),
-        game_map,
-    ));
-    {
-        let world = app.world_mut();
-        *world.resource_mut::<ContentRegistry>() = registry;
-        ferrets_bevy_plugin::start_game(world);
-    }
-    app
+/// A headless game like [`demo_map_app_as`] on a 96×96 field of land all at
+/// one level, for tests about anything but the terrain.
+pub fn land_app_as(role: LocalRole, model: MovementModel) -> App {
+    let mut data = MapData::new("field", Projection::Isometric, 96, 96, "land");
+    data.add_relief(ferrets_demo::map::GROUND, 1);
+    data.set_movement_model(model);
+    two_seat_app(role, data)
 }
 
 /// The cell a position falls in, as a `(x, y)` pair for terse assertions.
@@ -286,4 +269,37 @@ pub fn point_minimap(app: &mut App, diamond: bool) {
 pub fn fixed(text: &str) -> FixedU64 {
     text.parse()
         .unwrap_or_else(|_| panic!("'{text}' is a value"))
+}
+
+/// A started game on `data` with two hostile human seats, the local node
+/// playing `role`.
+fn two_seat_app(role: LocalRole, data: MapData) -> App {
+    let slots = vec![
+        PlayerSlot::occupied(0, PlayerType::Human, Some("human"), None),
+        PlayerSlot::occupied(1, PlayerType::Human, Some("orc"), None),
+    ];
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content");
+    let game_map = Map::from_data(&data, &registry);
+
+    let mut app = App::new();
+    app.add_plugins(SimulationPlugin::new(
+        GameSession::configured(
+            role,
+            slots,
+            data.name(),
+            Authority::Host {
+                ai_hosting: AiHosting::Replicated,
+            },
+            DropPolicy::Automatic,
+            FinishPolicy::Endless,
+            ruleset::demo(),
+        ),
+        game_map,
+    ));
+    {
+        let world = app.world_mut();
+        *world.resource_mut::<ContentRegistry>() = registry;
+        ferrets_bevy_plugin::start_game(world);
+    }
+    app
 }

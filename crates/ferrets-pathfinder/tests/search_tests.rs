@@ -8,7 +8,9 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSi
 use ferrets_pathfinder::{
     mover_shape::MoverShape,
     nav_grid::NavGrid,
+    relief::Relief,
     search::{self, Expansion, Footing},
+    slope::{Direction, Slope},
 };
 
 //
@@ -166,9 +168,104 @@ fn layer_mask_filters_obstacles() {
     assert_eq!(ground_result, Some(utils::nav(2, 1)));
 }
 
+#[test]
+fn through_passable_never_expands_across_cliff_its_shape_cannot_cross() {
+    // On the hill grid, with the low-ground cells about (3, 0) held — (2, 0),
+    // (2, 1) and the ramp's (3, 1) — the free cells next to it are the
+    // plateau's (4, 0) and (4, 1), up a cliff. A walker reaches neither; a
+    // cliff walker steps up to the first in direction order.
+    let mut grid = utils::hill_grid();
+    for cell in [(3, 0), (2, 0), (2, 1), (3, 1)] {
+        grid.set_occupied_by(utils::GROUND, utils::nav(cell.0, cell.1), true);
+    }
+    let nearest = |shape| {
+        search::find_nearest_free_pos(&grid, shape, utils::nav(3, 0), Expansion::ThroughPassable)
+    };
+
+    assert_eq!(nearest(utils::walker()), None);
+    assert_eq!(nearest(utils::strider()), Some(utils::nav(4, 0)));
+}
+
 //
 // ─── find_placement_near ──────────────────────────────────────────────────────
 //
+
+#[test]
+fn shared_placement_keeps_off_cliff_its_shape_cannot_stand_on() {
+    // A row of four: low ground at (0, 0), a cliff band over (1, 0) and
+    // (2, 0), the plateau at (3, 0). Around (1, 0), a walker sharing its
+    // ground passes over the cliff cells and stands at (0, 0); a cliff walker
+    // takes (1, 0) itself.
+    let mut grid = NavGrid::new(4, 1, |_| utils::LAND);
+    grid.add_ranged_layer(utils::GROUND, 1, 2, |cell| Relief {
+        level: if cell.x >= 2 { 2 } else { 1 },
+        slope: match cell.x {
+            1 | 2 => Some(Slope::Cliff(Direction::East)),
+            _ => None,
+        },
+    });
+    let found = |shape| {
+        search::find_placement_near(
+            &grid,
+            shape,
+            CellRect::new(utils::nav(1, 0), CellSize::ONE),
+            3,
+            Footing::Shared,
+            |_| true,
+        )
+    };
+
+    assert_eq!(found(utils::walker()), Some(utils::nav(0, 0)));
+    assert_eq!(found(utils::strider()), Some(utils::nav(1, 0)));
+}
+
+#[test]
+fn placement_skips_anchors_accept_refuses() {
+    let grid = utils::grid(8, 8);
+    let around = CellRect::new(utils::nav(3, 3), CellSize::ONE);
+    let refuses_middle = |cell: CellPos| cell != utils::nav(3, 3);
+
+    for footing in [Footing::Free, Footing::Shared] {
+        // The middle is refused; the first ring's cardinals tie and go by
+        // row, (3, 2) first, then (2, 3) on row 3.
+        assert_eq!(
+            search::find_placement_near(
+                &grid,
+                utils::on_ground(),
+                around,
+                8,
+                footing,
+                refuses_middle
+            ),
+            Some(utils::nav(3, 2))
+        );
+        assert_eq!(
+            search::find_placements_near(
+                &grid,
+                utils::on_ground(),
+                around,
+                8,
+                2,
+                footing,
+                refuses_middle
+            ),
+            vec![utils::nav(3, 2), utils::nav(2, 3)]
+        );
+        // Leaning toward (5, 3), the first ring's (4, 3) lies nearest it.
+        assert_eq!(
+            search::find_placement_near_toward(
+                &grid,
+                utils::on_ground(),
+                around,
+                8,
+                footing,
+                CellRect::new(utils::nav(5, 3), CellSize::ONE),
+                refuses_middle
+            ),
+            Some(utils::nav(4, 3))
+        );
+    }
+}
 
 #[test]
 fn placement_returns_free_anchor_cell_first() {
@@ -184,6 +281,7 @@ fn placement_returns_free_anchor_cell_first() {
             CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
             8,
             footing,
+            |_| true,
         );
 
         assert_eq!(
@@ -213,6 +311,7 @@ fn free_placement_skips_occupied_anchor_where_shared_takes_it() {
             CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
             8,
             footing,
+            |_| true,
         )
     };
 
@@ -238,10 +337,17 @@ fn placement_requires_whole_spawn_footprint() {
     let asked = |footing| {
         search::find_placement_near(
             &grid,
-            MoverShape::new(utils::land(), utils::GROUND, CellSize::new(2, 2)),
+            MoverShape::new(
+                utils::land(),
+                utils::GROUND,
+                utils::GROUND,
+                CellSize::new(2, 2),
+                None,
+            ),
             CellRect::new(utils::nav(3, 3), CellSize::ONE),
             8,
             footing,
+            |_| true,
         )
     };
 
@@ -278,6 +384,7 @@ fn free_placement_gives_up_beyond_max_radius_where_shared_does_not() {
             CellRect::new(utils::nav(3, 3), CellSize::new(2, 2)),
             1,
             footing,
+            |_| true,
         )
     };
     assert_eq!(
@@ -317,6 +424,7 @@ fn placement_toward_takes_ring_cell_nearest_toward() {
         8,
         Footing::Free,
         CellRect::new(utils::nav(5, 3), CellSize::ONE),
+        |_| true,
     );
 
     assert_eq!(found, Some(utils::nav(5, 3)));
@@ -341,6 +449,7 @@ fn placement_toward_stays_in_nearest_ring() {
         8,
         Footing::Free,
         CellRect::new(utils::nav(9, 3), CellSize::ONE),
+        |_| true,
     );
 
     assert_eq!(found, Some(utils::nav(5, 3)));
@@ -428,6 +537,7 @@ fn placements_come_out_in_scan_order() {
             8,
             3,
             footing,
+            |_| true,
         );
 
         assert_eq!(found, scan, "on empty ground both footings answer alike");
@@ -445,11 +555,18 @@ fn placements_never_overlap_each_other() {
     for footing in [Footing::Free, Footing::Shared] {
         let found = search::find_placements_near(
             &grid,
-            MoverShape::new(utils::land(), utils::GROUND, CellSize::new(2, 2)),
+            MoverShape::new(
+                utils::land(),
+                utils::GROUND,
+                utils::GROUND,
+                CellSize::new(2, 2),
+                None,
+            ),
             CellRect::new(utils::nav(3, 3), CellSize::ONE),
             8,
             2,
             footing,
+            |_| true,
         );
 
         assert_eq!(
@@ -482,6 +599,7 @@ fn placements_return_fewer_than_asked_when_room_runs_out() {
             8,
             4,
             footing,
+            |_| true,
         )
     };
 
@@ -527,6 +645,7 @@ fn free_placements_ring_building_while_shared_lie_under_it() {
             8,
             4,
             footing,
+            |_| true,
         )
     };
 
@@ -566,6 +685,7 @@ fn placements_stand_about_middle_rather_than_first_corner() {
         8,
         2,
         Footing::Shared,
+        |_| true,
     );
 
     assert_eq!(found, vec![utils::nav(5, 5), utils::nav(5, 4)]);
@@ -586,6 +706,7 @@ fn placement_middle_of_even_footprint_lies_between_its_cells() {
         8,
         4,
         Footing::Shared,
+        |_| true,
     );
 
     assert_eq!(
@@ -611,6 +732,7 @@ fn placements_of_none_find_nothing() {
         8,
         0,
         Footing::Free,
+        |_| true,
     );
 
     assert!(

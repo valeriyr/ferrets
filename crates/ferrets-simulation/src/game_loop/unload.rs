@@ -20,7 +20,6 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
-    map::Map,
     order::Order,
     rally,
     simulation_id::SimulationId,
@@ -112,13 +111,10 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     if let Some(at) = unload.at
         && entity_def::of(world, entity).can_move()
     {
-        let projection = world.resource::<Map>().projection();
-        let (chaser_position, chaser_size) = entity_def::footprint(world, entity);
         match chase::advance_to_point(
             &mut unload.last_chase,
-            projection,
-            chaser_position,
-            chaser_size,
+            world,
+            entity,
             at,
             CellSize::ONE,
             entity_def::effective_stat_u32(world, entity, EntityStatId::UNLOAD_RANGE),

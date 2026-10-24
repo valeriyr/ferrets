@@ -19,7 +19,7 @@ pub const WATER: TerrainId = TerrainId::new(2);
 
 /// A one-cell body over land on [`GROUND`].
 pub fn ground_shape() -> MoverShape {
-    MoverShape::point(TerrainMask::from(LAND), GROUND)
+    MoverShape::point(TerrainMask::from(LAND), GROUND, None)
 }
 
 /// A cell coordinate written as decimal digits. Fixed-point throughout: the

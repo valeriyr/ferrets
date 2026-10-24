@@ -1,7 +1,9 @@
-//! The domain vocabulary: the one layer a body is in and the terrains it may
-//! be over there.
+//! The domain vocabulary: the one layer a body is in, the terrains it may be
+//! over there and how it crosses a cliff.
 
-use ferrets_pathfinder::{layer_id::LayerId, terrain_mask::TerrainMask};
+use ferrets_pathfinder::{
+    cliff_crossing::CliffCrossing, layer_id::LayerId, terrain_mask::TerrainMask,
+};
 
 use crate::terrains::Terrains;
 
@@ -34,13 +36,15 @@ pub struct DomainDef {
     layer: LayerId,
     /// The terrains its bodies may be over.
     terrains: Terrains,
+    /// How its bodies cross a cliff, or `None` on a layer at one level.
+    cliff_crossing: Option<CliffCrossing>,
 }
 
 impl DomainDef {
     /// Creates a new `DomainDef` with the given data.
     ///
     /// Panics if the domain is over no terrain at all.
-    pub fn new(layer: LayerId, terrains: Terrains) -> Self {
+    pub fn new(layer: LayerId, terrains: Terrains, cliff_crossing: Option<CliffCrossing>) -> Self {
         match terrains {
             Terrains::Only(terrains) => assert!(
                 terrains != TerrainMask::EMPTY,
@@ -48,7 +52,11 @@ impl DomainDef {
             ),
             Terrains::Any => {}
         }
-        Self { layer, terrains }
+        Self {
+            layer,
+            terrains,
+            cliff_crossing,
+        }
     }
 
     /// The layer its bodies are in.
@@ -61,5 +69,11 @@ impl DomainDef {
     #[inline]
     pub fn terrains(&self) -> Terrains {
         self.terrains
+    }
+
+    /// How its bodies cross a cliff, or `None` on a layer at one level.
+    #[inline]
+    pub fn cliff_crossing(&self) -> Option<CliffCrossing> {
+        self.cliff_crossing
     }
 }

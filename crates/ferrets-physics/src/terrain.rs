@@ -8,22 +8,26 @@ use ferrets_pathfinder::{mover_shape::MoverShape, nav_grid::NavGrid};
 use crate::body;
 
 /// Whether a body of `shape` anchored at `position` overlaps only cells
-/// statically clear for it.
+/// statically clear for it and joined, for its cliff crossing, to the cell
+/// under its center — the cell whose level is the body's.
 pub fn body_fits(
     grid: &NavGrid,
     shape: MoverShape,
     position: FixedUVec2,
     radius: FixedU64,
 ) -> bool {
+    let center = center_cell(position, shape);
     body::overlapped_cells(position, shape.size, radius)
         .into_iter()
-        .all(|cell| grid.cell_fits_statically(cell, shape.terrains, shape.layers))
+        .all(|cell| stands_on(grid, shape, center, cell))
 }
 
-/// Commits a desired position against the static plane: the desired point
-/// when the body fits there, else the desired point with one axis dropped —
-/// sliding along whatever blocked it — else the position unmoved. A caller
-/// seeing no movement out of a wanted one knows the body is walled off.
+/// Commits a desired position against the static plane and the levels the
+/// body may cross: the desired point when the body fits there and the cell
+/// under its center is joined to the one it leaves, else the desired point
+/// with one axis dropped — sliding along whatever blocked it — else the
+/// position unmoved. A caller seeing no movement out of a wanted one knows the
+/// body is walled off.
 ///
 /// The kept axis is the step's dominant one: a walk skimming a wall wants to
 /// keep its along-wall progress, not be diverted down its own faint sideways
@@ -42,17 +46,17 @@ pub fn slide_toward(
     desired: FixedUVec2,
     radius: FixedU64,
 ) -> FixedUVec2 {
+    let from = center_cell(position, shape);
     let clipped: Vec<CellPos> = body::overlapped_cells(position, shape.size, radius)
         .into_iter()
-        .filter(|&cell| !grid.cell_fits_statically(cell, shape.terrains, shape.layers))
+        .filter(|&cell| !stands_on(grid, shape, from, cell))
         .collect();
     let fits = |candidate: FixedUVec2| {
-        body::overlapped_cells(candidate, shape.size, radius)
-            .into_iter()
-            .all(|cell| {
-                grid.cell_fits_statically(cell, shape.terrains, shape.layers)
-                    || clipped.contains(&cell)
-            })
+        let center = center_cell(candidate, shape);
+        grid.joins(from, center, shape)
+            && body::overlapped_cells(candidate, shape.size, radius)
+                .into_iter()
+                .all(|cell| stands_on(grid, shape, center, cell) || clipped.contains(&cell))
     };
 
     let along_x = FixedUVec2::new(desired.x, position.y);
@@ -79,4 +83,16 @@ pub fn displaced(position: FixedUVec2, push_x: FixedI64, push_y: FixedI64) -> Fi
         }
     };
     FixedUVec2::new(apply(position.x, push_x), apply(position.y, push_y))
+}
+
+/// The cell under the center of a body of `shape` anchored at `position`.
+fn center_cell(position: FixedUVec2, shape: MoverShape) -> CellPos {
+    CellPos::from(body::center(position, shape.size))
+}
+
+/// Whether a body of `shape` centered over `center` may overlap `cell`: the
+/// cell is statically clear for it and joined to `center` for its cliff
+/// crossing.
+fn stands_on(grid: &NavGrid, shape: MoverShape, center: CellPos, cell: CellPos) -> bool {
+    grid.cell_fits_statically(cell, shape) && grid.joins(center, cell, shape)
 }

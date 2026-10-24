@@ -54,11 +54,11 @@ fn worker_harvests_wood_on_demo_map() {
         setup::spawn_demo_scene(world);
     }
 
-    // A worker beside player 0's grove at (8..10, 16..17).
+    // A worker beside player 0's grove at (8..10, 20..21).
     let (worker, worker_id) = utils::create_entity(
         app.world_mut(),
         "peasant",
-        FixedUVec2::new(FixedU64::from_num(7), FixedU64::from_num(16)),
+        FixedUVec2::new(FixedU64::from_num(7), FixedU64::from_num(20)),
         Some(0),
     )
     .expect("worker spawns");
@@ -93,7 +93,7 @@ fn worker_harvests_wood_on_demo_map() {
     assert_eq!(wood, 235, "wood banked by tick 300");
     assert_eq!(
         utils::position_of(world, worker),
-        FixedUVec2::new(FixedU64::from_num(9), FixedU64::from_num(15)),
+        FixedUVec2::new(FixedU64::from_num(9), FixedU64::from_num(19)),
         "the worker rests on the lattice beside its work"
     );
 }

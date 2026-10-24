@@ -34,7 +34,6 @@ use crate::{
     entity_index::EntityIndex,
     events::{DeathCause, SpendCause},
     fields, ground,
-    map::Map,
     occupancy::OccupancyClass,
     order::Order,
     overbuild::{self, Cover},
@@ -197,14 +196,10 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
 
     let Some(building_id) = build_component.building else {
         // Walk-and-place phase.
-        let projection = world.resource::<Map>().projection();
-
-        let (chaser_position, chaser_size) = entity_def::footprint(world, entity);
         match chase::advance_to_point(
             &mut build_component.last_chase,
-            projection,
-            chaser_position,
-            chaser_size,
+            world,
+            entity,
             position,
             size,
             entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE),

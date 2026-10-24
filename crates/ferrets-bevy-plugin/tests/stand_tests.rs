@@ -204,6 +204,7 @@ fn stand_app() -> App {
             "blight",
             FieldDef::new(
                 Terrains::Only(utils::LAND.into()),
+                utils::GROUND.into(),
                 FieldDecay::Never,
                 FieldVision::Dark,
                 Detection::Blind,

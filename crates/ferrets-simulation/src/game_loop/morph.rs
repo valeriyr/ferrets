@@ -34,7 +34,7 @@ use ferrets_content::{
     pool_def::PoolId,
     registry::ContentRegistry,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
@@ -45,7 +45,7 @@ use super::{
 };
 use crate::{
     berths,
-    beside::{Beside, Lean},
+    beside::Lean,
     brood,
     components::{
         entity_info::EntityInfoComponent,
@@ -226,7 +226,8 @@ struct Start {
     /// The transition, as the entity's type declares it.
     transition: MorphTransition,
     /// The cell an attached entity steps onto before it changes, one that
-    /// takes the form it wears next; `None` for an entity already standing.
+    /// takes the form standing on it through the change; `None` for an entity
+    /// already standing.
     step_out: Option<CellPos>,
     /// The anchor and location a reserving change claims, judged from where
     /// the entity will stand; `None` for a placement that claims nothing.
@@ -280,25 +281,96 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
     }
     orders::requires_operating(world, entity)?;
 
-    // An attached entity holds no cells: before it changes it steps onto
-    // ground that takes the form it wears next, the nearest to its berth, on
-    // terrain its own form takes too, so a change that ends early leaves it
-    // standing where its own domain admits it.
-    let step_out = if entity_def::attached(world, entity) {
-        let Some(worn) = worn_next(world, &transition) else {
-            return Err(Refusal::Incapable);
-        };
-        let registry = world.resource::<ContentRegistry>();
-        let mut shape = entity_def::mover_shape(registry, &worn);
-        shape.terrains = shape.terrains & entity_def::mover_shape(registry, &from).terrains;
-        let berth = body::anchor(entity_def::position(world, entity));
-        match spawn::cell_back_beside(
+    // The interim form the change passes through, if any: where it will stand
+    // is judged like the destination, and a reserving change settles the
+    // destination from it, as the landing does.
+    let via = match transition.via_type() {
+        Some(via) => {
+            let Some((via_id, worn)) = destination(world, via) else {
+                return Err(Refusal::Incapable);
+            };
+            if !cargo_fits(world, entity, via_id) {
+                return Err(Refusal::TargetUnfit);
+            }
+            Some((via_id, worn))
+        }
+        None => None,
+    };
+    let reserved_at = |standing: FixedUVec2| match via {
+        Some((via_id, worn)) => settled(
             world,
-            entity,
-            Beside::Footprint(CellRect::new(berth, from.size())),
-            Lean::Nothing,
-            shape,
-            worn.solidity(),
+            type_id,
+            settled(world, via_id, standing, from, worn),
+            worn,
+            to,
+        ),
+        None => settled(world, type_id, standing, from, to),
+    };
+    let owner = entity_def::owner(world, entity);
+    let allowed = |worn_id: EntityTypeId, anchor: FixedUVec2| {
+        let def = world.resource::<ContentRegistry>().def(worn_id);
+        fields::allows_placement(world, owner, def, body::anchor(anchor))
+    };
+
+    // An attached entity holds no cells: before it changes it steps onto the
+    // nearest cell to its berth that takes the form standing there through the
+    // change — the interim form when there is one, its own form otherwise —
+    // and, for a change reserving its ground, the new form where it would
+    // settle; the fields each is judged by later are read here too. A
+    // broodling whose change ends early is seated again, so the form it leaves
+    // need not stand on the cell an interim form takes.
+    let step_out = if entity_def::attached(world, entity) {
+        let registry = world.resource::<ContentRegistry>();
+        let (stands, stands_class) = match via {
+            Some((via_id, worn)) => (worn, OccupancyClass::of(registry.def(via_id))),
+            None => (from, OccupancyClass::of(entity_def::of(world, entity))),
+        };
+        let reserved = match transition.placement() {
+            MorphPlacement::Reserve => Some(OccupancyClass::of(registry.def(type_id))),
+            MorphPlacement::Revalidate | MorphPlacement::Nearby => None,
+        };
+        // What stands underfoot is read once, and only where a static
+        // footprint asks it.
+        let underfoot = match (stands_class, reserved) {
+            (OccupancyClass::Static, _) | (_, Some(OccupancyClass::Static)) => {
+                ground::standing_underfoot(world, &[entity])
+            }
+            (OccupancyClass::Claim, Some(OccupancyClass::Claim) | None) => Vec::new(),
+        };
+        let berth = CellRect::new(
+            body::anchor(entity_def::position(world, entity)),
+            CellSize::ONE,
+        );
+        match world.resource::<Map>().find_placement_near_toward_where(
+            berth.origin,
+            berth.size,
+            stands.size(),
+            berth,
+            |cell| {
+                let at = FixedUVec2::from(cell);
+                let placed = LocationComponent::new(at, spawn::DEFAULT_FACING);
+                ground::can_place_clear_of(world, &placed, stands, stands_class, &[], &underfoot)
+                    && match via {
+                        Some((via_id, _)) => allowed(via_id, at),
+                        None => true,
+                    }
+                    && match reserved {
+                        Some(class) => {
+                            let anchor = reserved_at(at);
+                            let placed = LocationComponent::new(anchor, spawn::DEFAULT_FACING);
+                            allowed(type_id, anchor)
+                                && ground::can_place_clear_of(
+                                    world,
+                                    &placed,
+                                    to,
+                                    class,
+                                    &[],
+                                    &underfoot,
+                                )
+                        }
+                        None => true,
+                    }
+            },
         ) {
             Some(cell) => Some(cell),
             None => return Err(Refusal::NoRoom),
@@ -316,15 +388,7 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
         .get::<LocationComponent>()
         .filter(|_| step_out.is_none() && on_grid);
     let own_class = OccupancyClass::of(entity_def::of(world, entity));
-    let allowed = |worn_id: EntityTypeId, anchor: FixedUVec2| {
-        let def = world.resource::<ContentRegistry>().def(worn_id);
-        fields::allows_placement(
-            world,
-            entity_def::owner(world, entity),
-            def,
-            body::anchor(anchor),
-        )
-    };
+    // The body never stands in its own way, standing or stepped out.
     let takes = |worn_id: EntityTypeId, worn: LocationDef, anchor: FixedUVec2| {
         let placed = LocationComponent::new(anchor, spawn::DEFAULT_FACING);
         allowed(worn_id, anchor)
@@ -335,13 +399,13 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
                 OccupancyClass::of(world.resource::<ContentRegistry>().def(worn_id)),
                 own.and_then(|location| entity_def::grid_mark_of(location, from, own_class))
                     .as_slice(),
-                own.map(|_| entity).as_slice(),
+                &[entity],
             )
     };
 
     let reservation = match transition.placement() {
         MorphPlacement::Reserve if on_grid => {
-            let anchor = settled(world, type_id, standing, from, to);
+            let anchor = reserved_at(standing);
             if !takes(type_id, to, anchor) {
                 return Err(Refusal::NoRoom);
             }
@@ -351,27 +415,27 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
         // nothing of the ground either.
         MorphPlacement::Reserve | MorphPlacement::Revalidate | MorphPlacement::Nearby => None,
     };
-    // An interim form must seat what is aboard like the destination, and is
-    // judged by the fields where it will stand; one that holds the ground as
-    // the origin does takes the origin's own footprint without asking the
-    // grid, one that holds it differently asks.
-    if let Some(via) = transition.via_type() {
-        let Some((via_id, worn)) = destination(world, via) else {
-            return Err(Refusal::Incapable);
+    // An interim form is judged by the fields where it will stand; one that
+    // holds the ground exactly as the origin does takes the origin's own
+    // footprint without asking the grid, one that holds it otherwise asks.
+    if let Some((via_id, worn)) = via
+        && on_grid
+    {
+        let anchor = settled(world, via_id, standing, from, worn);
+        let registry = world.resource::<ContentRegistry>();
+        let stands = if holds_ground_as(
+            registry,
+            from,
+            own_class,
+            worn,
+            OccupancyClass::of(registry.def(via_id)),
+        ) {
+            allowed(via_id, anchor)
+        } else {
+            takes(via_id, worn, anchor)
         };
-        if !cargo_fits(world, entity, via_id) {
-            return Err(Refusal::TargetUnfit);
-        }
-        if on_grid {
-            let anchor = settled(world, via_id, standing, from, worn);
-            let stands = if worn.solidity() == from.solidity() {
-                allowed(via_id, anchor)
-            } else {
-                takes(via_id, worn, anchor)
-            };
-            if !stands {
-                return Err(Refusal::NoRoom);
-            }
+        if !stands {
+            return Err(Refusal::NoRoom);
         }
     }
     Ok(Start {
@@ -934,10 +998,14 @@ fn reoccupy(
         && landing != Landing::Nearby;
     // The same marks on ground the new form may also stand on: a form over
     // other terrains is judged on its own, whatever it marks.
-    let same_ground = unchanged && {
-        let registry = world.resource::<ContentRegistry>();
-        entity_def::mover_shape(registry, &from) == entity_def::mover_shape(registry, &to)
-    };
+    let same_ground = landing != Landing::Nearby
+        && holds_ground_as(
+            world.resource::<ContentRegistry>(),
+            from,
+            old_class,
+            to,
+            new_class,
+        );
 
     let facing = world
         .entity(entity)
@@ -979,7 +1047,13 @@ fn reoccupy(
             let own = lift_standing_presence(&mut map, standing_mark);
             let around = CellRect::new(body::anchor(position), from.size());
             let found = map
-                .find_placement_near(around.origin, around.size, to_shape, to.solidity())
+                .find_placement_near(
+                    around.origin,
+                    around.size,
+                    to_shape,
+                    to.solidity(),
+                    new_class,
+                )
                 .map(FixedUVec2::from);
             restore_standing_presence(&mut map, standing_mark, &own);
             let anchor = found?;
@@ -1199,14 +1273,6 @@ fn destination(world: &World, type_name: &str) -> Option<(EntityTypeId, Location
     Some((type_id, registry.def(type_id).location?))
 }
 
-/// The location of the form `entity` wears next under `transition`: the
-/// interim form's when there is one, the destination's otherwise. `None` when
-/// that form is not something an entity could stand as.
-fn worn_next(world: &World, transition: &MorphTransition) -> Option<LocationDef> {
-    let next = transition.via_type().unwrap_or(transition.into_type());
-    destination(world, next).map(|(_, location)| location)
-}
-
 /// The interim form `transition` passes through, as a handle, if it has one.
 fn interim_of(world: &World, transition: &MorphTransition) -> Option<EntityTypeId> {
     let via = transition.via_type()?;
@@ -1419,4 +1485,21 @@ fn declared_initial(world: &World, type_id: EntityTypeId, pool: PoolId) -> PoolI
         .pool(pool)
         .expect("a pool a form settles is one it declares")
         .initial()
+}
+
+/// Whether a body of `to` holds the ground exactly as one of `from` does: the
+/// same cells on the same planes, held the same way, over ground of the same
+/// shape.
+fn holds_ground_as(
+    registry: &ContentRegistry,
+    from: LocationDef,
+    from_class: OccupancyClass,
+    to: LocationDef,
+    to_class: OccupancyClass,
+) -> bool {
+    from.occupies() == to.occupies()
+        && from.size() == to.size()
+        && from_class == to_class
+        && from.solidity() == to.solidity()
+        && entity_def::mover_shape(registry, &from) == entity_def::mover_shape(registry, &to)
 }

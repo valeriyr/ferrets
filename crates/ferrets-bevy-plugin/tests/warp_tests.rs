@@ -743,6 +743,7 @@ fn app() -> App {
             "power",
             FieldDef::new(
                 Terrains::Only(utils::LAND.into()),
+                utils::GROUND.into(),
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -801,6 +802,7 @@ fn app() -> App {
             "mud",
             FieldDef::new(
                 Terrains::Only(utils::LAND.into()),
+                utils::GROUND.into(),
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,

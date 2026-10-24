@@ -94,6 +94,7 @@ pub struct CurrentScenario(pub Scenario);
 /// the point rather than the economy.
 pub fn builtin_mission(projection: Projection, movement_model: MovementModel) -> Scenario {
     let mut map = MapData::new("build_army", projection, 32, 32, "land");
+    map.add_relief(crate::map::GROUND, 1);
     map.set_movement_model(movement_model);
     map.add_player_slot(START);
 

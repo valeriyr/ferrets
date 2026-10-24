@@ -286,6 +286,7 @@ fn field_on_any_terrain_crosses_every_terrain() {
             "beam",
             FieldDef::new(
                 Terrains::Any,
+                utils::GROUND.into(),
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,
@@ -1844,6 +1845,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             "creep",
             FieldDef::new(
                 Terrains::Only(utils::LAND.into()),
+                utils::GROUND.into(),
                 FieldDecay::Gradual { cycle: 2 },
                 FieldVision::Watched,
                 Detection::Blind,
@@ -1853,6 +1855,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             "power",
             FieldDef::new(
                 Terrains::Only(utils::LAND.into()),
+                utils::GROUND.into(),
                 FieldDecay::Instant,
                 FieldVision::Dark,
                 Detection::Blind,

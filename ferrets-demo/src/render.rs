@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use bevy::{prelude::*, sprite_render::AlphaMode2d};
+use bevy::{color::Luminance, prelude::*, sprite_render::AlphaMode2d};
 use ferrets_content::{
     affiliation::Affiliation,
     detection::Detection,
@@ -31,7 +31,10 @@ use ferrets_math::{
     facing::{self, Facing},
     fixed_uvec2::FixedUVec2,
 };
-use ferrets_pathfinder::layer_mask::LayerMask;
+use ferrets_pathfinder::{
+    layer_mask::LayerMask,
+    slope::{Direction, Slope},
+};
 use ferrets_simulation::{
     command::SkillTarget,
     components::{
@@ -512,7 +515,7 @@ impl DrawLayer {
 ///
 /// Altitude is presentation only — the simulation knows nothing about it, and a
 /// flier's position is the cell it is over. The lift is what makes an air unit
-/// crossing a lake or a keep read as passing above it rather than through it.
+/// crossing water or a keep read as passing above it rather than through it.
 pub(crate) fn lift(registry: &ContentRegistry, def: &EntityTypeDef) -> Vec3 {
     DrawLayer::of(registry, def).offset()
 }
@@ -665,6 +668,9 @@ enum Shape {
     TunnelEnd,
     /// The stalker — a small body on four long legs splayed to the corners.
     Stalker,
+    /// The stilt walker — an upright body high on two long legs in a wide
+    /// stride, a lighter head on top.
+    StiltWalker,
 }
 
 /// Picks a shape from the entity type name. Add new types here.
@@ -703,6 +709,7 @@ fn shape_for(type_name: &str) -> Shape {
         "burrower" => Shape::Worm,
         "tunnel" => Shape::TunnelEnd,
         "stalker" => Shape::Stalker,
+        "stilt_walker" => Shape::StiltWalker,
         "war_wagon" => Shape::WarWagon,
         "siege_works" | "factory" | "factory_aloft" => Shape::Octagon,
         "watch_tower" => Shape::WatchTower,
@@ -1425,6 +1432,42 @@ pub fn attach_sprites(
                         Mesh2d(meshes.add(Circle::new(radius * 0.18))),
                         MeshMaterial2d(materials.add(color.lighter(0.25))),
                         Transform::from_translation(Vec3::new(0.0, radius * 0.15, 0.1)),
+                    ));
+                });
+            }
+            Shape::StiltWalker => {
+                // An upright body high on two long legs in a wide stride, a
+                // foot under each: the walker that steps up and down cliffs.
+                let leg = Vec2::new(radius * 0.1, radius * 1.3);
+                let foot = Vec2::new(radius * 0.3, radius * 0.1);
+                entity.insert((
+                    Mesh2d(meshes.add(Rectangle::new(radius * 0.5, radius * 0.6))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    for side in [-1.0_f32, 1.0] {
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.3), leg),
+                            Transform::from_translation(Vec3::new(
+                                side * radius * 0.35,
+                                -radius * 0.55,
+                                -0.1,
+                            ))
+                            .with_rotation(Quat::from_rotation_z(side * 0.4)),
+                        ));
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.45), foot),
+                            Transform::from_translation(Vec3::new(
+                                side * radius * 0.6,
+                                -radius * 1.15,
+                                -0.1,
+                            )),
+                        ));
+                    }
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.2))),
+                        MeshMaterial2d(materials.add(color.lighter(0.25))),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.5, 0.1)),
                     ));
                 });
             }
@@ -2811,20 +2854,27 @@ fn mounted_at(transform: &Transform, def: &EntityTypeDef, mount: &TurretMount) -
     (transform.rotation * offset).truncate()
 }
 
-/// The tile color for a terrain, by content name.
-pub(crate) fn terrain_color(terrain: &str) -> Color {
-    match terrain {
+/// The rock a cliff cell's ground is drawn toward.
+const CLIFF_ROCK: Color = Color::srgb(0.30, 0.26, 0.22);
+
+/// The tile color for a cell: its terrain's, by content name, lighter for
+/// every level above the lowest.
+pub(crate) fn ground_color(terrain: &str, level: u32) -> Color {
+    let color = match terrain {
         "land" => Color::srgb(0.20, 0.34, 0.17),
         "shallow_water" => Color::srgb(0.22, 0.48, 0.62),
         "deep_water" => Color::srgb(0.15, 0.35, 0.6),
         _ => Color::srgb(0.35, 0.33, 0.30), // unknown terrain — bare dirt
-    }
+    };
+    color.lighter(0.08 * level.saturating_sub(1) as f32)
 }
 
-/// Spawns a colored tile per cell from the map's terrain, so the whole
-/// playable field is drawn and the void outside it stays the clear color.
-/// Terrain is static, so the tiles spawn once on entering the game; they
-/// despawn with the in-game overlay on teardown.
+/// Spawns a colored tile per cell from the map's terrain, level and slope —
+/// cliff cells in rock, ramp cells shaded up their run with a light shaft the
+/// way they rise — and a dark wall along every edge up to higher ground no
+/// ramp climbs, so the whole playable field is drawn and the void outside it
+/// stays the clear color. Ground is static, so the tiles spawn once on
+/// entering the game; they despawn with the in-game overlay on teardown.
 pub fn spawn_terrain_tiles(
     mut commands: Commands,
     session: Res<GameSession>,
@@ -2834,17 +2884,82 @@ pub fn spawn_terrain_tiles(
         return;
     };
 
+    let (width, height) = (map.width(), map.height());
+    let relief = map
+        .relief(map::GROUND)
+        .expect("the demo's ground spans levels");
+    let level_at = |x: u32, y: u32| relief[(y * width + x) as usize].level;
+    let slope_at = |x: u32, y: u32| relief[(y * width + x) as usize].slope;
+    let neighbor = |x: u32, y: u32, direction: Direction| {
+        let (dx, dy) = direction.step();
+        x.checked_add_signed(dx)
+            .zip(y.checked_add_signed(dy))
+            .filter(|&(nx, ny)| nx < width && ny < height)
+    };
     for (i, &terrain) in map.terrain_cells().iter().enumerate() {
         let Some(name) = map.terrains().get(terrain as usize) else {
             continue;
         };
-        let (x, y) = (i as u32 % map.width(), i as u32 / map.width());
+        let (x, y) = (i as u32 % width, i as u32 / width);
         let center = Vec3::new((x as f32 + 0.5) * CELL_PX, -(y as f32 + 0.5) * CELL_PX, 0.0);
+        let color = match slope_at(x, y) {
+            None => ground_color(name, level_at(x, y)),
+            Some(Slope::Cliff(_)) => ground_color(name, level_at(x, y)).mix(&CLIFF_ROCK, 0.6),
+            // A ramp is shaded from its foot's level to the next one up by
+            // its place along the run.
+            Some(ramp @ Slope::Ramp(rises)) => {
+                let (behind, ahead) = (
+                    run_length(x, y, rises.opposite(), ramp, &slope_at, &neighbor),
+                    run_length(x, y, rises, ramp, &slope_at, &neighbor),
+                );
+                let (foot_x, foot_y) = walk(x, y, rises.opposite(), behind, &neighbor);
+                let foot = level_at(foot_x, foot_y);
+                let share = (behind + 1) as f32 / (behind + ahead + 2) as f32;
+                ground_color(name, foot).mix(&ground_color(name, foot + 1), share)
+            }
+        };
         commands.spawn((
-            Sprite::from_color(terrain_color(name), Vec2::splat(CELL_PX)),
+            Sprite::from_color(color, Vec2::splat(CELL_PX)),
             Transform::from_translation(center),
             InGameUi,
         ));
+        match slope_at(x, y) {
+            // The way the ramp rises: a shaft along the cell toward that side.
+            Some(Slope::Ramp(rises)) => {
+                let along = match rises {
+                    Direction::North | Direction::South => Vec2::new(CELL_PX * 0.12, CELL_PX * 0.5),
+                    Direction::East | Direction::West => Vec2::new(CELL_PX * 0.5, CELL_PX * 0.12),
+                    Direction::NorthEast
+                    | Direction::SouthEast
+                    | Direction::SouthWest
+                    | Direction::NorthWest => unreachable!("a ramp rises a cardinal way"),
+                };
+                commands.spawn((
+                    Sprite::from_color(Color::srgba(1.0, 1.0, 1.0, 0.35), along),
+                    Transform::from_translation(center + (edge_offset(rises) * 0.3).extend(0.1)),
+                    InGameUi,
+                ));
+            }
+            Some(Slope::Cliff(_)) | None => {}
+        }
+        for edge in Direction::CARDINAL {
+            let Some((nx, ny)) = neighbor(x, y, edge) else {
+                continue;
+            };
+            let climbed = match slope_at(x, y) {
+                Some(Slope::Ramp(rises)) => rises.crosses(edge),
+                Some(Slope::Cliff(_)) | None => false,
+            };
+            if level_at(nx, ny) <= level_at(x, y) || climbed {
+                continue;
+            }
+            // Higher ground across this edge with no ramp climbing it: a wall.
+            commands.spawn((
+                Sprite::from_color(Color::srgba(0.0, 0.0, 0.0, 0.55), edge_size_of(edge, 0.35)),
+                Transform::from_translation(center + (edge_offset(edge) * 0.65).extend(0.1)),
+                InGameUi,
+            ));
+        }
     }
 
     // Field overlay between the terrain and the fog (z 0.25), and the fog
@@ -3223,6 +3338,7 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         // squares outright, and the ones whose outline is a square with
         // something drawn on top of it.
         Shape::Square
+        | Shape::StiltWalker
         | Shape::Triangle
         | Shape::Diamond
         | Shape::Skeleton
@@ -4141,4 +4257,56 @@ fn flicker(tick: u32, id: u32, tongue: u32) -> u32 {
     value ^= value >> 13;
     value = value.wrapping_mul(0x5bd1_e995);
     (value >> 24) & 0xff
+}
+
+/// The size of a strip along a cell's cardinal `edge`, `thickness` cells
+/// deep.
+fn edge_size_of(edge: Direction, thickness: f32) -> Vec2 {
+    match edge {
+        Direction::North | Direction::South => Vec2::new(CELL_PX, CELL_PX * thickness),
+        Direction::East | Direction::West => Vec2::new(CELL_PX * thickness, CELL_PX),
+        Direction::NorthEast
+        | Direction::SouthEast
+        | Direction::SouthWest
+        | Direction::NorthWest => unreachable!("an edge lies a cardinal way"),
+    }
+}
+
+/// How many cells of the `ramp`'s run continue from the cell at `(x, y)`
+/// toward `direction`.
+fn run_length(
+    x: u32,
+    y: u32,
+    direction: Direction,
+    ramp: Slope,
+    slope_at: &impl Fn(u32, u32) -> Option<Slope>,
+    neighbor: &impl Fn(u32, u32, Direction) -> Option<(u32, u32)>,
+) -> u32 {
+    let (mut at, mut count) = ((x, y), 0);
+    while let Some(next) =
+        neighbor(at.0, at.1, direction).filter(|&(nx, ny)| slope_at(nx, ny) == Some(ramp))
+    {
+        at = next;
+        count += 1;
+    }
+    count
+}
+
+/// The cell `steps` cells from `(x, y)` toward `direction`.
+fn walk(
+    x: u32,
+    y: u32,
+    direction: Direction,
+    steps: u32,
+    neighbor: &impl Fn(u32, u32, Direction) -> Option<(u32, u32)>,
+) -> (u32, u32) {
+    (0..steps).fold((x, y), |at, _| {
+        neighbor(at.0, at.1, direction).expect("a ramp run stays on the map")
+    })
+}
+
+/// Where a line along a cell's `direction` side sits, from the cell's center.
+fn edge_offset(direction: Direction) -> Vec2 {
+    let (dx, dy) = direction.step();
+    Vec2::new(dx as f32, -(dy as f32)) * CELL_PX * 0.5
 }

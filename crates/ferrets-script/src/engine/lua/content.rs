@@ -55,7 +55,9 @@ use ferrets_content::{
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_pathfinder::{layer_id::LayerId, layer_mask::LayerMask, terrain_mask::TerrainMask};
+use ferrets_pathfinder::{
+    layer_id::LayerId, layer_level::LayerLevel, layer_mask::LayerMask, terrain_mask::TerrainMask,
+};
 use mlua::{Lua, Table, Value};
 
 use crate::{content, error::ScriptError};
@@ -121,7 +123,12 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
     let layers = Rc::clone(registry);
     globals.set(
         "define_layer",
-        lua.create_function(move |_, name: String| Ok(*layers.borrow_mut().register_layer(name)))?,
+        lua.create_function(move |_, (name, table): (String, Table)| {
+            let level = required::<Value>(&table, "level")
+                .and_then(|level| parse_layer_level(&level))
+                .map_err(mlua::Error::external)?;
+            Ok(*layers.borrow_mut().register_layer(name, level))
+        })?,
     )?;
 
     let lookup = Rc::clone(registry);
@@ -2035,12 +2042,14 @@ fn parse_joins(gateway: &Table, registry: &ContentRegistry) -> crate::Result<Joi
 }
 
 /// Reads a field definition: the `terrains` its cells lie on — `"any"` or a
-/// terrain mask — its `decay` — `"instant"`, `"never"`, or a `{ cycle = ticks }` table — its
-/// `vision` — `"dark"` unless declared, or `"watched"` to put covered cells in
-/// sight of whoever covers them — and its `detection`, the layer mask of what
-/// it reveals, blind unless declared (a watch's `detection` reads the same).
+/// terrain mask — the layer mask it `spreads_on`, its `decay` — `"instant"`,
+/// `"never"`, or a `{ cycle = ticks }` table — its `vision` — `"dark"` unless
+/// declared, or `"watched"` to put covered cells in sight of whoever covers
+/// them — and its `detection`, the layer mask of what it reveals, blind unless
+/// declared (a watch's `detection` reads the same).
 fn parse_field(table: &Table) -> crate::Result<FieldDef> {
     let terrains = parse_terrains(&required::<Value>(table, "terrains")?)?;
+    let spreads_on = LayerMask::from(required::<u32>(table, "spreads_on")?);
     let decay = parse_field_decay(required::<Value>(table, "decay")?)?;
     let vision = match optional::<String>(table, "vision")? {
         Some(name) => content::field_vision(&name)?,
@@ -2048,18 +2057,42 @@ fn parse_field(table: &Table) -> crate::Result<FieldDef> {
     };
     Ok(FieldDef::new(
         terrains,
+        spreads_on,
         decay,
         vision,
         parse_detection(table)?,
     ))
 }
 
-/// Reads a domain: the `layer` its bodies are in and the `terrains`
-/// they may be over.
+/// Reads a domain: the `layer` its bodies are in, the `terrains` they may be
+/// over and how they cross a cliff, `cliff_crossing`, absent on a layer at one level.
 fn parse_domain(table: &Table) -> crate::Result<DomainDef> {
     let layer = LayerId::from(required::<u32>(table, "layer")?);
     let terrains = parse_terrains(&required::<Value>(table, "terrains")?)?;
-    Ok(DomainDef::new(layer, terrains))
+    let cliff_crossing = optional::<String>(table, "cliff_crossing")?
+        .map(|cliff_crossing| content::cliff_crossing(&cliff_crossing))
+        .transpose()?;
+    Ok(DomainDef::new(layer, terrains, cliff_crossing))
+}
+
+/// Reads a layer's `level`: one level, or a `{ from, to }` range.
+fn parse_layer_level(value: &Value) -> crate::Result<LayerLevel> {
+    match value {
+        Value::Integer(level) => {
+            Ok(LayerLevel::At(u32::try_from(*level).map_err(|_| {
+                content::unexpected("level", &["a level"], &level.to_string())
+            })?))
+        }
+        Value::Table(range) => Ok(LayerLevel::Range {
+            from: required::<u32>(range, "from")?,
+            to: required::<u32>(range, "to")?,
+        }),
+        other => Err(content::unexpected(
+            "level",
+            &["a level", "a { from, to } range"],
+            &found(other),
+        )),
+    }
 }
 
 /// Reads a terrain set: `"any"`, or a terrain mask.

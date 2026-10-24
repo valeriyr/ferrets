@@ -5,9 +5,7 @@
 //! no progress.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{
-    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
-};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedI64, facing::Facing, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_physics::body;
 
@@ -15,7 +13,6 @@ use super::turn;
 use crate::{
     components::chase::{ChaseRound, ChaseState},
     entity_def,
-    map::Map,
     order::Order,
 };
 
@@ -29,14 +26,13 @@ pub enum Destination {
     OutOfReach,
 }
 
-/// Decides whether `from` is within `range` of the point `destination`, a
+/// Decides whether `chaser` is within `range` of the point `destination`, a
 /// footprint of `destination_size` reached at the cells it lies in from its
 /// floored corner, and otherwise whether to walk toward it or give up.
 pub fn advance_to_point(
     last_chase: &mut ChaseState,
-    projection: Projection,
-    from: FixedUVec2,
-    from_size: CellSize,
+    world: &World,
+    chaser: Entity,
     destination: FixedUVec2,
     destination_size: CellSize,
     range: u32,
@@ -44,9 +40,8 @@ pub fn advance_to_point(
     let goal = CellRect::new(CellPos::from(destination), destination_size);
     close_on(
         last_chase,
-        projection,
-        from,
-        from_size,
+        world,
+        chaser,
         goal,
         destination,
         destination_size,
@@ -63,16 +58,13 @@ pub fn advance_to_entity(
     destination: Entity,
     range: u32,
 ) -> Destination {
-    let (from, from_size) = entity_def::footprint(world, chaser);
     let (destination_position, destination_size) = entity_def::footprint(world, destination);
-    let projection = world.resource::<Map>().projection();
     let goal = body::standing_rect(destination_position, destination_size);
 
     close_on(
         last_chase,
-        projection,
-        from,
-        from_size,
+        world,
+        chaser,
         goal,
         destination_position,
         destination_size,
@@ -142,20 +134,19 @@ fn center_of((origin, size): (FixedUVec2, CellSize)) -> FixedVec2 {
     )
 }
 
-/// Arrives when `from` reaches `goal` within `range`, else walks toward the
-/// footprint at `destination`, or gives up when the last walk made no
+/// Arrives when `chaser` reaches `goal` within `range`, else walks toward
+/// the footprint at `destination`, or gives up when the last walk made no
 /// progress.
-#[allow(clippy::too_many_arguments)]
 fn close_on(
     last_chase: &mut ChaseState,
-    projection: Projection,
-    from: FixedUVec2,
-    from_size: CellSize,
+    world: &World,
+    chaser: Entity,
     goal: CellRect,
     destination: FixedUVec2,
     destination_size: CellSize,
     range: u32,
 ) -> Destination {
+    let (from, from_size) = entity_def::footprint(world, chaser);
     // The chaser is judged by every cell it stands on. Judging a body by one
     // cell of the two it lies across leaves it a little past a corner reading
     // as out of range on one axis or the other however it is quantized, and a
@@ -168,7 +159,13 @@ fn close_on(
     // Both sides are footprints: a wide chaser reaches as far as its nearest
     // edge, which is also how acquisition measures — the two must agree, or a
     // wide unit would acquire a target it then walks straight past.
-    if projection.in_range_for_rects(body::standing_rect(from, from_size), goal, range) {
+    if entity_def::reaches(
+        world,
+        chaser,
+        body::standing_rect(from, from_size),
+        goal,
+        range,
+    ) {
         *last_chase = None;
         return Destination::Arrived;
     }

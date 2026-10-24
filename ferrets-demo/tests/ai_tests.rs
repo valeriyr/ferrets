@@ -139,12 +139,12 @@ fn field_races_ai_build_economy_and_army() {
     assert_eq!(count_owned(world, 1, "hive"), 1);
     assert_eq!(count_owned(world, 1, "overlord"), 3);
     assert_eq!(count_owned(world, 1, "tumor"), 1);
-    assert_eq!(count_owned(world, 1, "swarmling"), 14);
+    assert_eq!(count_owned(world, 1, "swarmling"), 15);
     // Counted together: one part way through its growth is still a ravager
     // the brain paid for.
     assert_eq!(
         count_owned(world, 1, "ravager") + count_owned(world, 1, "cocoon"),
-        4
+        3
     );
     assert_eq!(count_owned(world, 1, "drone"), 5);
     // The conclave's structures warped in on their own after a probe placed
@@ -447,8 +447,8 @@ fn ai_builds_economy_and_army() {
     }
 
     // The mustered wave marched on the idle player across the map — through
-    // a river ford or around the lake — so the army traverses the large map
-    // instead of stalling at the choke points.
+    // a river ford — so the army traverses the large map instead of stalling
+    // at the choke points.
     let crossed = world
         .query::<(&EntityInfoComponent, &OwnerComponent, &LocationComponent)>()
         .iter(world)
@@ -498,7 +498,7 @@ fn boss_mans_its_fleet_and_defends_lake() {
     utils::create_entity(
         app.world_mut(),
         "archer",
-        FixedUVec2::new(FixedU64::from_num(40), FixedU64::from_num(53)),
+        FixedUVec2::new(FixedU64::from_num(40), FixedU64::from_num(42)),
         Some(0),
     )
     .expect("shore archer");

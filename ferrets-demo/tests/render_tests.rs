@@ -382,7 +382,7 @@ fn body_and_gun_are_drawn_apart() {
 #[test]
 fn idle_sea_fortress_draws_its_gun_and_not_its_walls() {
     let mut app = utils::view_app();
-    let fortress = spawn_at(&mut app, "sea_fortress", 46, 46);
+    let fortress = spawn_at(&mut app, "sea_fortress", 10, 2);
 
     assert!(
         app.world().get::<DrawnBearings>(fortress).is_some(),
@@ -460,12 +460,12 @@ fn flames_count_by_footprint_width_and_hold_within_tick() {
 #[test]
 fn refresh_sightings_stamps_footprint_lit_at_one_corner() {
     let mut app = utils::view_app();
-    // Sight is a circle of eight cells around the grunt at (17, 18). The hall
-    // spans (10, 10) to (12, 12): its far corner (12, 12) is √(5² + 6²) = 7.81
-    // cells away and lit, while (11, 12) at √(6² + 6²) = 8.49 and (12, 11) at
+    // Sight is a circle of eight cells around the grunt at (17, 28). The hall
+    // spans (10, 20) to (12, 22): its far corner (12, 22) is √(5² + 6²) = 7.81
+    // cells away and lit, while (11, 22) at √(6² + 6²) = 8.49 and (12, 21) at
     // √(5² + 7²) = 8.60 are not.
-    spawn_owned_at(&mut app, "grunt", 17, 18, 0);
-    let hall = spawn_owned_at(&mut app, "great_hall", 10, 10, 1);
+    spawn_owned_at(&mut app, "grunt", 17, 28, 0);
+    let hall = spawn_owned_at(&mut app, "great_hall", 10, 20, 1);
     utils::run_ticks(&mut app, 2);
 
     app.world_mut()

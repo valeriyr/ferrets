@@ -15,7 +15,6 @@ use crate::{
         order_queue::{CancelPolicy, OrderState},
     },
     entity_def,
-    map::Map,
     order::{AttackTarget, Leash, Order},
     session::GameSession,
     simulation_id::SimulationId,
@@ -99,13 +98,10 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         return Processing::suspend(attack);
     }
 
-    let (position, size) = entity_def::footprint(world, entity);
-    let projection = world.resource::<Map>().projection();
     match chase::advance_to_point(
         &mut driver.last_chase,
-        projection,
-        position,
-        size,
+        world,
+        entity,
         target,
         CellSize::ONE,
         0,

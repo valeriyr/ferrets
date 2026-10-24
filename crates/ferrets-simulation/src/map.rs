@@ -1,15 +1,20 @@
 //! The live map grid of the active game.
 
+use std::cmp::Ordering;
+
 use bevy_ecs::prelude::*;
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
 use ferrets_pathfinder::{
     hierarchy::{DEFAULT_CLUSTER_SIZE, NavHierarchy},
+    layer_id::LayerId,
+    layer_level::LayerLevel,
     layer_mask::LayerMask,
     mover_shape::MoverShape,
     nav_grid::NavGrid,
     search::{self, Footing},
+    slope::{Direction, Slope},
     terrain_id::TerrainId,
 };
 
@@ -18,7 +23,7 @@ use ferrets_physics::body;
 
 use crate::{
     components::location::LocationComponent,
-    entity_def,
+    entity_def, ground,
     map_data::{MapData, MapSlot, Placement},
     movement_model::MovementModel,
     occupancy::{GridMark, OccupancyClass},
@@ -53,12 +58,16 @@ pub struct Map {
 
 impl Map {
     /// Builds the live map a [`MapData`] describes: a fresh grid with every
-    /// layer of the registered vocabulary, and each cell of the terrain the
-    /// map gives it; entity occupancy composes on top.
+    /// layer of the registered vocabulary, each cell of the terrain the map
+    /// gives it, and each layer spanning levels of the relief the map gives
+    /// it; entity occupancy composes on top.
     ///
     /// Panics if the terrain palette references an unregistered terrain, a cell
-    /// indexes past the palette, the cell count does not match the grid, or a
-    /// placement starts a pool its type cannot start there.
+    /// indexes past the palette, a per-cell list does not cover the grid, the
+    /// map gives a relief to a layer at one level or to no registered layer,
+    /// or none to a layer spanning levels, a cell's level lies outside its
+    /// layer's, a slope breaks its band's rules, a border between levels lies
+    /// in no band, or a placement starts a pool its type cannot start there.
     pub fn from_data(data: &MapData, registry: &ContentRegistry) -> Self {
         assert_eq!(
             data.terrain_cells().len(),
@@ -88,12 +97,64 @@ impl Map {
                 })
             })
             .collect();
+        let cell_count = data.width() as usize * data.height() as usize;
         let width = data.width();
         let mut nav_grid = NavGrid::new(width, data.height(), |pos| {
             cells[(pos.y * width + pos.x) as usize]
         });
-        for (_, layer) in registry.layers() {
-            nav_grid.add_layer(layer);
+        for (name, _) in data.reliefs() {
+            assert!(
+                registry.layer(name).is_some(),
+                "map '{}' gives a relief to the unregistered layer '{name}'",
+                data.name()
+            );
+        }
+        for (name, layer) in registry.layers() {
+            match registry.layer_level(layer) {
+                LayerLevel::At(level) => {
+                    assert!(
+                        data.relief(name).is_none(),
+                        "map '{}' gives a relief to layer '{name}', which is at the one level {level}",
+                        data.name()
+                    );
+                    nav_grid.add_flat_layer(layer, level);
+                }
+                levels @ LayerLevel::Range { from, to } => {
+                    let relief = data.relief(name).unwrap_or_else(|| {
+                        panic!(
+                            "map '{}' gives no relief to layer '{name}', which spans levels {from}..={to}",
+                            data.name()
+                        )
+                    });
+                    assert_eq!(
+                        relief.len(),
+                        cell_count,
+                        "map '{}' relief of layer '{name}' must cover every cell",
+                        data.name()
+                    );
+                    for (i, cell) in relief.iter().enumerate() {
+                        assert!(
+                            levels.holds(cell.level),
+                            "map '{}' cell {i} of layer '{name}' is at level {}, outside {from}..={to}",
+                            data.name(),
+                            cell.level
+                        );
+                    }
+                    nav_grid.add_ranged_layer(layer, from, to, |pos| {
+                        relief[(pos.y * width + pos.x) as usize]
+                    });
+                    let whose = format!("map '{}' layer '{name}'", data.name());
+                    for cell in
+                        CellRect::new(CellPos::new(0, 0), CellSize::new(width, data.height()))
+                            .cells()
+                    {
+                        check_slope(&nav_grid, layer, &whose, cell);
+                        for edge in [Direction::East, Direction::South] {
+                            check_border(&nav_grid, layer, &whose, cell, edge);
+                        }
+                    }
+                }
+            }
         }
 
         // What a death leaves is laid by the death that leaves it; a map that
@@ -220,13 +281,14 @@ impl Map {
             if let Some(shape) = Self::planned_shape(registry, def) {
                 assert!(
                     self.hierarchy.serves(shape),
-                    "map '{}' serves no hierarchy for mover '{}' (terrains {}, layers {} at {}x{})",
+                    "map '{}' serves no hierarchy for mover '{}' (terrains {}, layers {} at {}x{}, cliff crossing {:?})",
                     self.name,
                     def.name,
                     shape.terrains,
                     shape.layers,
                     shape.size.width,
-                    shape.size.height
+                    shape.size.height,
+                    shape.cliff_crossing
                 );
             }
         }
@@ -280,48 +342,46 @@ impl Map {
         &self.nav_grid
     }
 
-    /// Returns `true` if every cell in a footprint of `to` at `placed` is
-    /// on its terrains and free but for what `lifted` marks there.
-    pub fn can_place_entity_over_lifted(
+    /// Returns `true` if every cell in a footprint of `to` at `placed` is free
+    /// on its layers but for what `lifted` marks there, whatever the ground
+    /// under it.
+    pub fn is_free_over_lifted(
         &self,
         placed: &LocationComponent,
         to: MoverShape,
         lifted: &[GridMark],
     ) -> bool {
         let layers = to.layers;
-        CellRect::new(body::anchor(placed.position), to.size)
-            .cells()
-            .all(|cell| {
-                if !self.nav_grid.is_on_terrains(to.terrains, cell) {
-                    return false;
+        let anchor = body::anchor(placed.position);
+        CellRect::new(anchor, to.size).cells().all(|cell| {
+            // The layers lifted bodies mark on this cell, plane by plane.
+            let (mut static_lifted, mut claim_lifted) = (LayerMask::EMPTY, LayerMask::EMPTY);
+            for mark in lifted {
+                if !mark.footprint.contains(cell) {
+                    continue;
                 }
-                // The layers lifted bodies mark on this cell, plane by plane.
-                let (mut static_lifted, mut claim_lifted) = (LayerMask::EMPTY, LayerMask::EMPTY);
-                for mark in lifted {
-                    if !mark.footprint.contains(cell) {
-                        continue;
-                    }
-                    match mark.class {
-                        OccupancyClass::Static => static_lifted |= mark.layers,
-                        OccupancyClass::Claim => claim_lifted |= mark.layers,
-                    }
+                match mark.class {
+                    OccupancyClass::Static => static_lifted |= mark.layers,
+                    OccupancyClass::Claim => claim_lifted |= mark.layers,
                 }
-                if static_lifted == LayerMask::EMPTY && claim_lifted == LayerMask::EMPTY {
-                    return !self.nav_grid.is_occupied_by(layers, cell);
-                }
-                // Whatever else is here is on a layer or plane the lifted
-                // bodies do not mark.
-                let beyond_static = layers & !static_lifted;
-                let beyond_claim = layers & !claim_lifted;
-                (beyond_static == LayerMask::EMPTY
-                    || !self.nav_grid.is_statically_occupied_by(beyond_static, cell))
-                    && (beyond_claim == LayerMask::EMPTY
-                        || !self.nav_grid.is_claimed_by(beyond_claim, cell))
-            })
+            }
+            if static_lifted == LayerMask::EMPTY && claim_lifted == LayerMask::EMPTY {
+                return !self.nav_grid.is_occupied_by(layers, cell);
+            }
+            // Whatever else is here is on a layer or plane the lifted
+            // bodies do not mark.
+            let beyond_static = layers & !static_lifted;
+            let beyond_claim = layers & !claim_lifted;
+            (beyond_static == LayerMask::EMPTY
+                || !self.nav_grid.is_statically_occupied_by(beyond_static, cell))
+                && (beyond_claim == LayerMask::EMPTY
+                    || !self.nav_grid.is_claimed_by(beyond_claim, cell))
+        })
     }
 
-    /// Finds a free position for a body of `shape` and `solidity`, scanning
-    /// outward from the rectangle of cells at `origin` with the given `size`.
+    /// Finds a free position for a body of `shape` and `solidity` on the
+    /// ground [`ground::takes`] for `occupancy`, scanning outward from the
+    /// rectangle of cells at `origin` with the given `size`.
     ///
     /// Cells are scanned ring by ring in row-major order, so the result is
     /// deterministic. Returns `None` when nothing is free within the search radius.
@@ -331,6 +391,7 @@ impl Map {
         size: CellSize,
         shape: MoverShape,
         solidity: Solidity,
+        occupancy: OccupancyClass,
     ) -> Option<CellPos> {
         search::find_placement_near(
             &self.nav_grid,
@@ -338,6 +399,7 @@ impl Map {
             CellRect::new(origin, size),
             MAX_RADIUS,
             footing(solidity),
+            |cell| ground::takes(self, cell, shape, occupancy),
         )
     }
 
@@ -349,6 +411,7 @@ impl Map {
         size: CellSize,
         shape: MoverShape,
         solidity: Solidity,
+        occupancy: OccupancyClass,
         toward: CellRect,
     ) -> Option<CellPos> {
         search::find_placement_near_toward(
@@ -358,6 +421,7 @@ impl Map {
             MAX_RADIUS,
             footing(solidity),
             toward,
+            |cell| ground::takes(self, cell, shape, occupancy),
         )
     }
 
@@ -383,13 +447,15 @@ impl Map {
     }
 
     /// Finds at most `max_amount` free placements for a body of `shape` and
-    /// `solidity` near the rectangle at `origin`, none overlapping another.
+    /// `solidity` on the ground [`ground::takes`] for `occupancy`, near the
+    /// rectangle at `origin`, none overlapping another.
     pub fn find_placements_near(
         &self,
         origin: CellPos,
         size: CellSize,
         shape: MoverShape,
         solidity: Solidity,
+        occupancy: OccupancyClass,
         max_amount: usize,
     ) -> Vec<CellPos> {
         search::find_placements_near(
@@ -399,6 +465,7 @@ impl Map {
             MAX_RADIUS,
             max_amount,
             footing(solidity),
+            |cell| ground::takes(self, cell, shape, occupancy),
         )
     }
 
@@ -499,15 +566,19 @@ impl Map {
     }
 
     /// Whether a footprint of `shape` could step from the rect at `from` to
-    /// the one at `to`: every cell of the destination the mover does not
-    /// already hold must be on its terrains and free.
+    /// the neighboring one at `to`: every cell of the destination the mover
+    /// does not already hold must be ground it may stand on (see
+    /// [`NavGrid::cell_fits`]) and free, the step must cross only edges its
+    /// cliff crossing allows, and the destination footprint must hold
+    /// together (see [`NavGrid::holds_together`]).
     ///
     /// The mover's own cells are excluded rather than released and re-tested,
     /// because a step of one cell keeps most of its footprint where it was and
     /// would otherwise read its own claim as a blockage.
     pub fn can_step_footprint(&self, shape: MoverShape, from: CellPos, to: CellPos) -> bool {
-        Self::entered_cells(shape.size, from, to)
-            .all(|cell| self.nav_grid.cell_fits(cell, shape.terrains, shape.layers))
+        Self::entered_cells(shape.size, from, to).all(|cell| self.nav_grid.cell_fits(cell, shape))
+            && self.nav_grid.can_step(from, to, shape)
+            && self.nav_grid.holds_together(to, shape)
     }
 
     /// Moves a mover's claim from the footprint at `from` to the one at `to`,
@@ -723,12 +794,129 @@ impl Map {
 }
 
 /// The ground a footprint of `solidity` needs: one that claims its cells needs
-/// them free, one that shares them needs only terrain that allows it.
+/// them free, one that shares them needs only ground its shape may stand on.
 fn footing(solidity: Solidity) -> Footing {
     match solidity {
         Solidity::Solid => Footing::Free,
         Solidity::Underfoot | Solidity::Passable => Footing::Shared,
     }
+}
+
+/// Checks the slope at `cell` on `layer`, if there is one: a ramp rises a
+/// cardinal way, and the band it lies in — the run of slopes of its kind,
+/// leaning its way, through it along the way it rises — never steps down,
+/// changes level exactly once, and a ramp by one level. `whose` names the map
+/// and layer in a panic.
+fn check_slope(grid: &NavGrid, layer: LayerId, whose: &str, cell: CellPos) {
+    let Some(slope) = grid.slope(layer, cell) else {
+        return;
+    };
+    let rises = slope.rises();
+    match slope {
+        Slope::Ramp(_) => assert!(
+            rises.is_cardinal(),
+            "{whose} ramp at ({}, {}) rises {rises:?}, which is not cardinal",
+            cell.x,
+            cell.y
+        ),
+        Slope::Cliff(_) => {}
+    }
+    let in_band = |at: Option<CellPos>| {
+        at.filter(|&at| {
+            grid.slope(layer, at)
+                .is_some_and(|other| other.is_same_kind(slope) && leans_with(other.rises(), rises))
+        })
+    };
+    let mut start = cell;
+    while let Some(behind) = in_band(neighbor(grid, start, rises.opposite())) {
+        start = behind;
+    }
+    let (mut at, mut changes) = (start, 0);
+    while let Some(next) = in_band(neighbor(grid, at, rises)) {
+        let (Some(level), Some(next_level)) =
+            (grid.cell_level(layer, at), grid.cell_level(layer, next))
+        else {
+            unreachable!("cells on the grid have a level");
+        };
+        match (slope, next_level.cmp(&level)) {
+            (Slope::Ramp(_) | Slope::Cliff(_), Ordering::Equal) => {}
+            (Slope::Ramp(_), Ordering::Greater) if next_level == level + 1 => changes += 1,
+            (Slope::Cliff(_), Ordering::Greater) => changes += 1,
+            (Slope::Ramp(_), Ordering::Greater) => panic!(
+                "{whose} ramp band through ({}, {}) climbs more than one level from ({}, {})",
+                cell.x, cell.y, at.x, at.y
+            ),
+            (Slope::Ramp(_) | Slope::Cliff(_), Ordering::Less) => panic!(
+                "{whose} {slope:?} band through ({}, {}) steps down from ({}, {})",
+                cell.x, cell.y, at.x, at.y
+            ),
+        }
+        at = next;
+    }
+    assert!(
+        changes == 1,
+        "{whose} {slope:?} band through ({}, {}) changes level {changes} times, not once",
+        cell.x,
+        cell.y
+    );
+}
+
+/// Checks the edge on `layer` from `cell` to its neighbor `edge`'s way, if
+/// the two differ in level: the lower a slope rising across the edge, the
+/// higher a slope of the same kind, and a ramp one level apart. `whose` names
+/// the map and layer in a panic.
+fn check_border(grid: &NavGrid, layer: LayerId, whose: &str, cell: CellPos, edge: Direction) {
+    let Some(next) = neighbor(grid, cell, edge) else {
+        return;
+    };
+    let (Some(relief), Some(next_relief)) = (grid.relief(layer, cell), grid.relief(layer, next))
+    else {
+        unreachable!("cells on the grid have a relief");
+    };
+    let ((lower, lower_relief), (upper, upper_relief), rising) =
+        match relief.level.cmp(&next_relief.level) {
+            Ordering::Equal => return,
+            Ordering::Less => ((cell, relief), (next, next_relief), edge),
+            Ordering::Greater => ((next, next_relief), (cell, relief), edge.opposite()),
+        };
+    let in_band = match (lower_relief.slope, upper_relief.slope) {
+        (Some(low), Some(high)) => low.rises().crosses(rising) && low.is_same_kind(high),
+        (Some(_), None) | (None, Some(_)) | (None, None) => false,
+    };
+    assert!(
+        in_band,
+        "{whose} border from ({}, {}) up to ({}, {}) lies in no ramp or cliff",
+        lower.x, lower.y, upper.x, upper.y
+    );
+    let rise = upper_relief.level - lower_relief.level;
+    match lower_relief.slope {
+        Some(Slope::Ramp(_)) => assert!(
+            rise == 1,
+            "{whose} ramp from ({}, {}) up to ({}, {}) climbs {rise} levels, not one",
+            lower.x,
+            lower.y,
+            upper.x,
+            upper.y
+        ),
+        Some(Slope::Cliff(_)) => {}
+        None => unreachable!("a border in a band has a slope below"),
+    }
+}
+
+/// Whether `direction` leans at least partly the way `other` does.
+fn leans_with(direction: Direction, other: Direction) -> bool {
+    let ((dx, dy), (ox, oy)) = (direction.step(), other.step());
+    dx * ox + dy * oy > 0
+}
+
+/// The cell `direction`'s way from `cell`, or `None` off the grid.
+fn neighbor(grid: &NavGrid, cell: CellPos, direction: Direction) -> Option<CellPos> {
+    let (dx, dy) = direction.step();
+    cell.x
+        .checked_add_signed(dx)
+        .zip(cell.y.checked_add_signed(dy))
+        .map(|(x, y)| CellPos::new(x, y))
+        .filter(|&next| next.x < grid.width() && next.y < grid.height())
 }
 
 /// Checks each pool `placement` starts: a registered pool, named once, and

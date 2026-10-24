@@ -719,6 +719,58 @@ fn layer_mask_filters_obstacles() {
 }
 
 //
+// ─── Levels ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn walker_climbs_plateau_by_ramp_and_cliff_walker_straight_up() {
+    let grid = utils::hill_grid();
+    let path = |shape| {
+        astar::find_path(
+            &grid,
+            Projection::Isometric,
+            utils::world(2, 0),
+            shape,
+            utils::world(5, 0),
+            CellSize::ONE,
+            0,
+        )
+        .expect("the plateau is reachable")
+    };
+
+    // Down to the ramp's upper cell, up its rising edge, and on across the
+    // plateau.
+    assert_eq!(
+        path(utils::walker()),
+        vec![utils::world(3, 1), utils::world(4, 1), utils::world(5, 0)]
+    );
+    // Straight along row 0, up the cliff between (3, 0) and (4, 0).
+    assert_eq!(
+        path(utils::strider()),
+        vec![utils::world(3, 0), utils::world(4, 0), utils::world(5, 0)]
+    );
+}
+
+#[test]
+fn walker_steps_to_edge_it_can_touch_target_across() {
+    // At (3, 0) the plateau's (4, 0) is a cell away but up a cliff, so the
+    // walker does not stop there: it climbs the ramp and stops on the
+    // plateau beside the goal.
+    let grid = utils::hill_grid();
+    let path = astar::find_path(
+        &grid,
+        Projection::Isometric,
+        utils::world(3, 0),
+        utils::walker(),
+        utils::world(4, 0),
+        CellSize::ONE,
+        1,
+    );
+
+    assert_eq!(path, Some(vec![utils::world(3, 1), utils::world(4, 1)]));
+}
+
+//
 // ─── Unit claims ──────────────────────────────────────────────────────────────
 //
 // The flat search honors both blocker planes: a claimed cell blocks like a

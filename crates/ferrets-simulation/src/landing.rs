@@ -4,7 +4,10 @@
 //! and seen as the landing word asks by the team that sets it down.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_content::{entity_type_def::EntityTypeDef, field::FieldPlacement, landing::Landing};
+use ferrets_content::{
+    entity_type_def::EntityTypeDef, field::FieldPlacement, landing::Landing,
+    registry::ContentRegistry,
+};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
@@ -215,6 +218,11 @@ fn land_on(
         .location
         .expect("only a type that stands somewhere lands")
         .size();
+    fields::debug_assert_spreads_on(
+        world.resource::<ContentRegistry>(),
+        def,
+        landings.within.iter().map(FieldPlacement::field),
+    );
     let cell = world.resource::<Map>().find_placement_near_toward_where(
         around.origin,
         around.size,

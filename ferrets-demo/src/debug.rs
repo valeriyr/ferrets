@@ -6,11 +6,12 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSi
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
+use ferrets_pathfinder::slope::Slope;
 use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SkillTarget},
     components::{
-        entity_info::EntityInfoComponent, entity_stats::StatsComponent,
+        dying::RemainsComponent, entity_info::EntityInfoComponent, entity_stats::StatsComponent,
         location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
         patrol::PatrolComponent,
     },
@@ -23,7 +24,7 @@ use ferrets_simulation::{
 };
 
 use crate::{
-    input::InputMode,
+    input::{self, Clicked, InputMode},
     map,
     render::{self, CELL_PX, FogReveal, Smoothing, world_center},
     sound::Muted,
@@ -61,7 +62,7 @@ const NAMED_SELECTION: usize = 6;
 #[derive(Component)]
 pub struct DebugText;
 
-/// Spawns the debug readout line.
+/// Spawns the debug readout.
 pub fn setup_debug(mut commands: Commands) {
     commands.spawn((
         InGameUi,
@@ -80,18 +81,6 @@ pub fn setup_debug(mut commands: Commands) {
             ..default()
         },
     ));
-}
-
-/// The grid cell under the cursor, if the cursor is over the playable area.
-fn cursor_cell(
-    windows: &Query<&Window, With<PrimaryWindow>>,
-    cameras: &Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-) -> Option<(u32, u32)> {
-    let (window, (camera, camera_transform)) = (windows.single().ok()?, cameras.single().ok()?);
-    let cursor = window.cursor_position()?;
-    let world = camera.viewport_to_world_2d(camera_transform, cursor).ok()?;
-    let (x, y) = (world.x / CELL_PX, -world.y / CELL_PX);
-    (x >= 0.0 && y >= 0.0).then_some((x as u32, y as u32))
 }
 
 /// Toggles the debug overlay, and cycles which navigation layer its occupancy
@@ -156,33 +145,26 @@ pub fn debug_readout(
     entities: Query<(
         &EntityInfoComponent,
         &LocationComponent,
-        &Visibility,
+        Option<&Visibility>,
         Option<&render::Sighted>,
+        Has<RemainsComponent>,
     )>,
     mut text: Query<&mut Text, With<DebugText>>,
 ) {
     let cell = cursor_cell(&windows, &cameras);
     let cell_str = cell.map_or_else(|| "-".to_string(), |(x, y)| format!("({x},{y})"));
 
-    // What the hit-test finds under the cursor, by the same test selection uses:
-    // what the perspective makes out, never a fogged entity or a shimmer.
-    let hover = cell
-        .and_then(|(cx, cy)| {
-            entities
-                .iter()
-                .find(|(info, location, visibility, sighted)| {
-                    let ox = location.position.x.to_num::<u32>();
-                    let oy = location.position.y.to_num::<u32>();
-                    let size = registry.def(info.type_id()).location.unwrap().size();
-                    render::made_out(visibility, *sighted)
-                        && cx >= ox
-                        && cx < ox + size.width
-                        && cy >= oy
-                        && cy < oy + size.height
-                })
-        })
+    // What a click there would select: the hit-test selection uses, never a
+    // fogged entity or a shimmer.
+    let hover = cursor_world(&windows, &cameras)
+        .and_then(|world| input::entity_at(world, Clicked::Standing, &registry, &entities))
+        .and_then(|id| entities.iter().find(|(info, ..)| info.id() == id))
         .map(|(info, ..)| format!("{} #{}", info.type_name(), info.id().0));
     let hover_str = hover.as_deref().unwrap_or("-");
+    let ground_str = cell.map_or_else(
+        || "-".to_string(),
+        |(x, y)| ground_text(&map, &registry, CellPos::new(x, y)),
+    );
 
     // Named by simulation id rather than counted: a report about one unit of a
     // crowd has to be able to say which, and the cursor reaches what the
@@ -225,19 +207,23 @@ pub fn debug_readout(
         // Game time at the nominal cadence, so it reads the same whatever the
         // game is throttled to.
         **text = format!(
-            "tick {} ({}) | {held_hz:.1}/{wanted_hz:.0} Hz | {} | {} | sound {} | layer {} | cursor {} | hover {} | LMB {} RMB {} | selected {} | {}",
+            "tick {} ({}) | {held_hz:.1}/{wanted_hz:.0} Hz | {} | {} | sound {} | layer {}\n\
+             selected {} | {} | LMB {} RMB {}\n\
+             cursor {} | hover {}\n\
+             ground {}",
             session.tick(),
             time::clock_text(time::seconds(session.tick())),
             model_str,
             if smoothing.0 { "smoothed" } else { "per tick" },
             if muted.0 { "off" } else { "on" },
             debug.layer,
-            cell_str,
-            hover_str,
-            mouse.pressed(MouseButton::Left) as u8,
-            mouse.pressed(MouseButton::Right) as u8,
             selection_str,
             mode_str,
+            mouse.pressed(MouseButton::Left) as u8,
+            mouse.pressed(MouseButton::Right) as u8,
+            cell_str,
+            hover_str,
+            ground_str,
         );
     }
 }
@@ -589,4 +575,50 @@ fn fill_cell(gizmos: &mut Gizmos, x: u32, y: u32) {
         gizmos.line_2d(Vec2::new(left, yp), Vec2::new(right, yp), fill);
         offset += STEP_PX;
     }
+}
+
+/// What the map's ground is at `cell`: its terrain, and each layer's level
+/// there and the slope it is part of.
+fn ground_text(map: &Map, registry: &ContentRegistry, cell: CellPos) -> String {
+    let grid = map.nav_grid();
+    let Some(terrain) = grid.terrain(cell) else {
+        return "off the map".to_string();
+    };
+    let terrain = registry
+        .terrains()
+        .find(|&(_, id)| id == terrain)
+        .map_or("?", |(name, _)| name);
+    let layers: Vec<String> = registry
+        .layers()
+        .filter_map(|(name, layer)| {
+            let relief = grid.relief(layer, cell)?;
+            let slope = match relief.slope {
+                Some(Slope::Ramp(rises)) => format!("ramp rising {rises:?}"),
+                Some(Slope::Cliff(rises)) => format!("cliff rising {rises:?}"),
+                None => "flat".to_string(),
+            };
+            Some(format!("{name} level {} {slope}", relief.level))
+        })
+        .collect();
+    format!("{terrain} | {}", layers.join(" | "))
+}
+
+/// The grid cell under the cursor, if the cursor is over the playable area.
+fn cursor_cell(
+    windows: &Query<&Window, With<PrimaryWindow>>,
+    cameras: &Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+) -> Option<(u32, u32)> {
+    let world = cursor_world(windows, cameras)?;
+    let (x, y) = (world.x / CELL_PX, -world.y / CELL_PX);
+    (x >= 0.0 && y >= 0.0).then_some((x as u32, y as u32))
+}
+
+/// The world position under the cursor, if the cursor is in the window.
+fn cursor_world(
+    windows: &Query<&Window, With<PrimaryWindow>>,
+    cameras: &Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+) -> Option<Vec2> {
+    let (window, (camera, camera_transform)) = (windows.single().ok()?, cameras.single().ok()?);
+    let cursor = window.cursor_position()?;
+    camera.viewport_to_world_2d(camera_transform, cursor).ok()
 }

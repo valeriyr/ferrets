@@ -187,7 +187,7 @@ pub fn apply_action(
 }
 
 /// Covers or clears `field` within `radius` of `footprint`. A cover spreads
-/// from the footprint through terrain the field's layer passes, for `player`;
+/// from the footprint through cells on the field's terrains, for `player`;
 /// a clear takes the whole disc, walls and all, and drops whatever cover in it
 /// no source sustains, whoever's it is.
 pub fn apply_action_around(

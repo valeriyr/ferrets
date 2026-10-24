@@ -68,6 +68,7 @@ use ferrets_network::{
     transport::{NetworkTransport, loopback::LoopbackTransport},
 };
 use ferrets_pathfinder::{
+    layer_level::LayerLevel,
     layer_mask::LayerMask,
     nav_grid::{LayerId, NavGrid},
     terrain_id::TerrainId,
@@ -138,10 +139,13 @@ pub const AIR_DOMAIN: DomainId = DomainId::new(1);
 
 /// Registers the ground layer, the land terrain and the [`GROUND_DOMAIN`].
 fn register_ground(registry: &mut ContentRegistry) {
-    assert_eq!(registry.register_layer(GROUND_LAYER), GROUND);
+    assert_eq!(
+        registry.register_layer(GROUND_LAYER, LayerLevel::At(1)),
+        GROUND
+    );
     assert_eq!(registry.register_terrain("land"), LAND);
     assert_eq!(
-        registry.register_domain("ground", DomainDef::new(GROUND, Terrains::Any)),
+        registry.register_domain("ground", DomainDef::new(GROUND, Terrains::Any, None)),
         GROUND_DOMAIN
     );
 }
@@ -159,9 +163,9 @@ fn domain_layer(domain: DomainId) -> LayerId {
 
 /// Registers the air layer and the [`AIR_DOMAIN`], after [`register_ground`].
 pub fn register_air(registry: &mut ContentRegistry) {
-    assert_eq!(registry.register_layer(AIR_LAYER), AIR);
+    assert_eq!(registry.register_layer(AIR_LAYER, LayerLevel::At(2)), AIR);
     assert_eq!(
-        registry.register_domain("air", DomainDef::new(AIR, Terrains::Any)),
+        registry.register_domain("air", DomainDef::new(AIR, Terrains::Any, None)),
         AIR_DOMAIN
     );
 }
@@ -170,7 +174,10 @@ pub fn register_air(registry: &mut ContentRegistry) {
 /// alone, after [`register_ground`], returning the domain.
 fn register_dry(registry: &mut ContentRegistry) -> DomainId {
     assert_eq!(registry.register_terrain("water"), WATER);
-    registry.register_domain("dry", DomainDef::new(GROUND, Terrains::Only(LAND.into())))
+    registry.register_domain(
+        "dry",
+        DomainDef::new(GROUND, Terrains::Only(LAND.into()), None),
+    )
 }
 
 /// `def` moved into `domain`, keeping its footprint and the layers it
@@ -290,7 +297,7 @@ fn make_app_seated(slots: Vec<PlayerSlot>, rules: Ruleset, local: PlayerId) -> A
     register_ground(&mut registry);
 
     let mut nav_grid = NavGrid::new(32, 32, |_| LAND);
-    nav_grid.add_layer(GROUND);
+    nav_grid.add_flat_layer(GROUND, 1);
 
     let mut app = App::new();
     app.add_plugins(SimulationPlugin::new(
@@ -1893,7 +1900,7 @@ pub fn start_game(app: &mut App) {
 /// grid holds none of the marks of bodies spawned before it.
 pub fn install_map(app: &mut App, projection: Projection, model: MovementModel) {
     let mut grid = NavGrid::new(32, 32, |_| LAND);
-    grid.add_layer(GROUND);
+    grid.add_flat_layer(GROUND, 1);
     map::install_map(
         app.world_mut(),
         Map::new("test", projection, model, grid, vec![]),
@@ -1915,7 +1922,7 @@ pub const CHOKE_POINT_GAP: std::ops::RangeInclusive<u32> = 8..=9;
 /// whole thing a corridor test needs to exercise. Call before any spawns.
 pub fn install_choke_point_map(app: &mut App) {
     let mut grid = NavGrid::new(CHOKE_POINT_SIZE, CHOKE_POINT_SIZE, |_| LAND);
-    grid.add_layer(GROUND);
+    grid.add_flat_layer(GROUND, 1);
     for y in 0..CHOKE_POINT_SIZE {
         if !CHOKE_POINT_GAP.contains(&y) {
             grid.set_occupied_by(GROUND, CellPos::new(CHOKE_POINT_SIZE / 2, y), true);
@@ -2666,8 +2673,8 @@ pub fn annex_app() -> App {
     // The air layer the lifted-off form lives on, over the same ground.
     {
         let mut grid = NavGrid::new(32, 32, |_| LAND);
-        grid.add_layer(GROUND);
-        grid.add_layer(AIR);
+        grid.add_flat_layer(GROUND, 1);
+        grid.add_flat_layer(AIR, 2);
         map::install_map(
             app.world_mut(),
             Map::new(
@@ -4798,7 +4805,7 @@ pub fn net_app_with_slots(
     assert_eq!(net.gameplay_ref().local_player(), local.player());
 
     let mut nav_grid = NavGrid::new(32, 32, |_| LAND);
-    nav_grid.add_layer(GROUND);
+    nav_grid.add_flat_layer(GROUND, 1);
     let session = GameSession::configured(
         local,
         slots,

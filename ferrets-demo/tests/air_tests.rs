@@ -128,7 +128,7 @@ fn tall_building_blocks_flight() {
     // The fortress holds the ground layer under it, over deep water, and the
     // air above it at once, so its footprint is closed to ships and fliers
     // alike.
-    let origin = (46, 46);
+    let origin = (16, 2);
     utils::create_entity(
         app.world_mut(),
         "sea_fortress",
@@ -165,7 +165,7 @@ fn flier_routes_around_tall_building() {
 
     // Standing on open water beside the fortress, ordered to the water on its
     // far side: the only way through is around, and the flight must still finish.
-    let fortress = (46, 46);
+    let fortress = (16, 2);
     utils::create_entity(
         app.world_mut(),
         "sea_fortress",
@@ -174,9 +174,9 @@ fn flier_routes_around_tall_building() {
     )
     .expect("the fortress stands");
 
-    let start = (44, 47);
+    let start = (14, 3);
     // Clear of the keep's own five cells, which start at its corner.
-    let goal = (53, 47);
+    let goal = (23, 3);
     let (flier, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
@@ -487,22 +487,15 @@ fn wide_flier_cannot_spawn_where_its_footprint_does_not_fit() {
 
     // The fortress closes a 3x3 of air; a 2x2 anchored one cell short of it
     // still reaches in, so there is nowhere here for the footprint to go.
-    utils::create_entity(
-        app.world_mut(),
-        "sea_fortress",
-        utils::at_cell(46, 46),
-        None,
-    )
-    .expect("the fortress stands");
+    utils::create_entity(app.world_mut(), "sea_fortress", utils::at_cell(16, 2), None)
+        .expect("the fortress stands");
 
     assert!(
-        utils::create_entity(app.world_mut(), "zeppelin", utils::at_cell(45, 46), Some(1))
-            .is_none(),
+        utils::create_entity(app.world_mut(), "zeppelin", utils::at_cell(15, 2), Some(1)).is_none(),
         "a 2x2 flier was placed overlapping the fortress it cannot fit beside"
     );
     assert!(
-        utils::create_entity(app.world_mut(), "zeppelin", utils::at_cell(44, 46), Some(1))
-            .is_some(),
+        utils::create_entity(app.world_mut(), "zeppelin", utils::at_cell(14, 2), Some(1)).is_some(),
         "a 2x2 flier could not be placed where its whole footprint is clear"
     );
 }

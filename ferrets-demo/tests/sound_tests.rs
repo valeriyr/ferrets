@@ -736,7 +736,7 @@ fn sound_app() -> App {
 
 /// [`sound_app`] on a node playing `role`.
 fn sound_app_as(role: LocalRole) -> App {
-    let mut app = utils::demo_map_app_as(role, MovementModel::Cell);
+    let mut app = utils::land_app_as(role, MovementModel::Cell);
     app.add_plugins((TaskPoolPlugin::default(), AssetPlugin::default()));
     app.init_asset::<sound::GeneratedCue>()
         .init_resource::<ObserverPerspective>()
