@@ -437,6 +437,36 @@ fn morph_landing_on_forbidden_field_fizzles() {
     assert_eq!(utils::cell_of(app.world(), bunker), CellPos::new(20, 20));
 }
 
+#[test]
+fn trained_unit_lands_only_where_its_placement_rules_admit() {
+    // A den at (17, 10) stands just off the creep a hive at (10, 10) spreads
+    // four cells out, to (15, 10). The creeper it trains stands only on creep:
+    // the first ring, (16, 9) to (18, 11), is bare, and the second ring's
+    // creep cell nearest the den's middle, (15, 10), takes it.
+    let mut app = field_app();
+    utils::place(&mut app, "hive", 10, 10, 0);
+    let den = utils::place(&mut app, "den", 17, 10, 0);
+    let den_id = entity_def::simulation_id(app.world(), den);
+    utils::run_ticks(&mut app, 1);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: den_id,
+            type_name: "creeper".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+
+    let creepers = utils::owned_of_type(app.world_mut(), "creeper", 0);
+    assert_eq!(
+        creepers
+            .into_iter()
+            .map(|creeper| utils::cell_of(app.world(), creeper))
+            .collect::<Vec<_>>(),
+        vec![CellPos::new(15, 10)]
+    );
+}
+
 //
 // ─── Effects ──────────────────────────────────────────────────────────────────
 //
@@ -2133,6 +2163,17 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_pool(Pool::energy(100)),
         );
         registry.register(building("tower", 3, 2));
+        // A den trains creepers, which stand only on creep.
+        registry.register(building("den", 1, 2).with_trainer(["creeper"]));
+        registry.register(
+            utils::walker("creeper", utils::GROUND_DOMAIN)
+                .with_train_time(2)
+                .with_field_placement([FieldPlacement::Requires {
+                    field: creep,
+                    of: Affiliation::Anyone,
+                    coverage: FieldCoverage::Every,
+                }]),
+        );
         registry.register(building("spire", 2, 2).with_field_placement([
             FieldPlacement::Requires {
                 field: creep,

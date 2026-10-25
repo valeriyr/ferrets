@@ -21,7 +21,7 @@ use ferrets_content::{
     pool_def::PoolId,
     registry::ContentRegistry,
     resource::ResourceSourceDef,
-    skills::{Casting, SkillCaster},
+    skills::{Casting, EntityCastEffect, SkillCaster, SkillId},
     tags,
     turret::TurretMount,
 };
@@ -73,6 +73,7 @@ use ferrets_simulation::{
     fields::FieldGrid,
     impacts::{Following, PendingImpacts},
     links::{self, LinkPassengers, Membership},
+    occupancy::OccupancyClass,
     order::Order,
     selection::Selection,
     session::{
@@ -253,7 +254,23 @@ struct GhostSprite {
     layers: LayerMask,
     /// How the remembered building held the cells under it.
     solidity: Solidity,
+    /// The plane the remembered building held them on.
+    class: OccupancyClass,
     shape: GhostShape,
+}
+
+/// A footprint a perspective makes out or remembers that a placement ghost
+/// may be refused over.
+#[derive(Debug, Clone, Copy)]
+pub struct MadeOutFootprint {
+    /// The layers it stands on.
+    pub layers: LayerMask,
+    /// The cells it covers.
+    pub rect: CellRect,
+    /// How it holds them.
+    pub solidity: Solidity,
+    /// The plane it holds them on.
+    pub class: OccupancyClass,
 }
 
 /// Last-seen enemy buildings, keyed by [`SimulationId`] (see [`GhostSprite`]).
@@ -266,21 +283,14 @@ impl Ghosts {
         self.0.values().map(|ghost| (ghost.origin, ghost.size))
     }
 
-    /// The footprint each remembered building that held its ground covered,
-    /// with the layers it stood on and its solidity.
-    pub(crate) fn remembered_footprints(
-        &self,
-    ) -> impl Iterator<Item = (LayerMask, CellRect, Solidity)> + '_ {
-        self.0
-            .values()
-            .filter(|ghost| ghost.solidity.holds_ground())
-            .map(|ghost| {
-                (
-                    ghost.layers,
-                    CellRect::new(CellPos::new(ghost.origin.0, ghost.origin.1), ghost.size),
-                    ghost.solidity,
-                )
-            })
+    /// The footprint of each remembered building.
+    pub(crate) fn remembered_footprints(&self) -> impl Iterator<Item = MadeOutFootprint> + '_ {
+        self.0.values().map(|ghost| MadeOutFootprint {
+            layers: ghost.layers,
+            rect: CellRect::new(CellPos::new(ghost.origin.0, ghost.origin.1), ghost.size),
+            solidity: ghost.solidity,
+            class: ghost.class,
+        })
     }
 }
 
@@ -2259,15 +2269,16 @@ fn pulse_progress(now: f32, started: u32) -> Option<f32> {
 /// Ring pulses marking skills that have just been cast.
 #[derive(Resource, Default)]
 pub struct SkillPulses {
-    /// Live pulses: what a skill landed on, and the tick its cast was
-    /// announced on.
-    active: Vec<(SkillTarget, u32)>,
+    /// Live pulses: what a skill landed on, the footprint a cast aimed at a
+    /// cell marks from there — what it summons, else the cell — and the tick
+    /// its cast was announced on.
+    active: Vec<(SkillTarget, CellSize, u32)>,
 }
 
 impl SkillPulses {
     /// What each live pulse marks.
     pub fn pulsed(&self) -> Vec<SkillTarget> {
-        self.active.iter().map(|&(target, _)| target).collect()
+        self.active.iter().map(|&(target, _, _)| target).collect()
     }
 }
 
@@ -2286,10 +2297,16 @@ pub fn collect_skill_pulses(world: &mut World) {
     world.resource_scope(|world, mut pulses: Mut<SkillPulses>| {
         pulses
             .active
-            .retain(|&(_, started)| tick.saturating_sub(started) <= PULSE_TICKS);
+            .retain(|&(_, _, started)| tick.saturating_sub(started) <= PULSE_TICKS);
         let index = world.resource::<EntityIndex>();
+        let registry = world.resource::<ContentRegistry>();
         for event in world.resource::<EventRecord>().events() {
-            let SimulationEvent::SkillCast { caster, target, .. } = event else {
+            let SimulationEvent::SkillCast {
+                caster,
+                target,
+                skill,
+            } = event
+            else {
                 continue;
             };
             let shown = match target {
@@ -2299,7 +2316,11 @@ pub fn collect_skill_pulses(world: &mut World) {
                     .is_some_and(|entity| judged(world, judge, entity).is_seen()),
             };
             if shown {
-                pulses.active.push((*target, tick));
+                let size = match target {
+                    SkillTarget::Position(_) => summoned_size(registry, *skill),
+                    SkillTarget::Entity(_) => CellSize::ONE,
+                };
+                pulses.active.push((*target, size, tick));
             }
         }
     });
@@ -2510,9 +2531,9 @@ pub fn draw_skill_pulses(
     let now = pulse_now(&session, &fixed);
     pulses
         .active
-        .retain(|&(_, started)| pulse_progress(now, started).is_some());
+        .retain(|&(_, _, started)| pulse_progress(now, started).is_some());
 
-    for &(target, started) in &pulses.active {
+    for &(target, size, started) in &pulses.active {
         let at = match target {
             SkillTarget::Entity(id) => rendered
                 .iter()
@@ -2523,7 +2544,7 @@ pub fn draw_skill_pulses(
             SkillTarget::Position(position) => {
                 let cell = CellPos::from(position);
                 (reveal.reveals() || sees(&session, &watch, &grid, cell.x, cell.y))
-                    .then(|| world_center(position, CellSize::ONE))
+                    .then(|| world_center(position, size))
             }
         };
         let Some(at) = at else {
@@ -2533,7 +2554,7 @@ pub fn draw_skill_pulses(
         let Some(progress) = pulse_progress(now, started) else {
             continue;
         };
-        let radius = CELL_PX * (0.35 + 0.55 * progress);
+        let radius = CELL_PX * (0.35 + 0.55 * progress) * size.width.max(size.height) as f32;
         gizmos.circle_2d(
             at.truncate(),
             radius,
@@ -3267,6 +3288,7 @@ pub fn draw_ghosts(
                     size,
                     layers: location_def.occupies(),
                     solidity: location_def.solidity(),
+                    class: OccupancyClass::of(registry.def(info.type_id())),
                     shape: ghost_shape(info.type_name(), size),
                 },
             );
@@ -4309,4 +4331,20 @@ fn walk(
 fn edge_offset(direction: Direction) -> Vec2 {
     let (dx, dy) = direction.step();
     Vec2::new(dx as f32, -(dy as f32)) * CELL_PX * 0.5
+}
+
+/// The footprint of what `skill` summons, or a single cell for a skill that
+/// summons nothing.
+fn summoned_size(registry: &ContentRegistry, skill: SkillId) -> CellSize {
+    match registry.skill_def(skill).map(|def| &def.caster) {
+        Some(SkillCaster::Entity {
+            effect: EntityCastEffect::Summon { entity_type, .. },
+            ..
+        }) => registry
+            .def(*entity_type)
+            .location
+            .expect("validated content defines a location")
+            .size(),
+        Some(SkillCaster::Entity { .. } | SkillCaster::Player { .. }) | None => CellSize::ONE,
+    }
 }

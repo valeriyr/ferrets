@@ -49,7 +49,8 @@ use ferrets_content::{
     skills::{
         AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, EntityCastTarget, FromAimTo,
         FromCasterTo, GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach,
-        Recipient, Refund, Shortfall, SkillCaster, SkillDef, Spot, SummonArrival, SummonAt, Whom,
+        Recipient, Refund, Shortfall, SkillCaster, SkillDef, Spot, SummonArrival, SummonAt,
+        SummonPlacement, Whom,
     },
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
@@ -817,7 +818,7 @@ fn parses_network_and_its_gateway() {
 
 #[test]
 fn parses_crossing_tunnel_and_its_end() {
-    let source = gateway_content(CROSSING, r#"tunnel = "tunnel", doors = "both""#, BOARDING);
+    let source = gateway_content(CROSSING, r#"tunnel = "tunnel", doors = "both""#, CROSSED);
     let registry = content::load(&engine(), &source).expect("load content");
 
     let tunnel = registry.tunnel("tunnel").expect("tunnel defined");
@@ -867,7 +868,7 @@ fn gateway_of_undefined_network_errors() {
 
 #[test]
 fn gateway_of_undefined_tunnel_errors() {
-    let source = gateway_content(CROSSING, r#"tunnel = "burrows", doors = "both""#, BOARDING);
+    let source = gateway_content(CROSSING, r#"tunnel = "burrows", doors = "both""#, CROSSED);
     assert_content_error(&source, "tunnel 'burrows' is not defined");
 }
 
@@ -3109,7 +3110,7 @@ fn summon_effect_reads_its_type_and_count() {
         define_skill("raise_dead", {
             cooldown = 10,
             caster = "entity",
-            effect = { summon = { at = "fallen", entity = "skeleton", count = 2, landing = "anywhere", arrives = "standing" } },
+            effect = { summon = { at = "fallen", entity = "skeleton", count = 2, placement = "nearby", landing = "anywhere", arrives = "standing" } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -3130,6 +3131,7 @@ fn summon_effect_reads_its_type_and_count() {
             },
             entity_type: skeleton,
             count: Quantity::Constant(2),
+            placement: SummonPlacement::Nearby,
             landing: Landing::Anywhere,
             within: Vec::new(),
             arrives: SummonArrival::Standing,
@@ -3152,7 +3154,7 @@ fn summon_effect_reads_its_landing_and_arrival() {
         define_skill("raise_mound", {
             cooldown = 10,
             caster = "entity",
-            effect = { summon = { at = "caster", entity = "mound", count = 1, landing = "sighted", arrives = "rising" } },
+            effect = { summon = { at = "caster", entity = "mound", count = 1, placement = "nearby", landing = "sighted", arrives = "rising" } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -3188,7 +3190,7 @@ fn summon_without_landing_errors() {
         define_skill("raise_mound", {
             cooldown = 10,
             caster = "entity",
-            effect = { summon = { at = "caster", entity = "mound", count = 1, arrives = "standing" } },
+            effect = { summon = { at = "caster", entity = "mound", count = 1, placement = "nearby", arrives = "standing" } },
         })
     "#;
     assert_content_error(
@@ -3210,7 +3212,7 @@ fn summon_without_arrival_errors() {
         define_skill("raise_mound", {
             cooldown = 10,
             caster = "entity",
-            effect = { summon = { at = "caster", entity = "mound", count = 1, landing = "anywhere" } },
+            effect = { summon = { at = "caster", entity = "mound", count = 1, placement = "nearby", landing = "anywhere" } },
         })
     "#;
     assert_content_error(
@@ -3235,7 +3237,7 @@ fn summon_reads_its_field_rules() {
             cooldown = 10,
             caster = "entity",
             effect = { summon = {
-                at = "caster", entity = "mound", count = 1, landing = "anywhere", arrives = "rising",
+                at = "caster", entity = "mound", count = 1, placement = "nearby", landing = "anywhere", arrives = "rising",
                 within = { { requires = "power", of = "own", coverage = "every" } },
             } },
         })
@@ -3275,12 +3277,86 @@ fn summon_naming_unknown_arrival_errors() {
         define_skill("raise_mound", {
             cooldown = 10,
             caster = "entity",
-            effect = { summon = { at = "caster", entity = "mound", count = 1, landing = "anywhere", arrives = "falling" } },
+            effect = { summon = { at = "caster", entity = "mound", count = 1, placement = "nearby", landing = "anywhere", arrives = "falling" } },
         })
     "#;
     assert_content_error(
         source,
         "summon arrival must be 'standing' or 'rising', found 'falling'",
+    );
+}
+
+#[test]
+fn summon_without_placement_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity("mound", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+        })
+        define_skill("raise_mound", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { summon = { at = { kind = "position" }, entity = "mound", count = 1, landing = "anywhere", arrives = "standing" } },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "field 'placement': error converting Lua nil to String",
+    );
+}
+
+#[test]
+fn summon_reads_exact_placement() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity("mound", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+        })
+        define_skill("raise_mound", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { summon = { at = { kind = "position" }, entity = "mound", count = 1, placement = "exact", landing = "anywhere", arrives = "standing" } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let skill = registry
+        .skill_def(registry.skill("raise_mound").expect("raise_mound defined"))
+        .expect("raise_mound defined");
+    let SkillCaster::Entity {
+        effect: EntityCastEffect::Summon { placement, .. },
+        ..
+    } = &skill.caster
+    else {
+        panic!("raise_mound is an entity summon");
+    };
+    assert_eq!(*placement, SummonPlacement::Exact);
+}
+
+#[test]
+fn summon_naming_unknown_placement_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity("mound", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            pools = { health = { maximum = 20 } },
+        })
+        define_skill("raise_mound", {
+            cooldown = 10,
+            caster = "entity",
+            effect = { summon = { at = "caster", entity = "mound", count = 1, placement = "anywhere", landing = "anywhere", arrives = "standing" } },
+        })
+    "#;
+    assert_content_error(
+        source,
+        "summon placement must be 'exact' or 'nearby', found 'anywhere'",
     );
 }
 
@@ -3408,7 +3484,7 @@ fn skill_numbers_read_stats() {
         define_skill("raise_host", {
             cooldown = 10,
             caster = "entity",
-            effect = { summon = { at = "caster", entity = "skeleton", count = { stat = "host_size" }, landing = "anywhere", arrives = "standing" } },
+            effect = { summon = { at = "caster", entity = "skeleton", count = { stat = "host_size" }, placement = "nearby", landing = "anywhere", arrives = "standing" } },
         })
         define_skill("recall", {
             cooldown = 10,
@@ -3461,7 +3537,7 @@ fn summon_of_undefined_type_errors() {
         define_skill("raise_dead", {
             cooldown = 10,
             caster = "entity",
-            effect = { summon = { at = "fallen", entity = "skeleton", count = 2, landing = "anywhere", arrives = "standing" } },
+            effect = { summon = { at = "fallen", entity = "skeleton", count = 2, placement = "nearby", landing = "anywhere", arrives = "standing" } },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -6444,8 +6520,8 @@ fn relocation_error(journey: &str) -> ScriptError {
 const CROSSING: &str =
     r#"carries = "any", boarding = "allied", other_end_lost = "stands", passage = "crosses""#;
 
-/// The boarding pair of stats a crossing gateway reads, written as Lua.
-const BOARDING: &str = "load_range = 1, load_period = 2";
+/// Every stat a crossing gateway both ways reads, written as Lua.
+const CROSSED: &str = "load_range = 1, load_period = 2, unload_range = 1";
 
 /// Every stat a held gateway both ways reads, written as Lua.
 const HELD: &str = "load_range = 1, load_period = 2, unload_range = 1, unload_period = 4";

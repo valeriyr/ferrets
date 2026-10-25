@@ -44,7 +44,8 @@ use crate::{
     rise::RisePool,
     skills::{
         Casting, Count, EntityCastEffect, EntityCastTarget, FromAimTo, FromCasterTo, Journey,
-        PlayerCastEffect, Reach, Recipient, SkillCaster, SkillDef, SkillId, SummonArrival, Whom,
+        PlayerCastEffect, Reach, Recipient, SkillCaster, SkillDef, SkillId, SummonArrival,
+        SummonAt, SummonPlacement, Whom,
     },
     stand::StandingAct,
     stats::EntityModifier,
@@ -901,8 +902,10 @@ impl ContentRegistry {
                         self.validate_detection(&format!("skill '{name}'"), *detection);
                     }
                     EntityCastEffect::Summon {
+                        at,
                         entity_type,
                         count,
+                        placement,
                         within,
                         arrives,
                         ..
@@ -926,6 +929,30 @@ impl ContentRegistry {
                             least(count) >= FixedU64::ONE,
                             "skill '{name}' summons nothing at all"
                         );
+                        // One aimed cell anchors one body; the caster's own
+                        // footprint, or a standing body's not raised over, is
+                        // no cell to stand on.
+                        match placement {
+                            SummonPlacement::Exact => {
+                                assert!(
+                                    *count == Quantity::Constant(1),
+                                    "skill '{name}' summons '{}' exactly in a count other than one",
+                                    summoned.name
+                                );
+                                assert!(
+                                    !matches!(at, SummonAt::Caster),
+                                    "skill '{name}' summons '{}' exactly on its caster",
+                                    summoned.name
+                                );
+                                assert!(
+                                    !matches!(at, SummonAt::Standing { .. })
+                                        || summoned.overbuilds.is_some(),
+                                    "skill '{name}' summons '{}' exactly on a standing body it is not raised over",
+                                    summoned.name
+                                );
+                            }
+                            SummonPlacement::Nearby => {}
+                        }
                         // A tunnel end has one other end: a summon of several
                         // would leave all but one unbound.
                         match summoned.gateway().map(GatewayDef::joins) {
@@ -2692,28 +2719,29 @@ impl ContentRegistry {
 
     /// Checks that a type declares every transport stat what it does reads,
     /// and none it leaves unread: a transporter reads all five; a gateway the
-    /// boarding pair through doors bodies enter by, and the unloading pair
-    /// through doors bodies leave by when what it joins holds, the periods
-    /// included.
+    /// boarding pair through doors bodies enter by, and through doors bodies
+    /// leave by the unload range, with the unload period when what it joins
+    /// holds.
     fn validate_transport_stats(&self, def: &EntityTypeDef) {
-        let (capacity, entering, leaving) = match &def.holder {
-            Some(Holder::Transporter(_)) => (true, true, true),
+        let (capacity, entering, leaving, paced) = match &def.holder {
+            Some(Holder::Transporter(_)) => (true, true, true, true),
             Some(Holder::Gateway(gateway)) => {
-                let held = self.joins_hold(gateway.joins());
+                let exits = gateway.doors().admits_exit();
                 (
                     false,
                     gateway.doors().admits_entrance(),
-                    held && gateway.doors().admits_exit(),
+                    exits,
+                    exits && self.joins_hold(gateway.joins()),
                 )
             }
-            None => (false, false, false),
+            None => (false, false, false, false),
         };
         for (stat, read) in [
             (EntityStatId::CARGO_CAPACITY, capacity),
             (EntityStatId::LOAD_RANGE, entering),
             (EntityStatId::LOAD_PERIOD, entering),
             (EntityStatId::UNLOAD_RANGE, leaving),
-            (EntityStatId::UNLOAD_PERIOD, leaving),
+            (EntityStatId::UNLOAD_PERIOD, paced),
         ] {
             let name = ENTITY_BUILTIN_STATS[stat.index()].name;
             match (read, def.base_stat(stat).is_some()) {

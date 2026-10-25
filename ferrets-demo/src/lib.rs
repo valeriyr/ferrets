@@ -202,6 +202,7 @@ pub fn run() {
                 input::targeting_input.in_set(render::ReadsSightings),
                 input::placement_input.in_set(render::ReadsSightings),
                 input::warp_placement_input.in_set(render::ReadsSightings),
+                input::summon_ghost.in_set(render::ReadsSightings),
                 input::issue_warp,
                 // F2 sandbox spawn issues a Spawn command, so it counts as input too.
                 debug::spawn_debug,

@@ -50,7 +50,7 @@ use ferrets_simulation::{
     player_research::PlayerResearch,
     resources::PlayerResources,
     selection::Selection,
-    session::GameSession,
+    session::{GameSession, local_role::LocalRole},
     simulation_id::SimulationId,
     spawn::{self, FieldReach},
     supply,
@@ -934,6 +934,69 @@ fn hovered_morph_names_its_price() {
 }
 
 #[test]
+fn build_button_asks_nothing_of_ground_before_site_is_placed() {
+    // On a field of land, a finished tunnel at (0, 0) never walks and stands
+    // where a tunnel anchored at (0, 0) would rise: the card has no site yet,
+    // so the button stands and its hint is the price — 100 gold, 50 wood, 80
+    // ticks at 20 a second.
+    let mut app = with_card_resources(utils::land_app_as(
+        LocalRole::Player(0),
+        MovementModel::Cell,
+    ));
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let (_, tunnel) =
+        utils::create_entity(app.world_mut(), "tunnel", utils::at_cell(0, 0), Some(0))
+            .expect("the demo content defines a tunnel");
+    utils::select(&mut app, tunnel, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    app.world_mut().insert_resource(Leading(Some(tunnel)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::BuildButton>(&mut app);
+
+    recolor_card(&mut app);
+
+    assert_ne!(card_color::<hud::BuildButton>(&mut app), hud::CARD_DISABLED);
+    assert_eq!(hint_text(&mut app), "100 gold, 50 wood, 4.0 s");
+}
+
+#[test]
+fn tunnel_under_construction_grays_its_build_button() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let (_, drone) =
+        utils::create_entity(app.world_mut(), "drone", utils::at_cell(10, 20), Some(0))
+            .expect("the demo content defines a drone");
+    let (_, tunnel) = spawn::spawn_founded(
+        app.world_mut(),
+        "tunnel",
+        utils::at_cell(20, 20),
+        Some(0),
+        FieldReach::Initial,
+        drone,
+        RiseAttendance::Unattended { founder: drone },
+        &[],
+        &[],
+    )
+    .expect("the tunnel fits at (20, 20)");
+    utils::select(&mut app, tunnel, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    app.world_mut().insert_resource(Leading(Some(tunnel)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::BuildButton>(&mut app);
+
+    recolor_card(&mut app);
+
+    assert_eq!(card_color::<hud::BuildButton>(&mut app), hud::CARD_DISABLED);
+    assert_eq!(hint_text(&mut app), "Still under construction");
+}
+
+#[test]
 fn bound_tunnel_grays_its_build_button_naming_its_other_end() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
@@ -949,6 +1012,8 @@ fn bound_tunnel_grays_its_build_button_naming_its_other_end() {
         FieldReach::Initial,
         tunnel,
         RiseAttendance::Unattended { founder: tunnel },
+        &[],
+        &[],
     )
     .expect("the other end fits at (30, 20)");
     utils::select(&mut app, tunnel, SelectMode::Replace);
@@ -1232,7 +1297,11 @@ fn card_color<C: Component>(app: &mut App) -> Color {
 
 /// A headless game with the resources the command-card input systems take.
 fn card_app() -> App {
-    let mut app = utils::demo_map_app(MovementModel::Cell);
+    with_card_resources(utils::demo_map_app(MovementModel::Cell))
+}
+
+/// `app` with the resources the command card systems read.
+fn with_card_resources(mut app: App) -> App {
     app.world_mut().init_resource::<Inspected>();
     app.world_mut().init_resource::<ObserverPerspective>();
     app.world_mut().init_resource::<InputMode>();

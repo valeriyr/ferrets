@@ -376,7 +376,7 @@ fn relay_refuses_well_over_spring_walker_stands_on_until_walker_dies() {
     let (relay, relay_id) = utils::create_owned(&mut app, "relay", 5, 10, 0);
     utils::create_entity(app.world_mut(), "spring", utils::pos(12, 10), None)
         .expect("the spring is registered");
-    // The spring holds no ground of its own, so a walker stands on it.
+    // The spring claims no cell, so a walker stands on it.
     let (lookout, lookout_id) = utils::create_owned(&mut app, "lookout", 12, 10, 1);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
@@ -824,7 +824,7 @@ fn app() -> App {
         registry.register(
             utils::building("vein").with_resource_source("gold", DepletionPolicy::Destroy),
         );
-        // A spring holds no ground of its own; a well is raised over one.
+        // A spring claims no cell; a well is raised over one.
         registry.register(
             EntityTypeDef::new("spring")
                 .with_location(

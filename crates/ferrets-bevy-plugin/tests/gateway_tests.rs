@@ -27,7 +27,10 @@ use ferrets_content::{
     pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
-    skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, SummonArrival, SummonAt},
+    skills::{
+        Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, SummonArrival, SummonAt,
+        SummonPlacement,
+    },
     terrains::Terrains,
     transport::{PassengerConduct, PassengerFate},
     tunnel::{OtherEndLost, Passage, TunnelDef},
@@ -1697,6 +1700,29 @@ fn beast_waits_to_cross_until_cell_beside_other_end_frees() {
     assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(21, 21));
 }
 
+#[test]
+fn beast_waits_to_cross_while_nothing_in_other_ends_unload_range_takes_it() {
+    // The tunnel's far end at (20, 20) lets bodies out one cell off, and
+    // critters, which no tunnel carries, stand on all eight cells of that
+    // ring. The open ground two cells off lies well inside the placement
+    // search's radius: the beast waits rather than stepping out there.
+    let mut app = app();
+    let ((_, raiser_id), _) = tunnel_pair(&mut app, (5, 5), (20, 20));
+    let (beast, beast_id) = utils::create_owned(&mut app, "beast", 4, 5, 0);
+    for y in 19..22 {
+        for x in 19..22 {
+            if (x, y) != (20, 20) {
+                utils::create_owned(&mut app, "critter", x, y, 0);
+            }
+        }
+    }
+
+    utils::board(&mut app, beast_id, raiser_id);
+    utils::run_ticks(&mut app, utils::APPLY + 5);
+
+    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 5));
+}
+
 //
 // ─── Brain's view ────────────────────────────────────────────────────────────
 //
@@ -1979,18 +2005,22 @@ fn register(app: &mut App) {
     }
 
     registry.register(
-        entering(utils::building("tunnel").with_gateway(Joins::Tunnel(tunnel), Doors::Both))
-            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
-            .with_train_time(TRAIN_TIME)
-            .with_trainer(["tunnel"])
-            .with_rise(RISE_TIME, utils::rise_initial_pools(&[PoolId::HEALTH]))
-            .with_builder(["tunnel"], BuilderAttendance::Unattended)
-            .with_morphs([change("trench"), change("shaft")]),
+        crossed(entering(
+            utils::building("tunnel").with_gateway(Joins::Tunnel(tunnel), Doors::Both),
+        ))
+        .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
+        .with_train_time(TRAIN_TIME)
+        .with_trainer(["tunnel"])
+        .with_rise(RISE_TIME, utils::rise_initial_pools(&[PoolId::HEALTH]))
+        .with_builder(["tunnel"], BuilderAttendance::Unattended)
+        .with_morphs([change("trench"), change("shaft")]),
     );
     // A tunnel end that warps its other end in, anywhere.
     registry.register(
-        entering(utils::building("rift").with_gateway(Joins::Tunnel(tunnel), Doors::Both))
-            .with_warper(["tunnel"], Vec::new(), Landing::Anywhere),
+        crossed(entering(
+            utils::building("rift").with_gateway(Joins::Tunnel(tunnel), Doors::Both),
+        ))
+        .with_warper(["tunnel"], Vec::new(), Landing::Anywhere),
     );
     registry.register(
         EntityTypeDef::new("corpse")
@@ -2015,6 +2045,7 @@ fn register(app: &mut App) {
                 at,
                 entity_type: raised,
                 count: Quantity::Constant(1),
+                placement: SummonPlacement::Nearby,
                 landing: Landing::Anywhere,
                 within: Vec::new(),
                 arrives: SummonArrival::Standing,
@@ -2036,22 +2067,28 @@ fn register(app: &mut App) {
         }),
     );
     registry.register(
-        entering(utils::building("shaft").with_gateway(Joins::Tunnel(tunnel), Doors::Both))
-            .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(5))
-            .with_skills([dig, exhume]),
+        crossed(entering(
+            utils::building("shaft").with_gateway(Joins::Tunnel(tunnel), Doors::Both),
+        ))
+        .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(5))
+        .with_skills([dig, exhume]),
     );
     registry.register(
-        entering(utils::building("trench").with_gateway(Joins::Tunnel(trench), Doors::Both))
-            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
-            .with_train_time(TRAIN_TIME)
-            .with_trainer(["trench"])
-            .with_rise(RISE_TIME, utils::rise_initial_pools(&[PoolId::HEALTH]))
-            .with_builder(["trench"], BuilderAttendance::Unattended),
+        crossed(entering(
+            utils::building("trench").with_gateway(Joins::Tunnel(trench), Doors::Both),
+        ))
+        .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
+        .with_train_time(TRAIN_TIME)
+        .with_trainer(["trench"])
+        .with_rise(RISE_TIME, utils::rise_initial_pools(&[PoolId::HEALTH]))
+        .with_builder(["trench"], BuilderAttendance::Unattended),
     );
     registry.register(
-        entering(utils::building("chute_head").with_gateway(Joins::Tunnel(chute), Doors::Both))
-            .with_train_time(TRAIN_TIME)
-            .with_trainer(["chute_foot"]),
+        crossed(entering(
+            utils::building("chute_head").with_gateway(Joins::Tunnel(chute), Doors::Both),
+        ))
+        .with_train_time(TRAIN_TIME)
+        .with_trainer(["chute_foot"]),
     );
     registry.register(
         entering(utils::building("chute_foot").with_gateway(Joins::Tunnel(chute), Doors::Entrance))
@@ -2125,6 +2162,11 @@ fn register(app: &mut App) {
 fn entering(def: EntityTypeDef) -> EntityTypeDef {
     def.with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
         .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+}
+
+/// `def` letting a body crossing to it out one cell off.
+fn crossed(def: EntityTypeDef) -> EntityTypeDef {
+    def.with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
 }
 
 /// `def` letting bodies out up to two cells off, at once.

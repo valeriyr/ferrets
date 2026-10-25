@@ -190,7 +190,7 @@ fn entity_killed_same_tick_still_counts_as_produced() {
         world,
         "soldier",
         utils::pos(4, 4),
-        Some(0),
+        0,
         FieldReach::Initial,
         trainer,
     )

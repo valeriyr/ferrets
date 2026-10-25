@@ -16,7 +16,7 @@ use ferrets_content::{
     projectile::Aim,
     registry::ContentRegistry,
     resource::{Banking, DepletionPolicy},
-    skills::{GatherSight, Refund, Shortfall, SummonArrival},
+    skills::{GatherSight, Refund, Shortfall, SummonArrival, SummonPlacement},
     splash::SplashShape,
     stack_rule::StackRule,
     stats::ModifierOp,
@@ -458,6 +458,19 @@ pub(crate) fn summon_arrival(value: &str) -> crate::Result<SummonArrival> {
         &[
             ("standing", SummonArrival::Standing),
             ("rising", SummonArrival::Rising),
+        ],
+    )
+}
+
+/// Maps a summon placement name to its enum: whether a summoned body is set
+/// down on the aimed cell or the nearest that takes it.
+pub(crate) fn summon_placement(value: &str) -> crate::Result<SummonPlacement> {
+    keyword(
+        "summon placement",
+        value,
+        &[
+            ("exact", SummonPlacement::Exact),
+            ("nearby", SummonPlacement::Nearby),
         ],
     )
 }

@@ -27,8 +27,9 @@ pub enum Footing {
     /// Ground its shape may stand on that nothing else holds: what a footprint
     /// claiming its ground needs.
     Free,
-    /// Any ground its shape may stand on, whoever is standing there: what a
-    /// footprint that shares its ground needs.
+    /// Ground its shape may stand on that no standing footprint holds,
+    /// whoever's claims lie on it: what a footprint that shares its ground
+    /// needs.
     Shared,
 }
 
@@ -48,8 +49,8 @@ const DIRECTIONS: [(i32, i32); 8] = [
 /// to `max_radius`.
 ///
 /// `footing` says what counts as a placement: ground nobody holds, or ground
-/// its shape may stand on whoever holds it; `accept` takes or refuses each
-/// anchor that footing admits.
+/// its shape may stand on that no standing footprint holds, whoever's claims
+/// lie on it; `accept` takes or refuses each anchor that footing admits.
 ///
 /// The scan order — rings outward, and within a ring the ground closest to the
 /// middle of `around` first, ties by row then column — is what makes the answer
@@ -236,7 +237,7 @@ enum Walk {
 fn fits(grid: &NavGrid, shape: MoverShape, candidate: CellPos, footing: Footing) -> bool {
     match footing {
         Footing::Free => grid.fits(candidate, shape),
-        Footing::Shared => grid.fits_ground(candidate, shape),
+        Footing::Shared => grid.fits_statically(candidate, shape),
     }
 }
 

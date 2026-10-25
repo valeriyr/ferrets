@@ -10,8 +10,9 @@ use crate::{
     beside::Beside,
     components::{
         attached::AttachedComponent,
+        brood::BredComponent,
         build::OverbuiltComponent,
-        dying::DyingComponent,
+        dying::{DiedComponent, DyingComponent},
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
@@ -156,6 +157,16 @@ pub fn dying(world: &World, entity: Entity) -> bool {
     world.entity(entity).contains::<DyingComponent>()
 }
 
+/// Whether `entity` was bred by a breeder and is still tied to it.
+pub fn bred(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<BredComponent>()
+}
+
+/// Whether `entity`'s dying phase has ended: it is about to be despawned.
+pub fn died(world: &World, entity: Entity) -> bool {
+    world.entity(entity).contains::<DiedComponent>()
+}
+
 /// Whether `entity` stands on the map, alive: on the grid, with a place.
 pub fn stands(world: &World, entity: Entity) -> bool {
     world.entity(entity).contains::<LocationComponent>()
@@ -190,6 +201,18 @@ pub fn overbuilt(world: &World, entity: Entity) -> bool {
 /// Whether `entity` sits in a berth of a job, on the map and holding no cells.
 pub fn attached(world: &World, entity: Entity) -> bool {
     world.entity(entity).contains::<AttachedComponent>()
+}
+
+/// The job whose berth `entity` sits in, or `None` once it is gone from the
+/// world.
+///
+/// Panics if `entity` sits in no berth.
+pub fn berth_job(world: &World, entity: Entity) -> Option<Entity> {
+    let job = world
+        .get::<AttachedComponent>(entity)
+        .expect("only an attached entity sits in a berth")
+        .job;
+    world.resource::<EntityIndex>().any(job)
 }
 
 /// Whether `entity` rides aboard a holder.

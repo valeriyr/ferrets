@@ -153,8 +153,8 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             // Across, it carries on with what it queued behind the crossing,
             // from where it came out.
             Intake::Taken(Through::Across { .. }) => Processing::state(OrderState::Finished),
-            // Nothing beside the other end takes it yet: it waits its turn
-            // again.
+            // Nothing in the other end's unload range takes it yet: it waits
+            // its turn again.
             Intake::Waits => {
                 world.entity_mut(entity).insert(board);
                 Processing::state(OrderState::InProcessing)

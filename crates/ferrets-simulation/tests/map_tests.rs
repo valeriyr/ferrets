@@ -831,54 +831,6 @@ fn each_ranged_layer_takes_its_own_relief() {
 }
 
 #[test]
-fn static_placement_searches_take_only_flat_ground() {
-    // The split ramp's band: cliff columns 1 and 2 on rows 0, 2 and 3, the
-    // ramp across row 1, column 0 flat at 1. Around the ramp's (1, 1) a
-    // static body skips the ramp; in the first ring the cardinals tie and go
-    // by row, so the cliff at (1, 0) comes first and is off a ramp walker's
-    // ground, then the flat (0, 1) takes it.
-    let live = Map::from_data(&split_ramp_data(), &hill_registry());
-    let shape = MoverShape::point(LAND.into(), GROUND_LAYER, Some(CliffCrossing::Ramp));
-    let near = |class| {
-        live.find_placement_near(
-            CellPos::new(1, 1),
-            CellSize::ONE,
-            shape,
-            Solidity::Solid,
-            class,
-        )
-    };
-
-    assert_eq!(near(OccupancyClass::Static), Some(CellPos::new(0, 1)));
-    assert_eq!(near(OccupancyClass::Claim), Some(CellPos::new(1, 1)));
-    // Leaning toward (3, 1), the ramp's (2, 1) comes first and is skipped;
-    // the first ring's flat cells are column 0, and (0, 1) lies nearest.
-    assert_eq!(
-        live.find_placement_near_toward(
-            CellPos::new(1, 1),
-            CellSize::ONE,
-            shape,
-            Solidity::Solid,
-            OccupancyClass::Static,
-            CellRect::new(CellPos::new(3, 1), CellSize::ONE),
-        ),
-        Some(CellPos::new(0, 1))
-    );
-    // Two at most: the flat cardinal, then the first flat diagonal by row.
-    assert_eq!(
-        live.find_placements_near(
-            CellPos::new(1, 1),
-            CellSize::ONE,
-            shape,
-            Solidity::Solid,
-            OccupancyClass::Static,
-            2,
-        ),
-        vec![CellPos::new(0, 1), CellPos::new(0, 0)]
-    );
-}
-
-#[test]
 fn footprint_step_crosses_only_edges_its_crossing_crosses() {
     // A grid painted with no cliff bands, so the plateau's edge lies between
     // two flat cells: only the step rule refuses (3, 0) to (4, 0).
@@ -1023,6 +975,63 @@ fn taking_partially_claimed_rect_panics_under_cell_model() {
     map.place(mark(&location, unit, OccupancyClass::Claim));
 
     map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
+}
+
+#[test]
+fn statically_free_ground_ignores_claims_and_what_is_lifted() {
+    // A 2×1 footprint at (2, 0): a claim on (2, 0) does not hold it; a
+    // standing footprint on (3, 0) does, unless it is the one lifted.
+    let mut map = wall_test_map();
+    let placed = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let body = shape(CellSize::new(2, 1));
+    let claimer = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    map.place(mark(&claimer, shape(CellSize::ONE), OccupancyClass::Claim));
+    assert!(map.is_statically_free_over_lifted(&placed, body, &[]));
+
+    let standing = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
+    let wall = mark(&standing, shape(CellSize::ONE), OccupancyClass::Static);
+    map.place(wall);
+    assert!(!map.is_statically_free_over_lifted(&placed, body, &[]));
+    assert!(map.is_statically_free_over_lifted(&placed, body, &[wall]));
+}
+
+#[test]
+fn reservation_leaves_reserver_own_claim_where_it_stands() {
+    // A 1×1 mover at (2, 0) reserves a 2×1 footprint from there: its own cell
+    // stays under its standing claim, and only (3, 0) is claimed for it.
+    let mut map = wall_test_map();
+    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let standing = mark(&location, shape(CellSize::ONE), OccupancyClass::Claim);
+    map.place(standing);
+
+    let reserved = map.reserve_claim(
+        GROUND_LAYER.into(),
+        CellPos::new(2, 0),
+        CellSize::new(2, 1),
+        Some(standing),
+    );
+
+    assert_eq!(reserved, vec![CellPos::new(3, 0)]);
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
+#[should_panic(
+    expected = "a reservation finds a cell claimed only under the reserver's own standing claim"
+)]
+fn reservation_over_cell_another_claims_panics() {
+    // A mover at (3, 0) claims a cell of the footprint a body standing
+    // elsewhere reserves.
+    let mut map = wall_test_map();
+    let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
+    map.place(mark(&location, shape(CellSize::ONE), OccupancyClass::Claim));
+
+    map.reserve_claim(
+        GROUND_LAYER.into(),
+        CellPos::new(2, 0),
+        CellSize::new(2, 1),
+        None,
+    );
 }
 
 #[test]

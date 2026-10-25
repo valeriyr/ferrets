@@ -9,13 +9,17 @@ use crate::domain::DomainId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Solidity {
     /// The footprint claims the entity's layers: others collide with it, and
-    /// no footprint is raised over it.
+    /// no footprint is raised over a body that never walks, no solid one over
+    /// a mover.
     Solid,
     /// The footprint claims nothing, so movers cross it freely, but the
-    /// entity is still there: no static footprint is raised over it.
+    /// entity is still there: no static footprint is raised over a body that
+    /// never walks, no solid static one over a mover.
     Underfoot,
-    /// The footprint holds nothing at all: movers cross it, anything may be
-    /// raised over it, and entities of this solidity can share cells.
+    /// The footprint claims nothing, so movers cross it, and entities of this
+    /// solidity share its cells, but no static footprint of another solidity
+    /// is raised over a body that never walks, no solid static one over a
+    /// mover.
     Passable,
 }
 
@@ -29,13 +33,17 @@ impl Solidity {
         }
     }
 
-    /// Whether a footprint of this solidity keeps a static one from being
-    /// raised over the cells it covers.
+    /// Whether a footprint of this solidity keeps a static footprint of
+    /// `raised` from being raised over the cells it covers.
     #[inline]
-    pub fn holds_ground(self) -> bool {
-        match self {
-            Solidity::Solid | Solidity::Underfoot => true,
-            Solidity::Passable => false,
+    pub fn keeps_off(self, raised: Solidity) -> bool {
+        match (self, raised) {
+            (
+                Solidity::Solid | Solidity::Underfoot,
+                Solidity::Solid | Solidity::Underfoot | Solidity::Passable,
+            ) => true,
+            (Solidity::Passable, Solidity::Solid | Solidity::Underfoot) => true,
+            (Solidity::Passable, Solidity::Passable) => false,
         }
     }
 }

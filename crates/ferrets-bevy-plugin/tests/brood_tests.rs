@@ -797,7 +797,7 @@ fn nearby_landing_moves_form_that_does_not_fit_where_it_grew() {
     utils::run_ticks(&mut app, 10);
     let grub = alive_of_type(&mut app, "grub")[0];
 
-    // A 3×3 recentred on the egg's cell would overlap the hatch; it lands on
+    // A 3×3 recentered on the egg's cell would overlap the hatch; it lands on
     // the nearest ground that takes it instead.
     order_morph(&mut app, grub, "bulk");
     utils::run_ticks(&mut app, 11);
@@ -1143,6 +1143,40 @@ fn canceled_growth_dies_when_no_seat_is_free() {
 }
 
 #[test]
+fn canceled_growth_with_no_seat_refunds_before_it_dies() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    utils::record_announcements(&mut app);
+    utils::grant_gold(&mut app, 10);
+    let hatch = utils::place(&mut app, "hatch", 10, 10, 0);
+    utils::run_ticks(&mut app, 10);
+    let grub = alive_of_type(&mut app, "grub")[0];
+    let grub_id = entity_def::simulation_id(app.world(), grub);
+
+    // The egg's hatch is gone: no seat for the grub, which dies in the egg it
+    // wears once the 10 gold is back.
+    order_morph(&mut app, grub, "worker");
+    utils::run_ticks(&mut app, 2);
+    spawn::destroy_entity(app.world_mut(), hatch);
+    utils::run_ticks(&mut app, 1);
+    utils::soft_cancel_orders(app.world_mut(), grub);
+    utils::run_ticks(&mut app, 1);
+
+    let events = &app.world().resource::<utils::Announced>().0;
+    let refunded = events
+        .iter()
+        .position(|event| matches!(event, SimulationEvent::ResourcesRefunded { .. }))
+        .expect("the growth is refunded");
+    let died = events
+        .iter()
+        .position(|event| {
+            matches!(event, SimulationEvent::EntityDied { entity, .. } if *entity == grub_id)
+        })
+        .expect("the grub dies");
+    assert!(refunded < died);
+    assert_eq!(utils::gold(app.world()), 10);
+}
+
+#[test]
 fn canceled_growth_dies_when_breeder_is_gone() {
     let mut app = utils::brood_app(MovementModel::Cell);
     utils::record_announcements(&mut app);
@@ -1173,6 +1207,51 @@ fn canceled_growth_dies_when_breeder_is_gone() {
                     if *entity == grub_id && *of == hatch_id
             ))
     );
+}
+
+#[test]
+fn canceled_change_whose_form_cannot_go_back_refunds_and_settles_brood() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    utils::record_announcements(&mut app);
+    utils::grant_gold(&mut app, 10);
+    let hatch = utils::place(&mut app, "rug_hatch", 10, 10, 0);
+    let hatch_id = entity_def::simulation_id(app.world(), hatch);
+    utils::run_ticks(&mut app, 20);
+    let grub_ids: Vec<SimulationId> = alive_of_type(&mut app, "grub")
+        .iter()
+        .map(|&grub| entity_def::simulation_id(app.world(), grub))
+        .collect();
+    assert_eq!(grub_ids.len(), 2);
+
+    // The rug shell lies underfoot, so a worker stands on its (11, 11);
+    // called off, the hatch cannot go back over the worker and is destroyed:
+    // the 10 gold back, its grubs perishing on the hatch's terms.
+    order_morph(&mut app, hatch, "great_hatch");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(type_name_of(&app, hatch), "rug_shell");
+    assert_eq!(utils::gold(app.world()), 0);
+    utils::place(&mut app, "worker", 11, 11, 0);
+    utils::soft_cancel_orders(app.world_mut(), hatch);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(utils::gold(app.world()), 10);
+    let died = |entity: SimulationId, cause: DeathCause| {
+        app.world()
+            .resource::<utils::Announced>()
+            .0
+            .iter()
+            .any(|event| {
+                matches!(
+                    event,
+                    SimulationEvent::EntityDied { entity: died, cause: of, .. }
+                        if *died == entity && *of == cause
+                )
+            })
+    };
+    assert!(died(hatch_id, DeathCause::Canceled));
+    for grub_id in grub_ids {
+        assert!(died(grub_id, DeathCause::Orphaned { of: hatch_id }));
+    }
 }
 
 #[test]

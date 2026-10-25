@@ -31,7 +31,8 @@ pub struct MorphComponent {
     /// Ticks spent so far.
     pub progress: u32,
     /// The ground claimed ahead for the destination footprint. `None` when
-    /// the transition revalidates at completion instead of reserving.
+    /// nothing is held ahead: the transition does not reserve, or its
+    /// destination claims no cells.
     pub reservation: Option<MorphReservation>,
     /// What each pool held when the change started.
     pub before: Vec<(PoolId, FixedU64)>,

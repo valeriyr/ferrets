@@ -1677,11 +1677,12 @@ enum CardAction {
 }
 
 /// Recolors the gated card buttons from what the executor would currently
-/// allow: a train, build, research, skill or change of form the leading
-/// entity may not start now (see [`orders::can_start`]), or whose
-/// requirements are unmet, grays out, as does a research that is done or
-/// already under way. The hovered button's price, or a grayed one's reason,
-/// is written to the [`CardHint`] line.
+/// allow: a train, research, skill or change of form the leading entity may
+/// not start now (see [`orders::can_start`]), or any whose requirements are
+/// unmet, grays out, as does a research that is done or already under way;
+/// a build, whose site is not placed yet, by its requirements, a bound tunnel
+/// end and the builder's operation alone. The hovered button's price, or a
+/// grayed one's reason, is written to the [`CardHint`] line.
 pub fn update_card_availability(world: &mut World) {
     // A watcher has no card to recolor — update_command_card despawned it.
     let Some(player) = world.resource::<GameSession>().local_player() else {
@@ -1854,19 +1855,15 @@ pub fn update_card_availability(world: &mut World) {
                 BUTTON_NORMAL,
                 BUTTON_HOVERED,
             ),
-            CardAction::Build(type_name) => {
-                // The site's cell is chosen after the click; the start check
-                // reads the builder and the type, not the ground.
-                let order = Order::Build {
-                    type_name: type_name.clone(),
-                    position: FixedUVec2::ZERO,
-                };
-                (
-                    type_requirements_met(world, type_name) && starts(world, order),
-                    BUILD_NORMAL,
-                    BUILD_HOVERED,
-                )
-            }
+            // The site's cell is chosen after the click, and the start check
+            // runs on the order placed there.
+            CardAction::Build(type_name) => (
+                type_requirements_met(world, type_name)
+                    && !raising_refused(world, leading, type_name)
+                    && operating(world),
+                BUILD_NORMAL,
+                BUILD_HOVERED,
+            ),
             CardAction::Research(research) => {
                 let available = !world
                     .resource::<PlayerResearch>()
@@ -1954,6 +1951,7 @@ pub fn update_card_availability(world: &mut World) {
     };
     let hint = match aiming {
         AimVerdict::Refuses(refusal) => aim_refusal_words(refusal).to_string(),
+        AimVerdict::OutOfReach => "Out of reach".to_string(),
         AimVerdict::Takes | AimVerdict::Idle => hint.unwrap_or_default(),
     };
     let mut lines = world.query_filtered::<&mut Text, With<CardHint>>();
@@ -2129,13 +2127,11 @@ fn card_hint(
         CardAction::Build(type_name) => of_type(type_name)
             .or_else(|| bound(type_name))
             .or_else(|| {
-                refused(
-                    world,
-                    Order::Build {
-                        type_name: type_name.clone(),
-                        position: FixedUVec2::ZERO,
-                    },
-                )
+                leading
+                    .map(|entity| {
+                        operation_words(world, entity, entity_def::operation(world, entity))
+                    })
+                    .filter(|words| !words.is_empty())
             })
             .unwrap_or_default(),
         CardAction::Research(research) => {
@@ -2234,6 +2230,7 @@ fn card_hint(
                 | Refusal::TargetUnfit
                 | Refusal::Busy
                 | Refusal::NoRoom
+                | Refusal::OutOfReach
                 | Refusal::NoSupply => refusal_words(world, entity, refusal),
             })
             .unwrap_or_default(),
@@ -2456,6 +2453,7 @@ fn refusal_words(world: &World, entity: Entity, refusal: Refusal) -> String {
         Refusal::TargetUnfit => "The target will not do",
         Refusal::Busy => "Busy",
         Refusal::NoRoom => "No room for it",
+        Refusal::OutOfReach => "Out of reach",
         Refusal::NoSupply => "Not enough supply",
     }
     .to_string()

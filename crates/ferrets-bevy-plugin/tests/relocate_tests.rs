@@ -629,9 +629,10 @@ fn body_mid_crossing_lifts_cell_its_crossing_claimed() {
     let mut app = app();
     let (snail, snail_id) = utils::create_owned(&mut app, "snail", 5, 5, 0);
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 9, 5, 0);
-    // Every cell held but a corridor west of the snail and the mage's own.
+    // Every cell held but a corridor west of the snail, the snail's own and
+    // the mage's own.
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
-    for x in 1..=4 {
+    for x in 1..=5 {
         utils::free_cell(&mut app, CellPos::new(x, 5));
     }
     utils::free_cell(&mut app, CellPos::new(9, 5));
@@ -707,6 +708,22 @@ fn portal_takes_caster_and_those_around_it_to_aimed_hall() {
     assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(20, 19));
 }
 
+#[test]
+fn portal_comes_out_of_aimed_hall_footprint_not_its_corner() {
+    // The aimed hall at the map's corner, (0..1, 0..1): its corner cell's
+    // neighbors are hall or off the map, yet its ring is open. The mage comes
+    // out of the whole footprint, on the ring cell nearest where it stood,
+    // (2, 2).
+    let mut app = app();
+    let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
+    let (_, hall_id) = utils::create_owned(&mut app, "hall", 0, 0, 0);
+
+    utils::cast_on(&mut app, mage_id, "portal", hall_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(2, 2));
+}
+
 //
 // ─── Home ────────────────────────────────────────────────────────────────────
 //
@@ -725,6 +742,22 @@ fn homeward_goes_to_nearest_finished_hall() {
 
     // Beside the hall at (14..16, 5..7), on the side it came from.
     assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(13, 5));
+}
+
+#[test]
+fn homeward_comes_out_of_hall_footprint_not_its_corner() {
+    // The hall stands at the map's corner, (0..1, 0..1): its corner cell's
+    // neighbors are hall or off the map, yet its ring is open. The mage comes
+    // out of the whole footprint, on the ring cell nearest where it stood,
+    // (2, 2).
+    let mut app = app();
+    let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
+    utils::create_owned(&mut app, "hall", 0, 0, 0);
+
+    utils::cast_self(&mut app, mage_id, "homeward");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(2, 2));
 }
 
 #[test]
@@ -780,6 +813,22 @@ fn sent_home_unit_goes_to_hall_nearest_aim() {
 
     // Beside the hall at (25..27, 5..7), on the side it came from.
     assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(24, 5));
+}
+
+#[test]
+fn sent_home_unit_comes_out_of_hall_footprint_not_its_corner() {
+    // The hall at the map's corner, (0..1, 0..1), as for the mage going home:
+    // the footman sent there comes out of the whole footprint, on the ring
+    // cell nearest where it stood, (2, 2).
+    let mut app = app();
+    let (_, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
+    let (footman, footman_id) = utils::create_owned(&mut app, "footman", 6, 6, 0);
+    utils::create_owned(&mut app, "hall", 0, 0, 0);
+
+    utils::cast_on(&mut app, mage_id, "send_home", footman_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(2, 2));
 }
 
 #[test]

@@ -12,7 +12,7 @@ use super::{
     orders::{self, Refusal},
 };
 use crate::{
-    beside::{Beside, Lean},
+    beside::Lean,
     components::{
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner,
@@ -107,8 +107,8 @@ pub(crate) fn next_aboard(
         .find(|&id| after.is_none_or(|after| id > after))
 }
 
-/// Sets `passenger` down beside `transporter`, leaning as `lean` says. Out,
-/// it is aboard no longer.
+/// Sets `passenger` down within `transporter`'s unload range, leaning as
+/// `lean` says. Out, it is aboard no longer.
 pub(crate) fn let_out(
     world: &mut World,
     transporter: Entity,
@@ -116,12 +116,7 @@ pub(crate) fn let_out(
     lean: Lean,
 ) -> SetDown {
     let transporter_id = entity_def::simulation_id(world, transporter);
-    let set_down = spawn::place_back_beside_admitted(
-        world,
-        passenger,
-        Beside::Container(transporter_id),
-        lean,
-    );
+    let set_down = spawn::place_back_from_holder(world, passenger, transporter_id, lean);
     match set_down {
         SetDown::Placed => {
             let passenger_id = entity_def::simulation_id(world, passenger);

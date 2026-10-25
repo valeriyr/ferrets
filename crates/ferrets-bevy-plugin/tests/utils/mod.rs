@@ -1007,7 +1007,10 @@ fn brood_change(into: &str) -> MorphTransition {
 ///   through a `shell` (which seats but breeds nothing), into `bare_hatch`
 ///   (no berths) and into `tight_hatch` (two seats, limit two). `ready_hatch` is a hatch owing two
 ///   grubs when it stands, built by a `digger` in 20 ticks; `stat_hatch`
-///   reads its period from the `brood_period` stat, 6.
+///   reads its period from the `brood_period` stat, 6. `rug_hatch` breeds as
+///   a hatch and changes for 10 gold, refunded when called off, into a
+///   `great_hatch` through a `rug_shell` lying underfoot (which seats but
+///   breeds nothing).
 /// - `grub` is passable, roams, and grows for 10 gold into a
 ///   `worker` (1 supply, counted as production) or, in 20 ticks, a `brute`
 ///   (2 supply, needs a `den`) inside a solid `egg`, both returning it when the growth ends
@@ -1063,6 +1066,39 @@ pub fn brood_app(model: MovementModel) -> App {
                 ]),
         );
         registry.register(brood_building("shell").with_berths(brood_berths(4)));
+        registry.register(
+            brood_building("rug_hatch")
+                .with_berths(brood_berths(4))
+                .with_breeder("grub", Quantity::Constant(10), 3, 0, OrphanFate::Perish)
+                .with_morphs([MorphTransition::new(
+                    "great_hatch",
+                    MorphCourse::via(
+                        "rug_shell",
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                        ViaInterrupted::reverts([(
+                            PoolId::HEALTH,
+                            RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
+                        )]),
+                    ),
+                    Quantity::Constant(10),
+                    MorphPlacement::Revalidate,
+                    MorphCancel::Refundable,
+                    MorphReason::Change,
+                    vec![Cost::Resources(price::from([("gold", 10)]))],
+                    Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                )]),
+        );
+        registry.register(
+            brood_building("rug_shell")
+                .with_location(
+                    GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Underfoot,
+                    GROUND,
+                )
+                .with_berths(brood_berths(4)),
+        );
         registry.register(
             brood_building("great_hatch")
                 .with_berths(brood_berths(4))
@@ -1445,6 +1481,15 @@ pub fn brood_app(model: MovementModel) -> App {
 /// A berth point from decimal strings, in cells from the footprint's anchor.
 pub fn berth(x: &str, y: &str) -> FixedVec2 {
     FixedVec2::new(signed_fixed(x), signed_fixed(y))
+}
+
+/// A 3×3 `core_vein` of gold on the ground, gone once drained, seating one
+/// carrier at its middle cell.
+pub fn core_vein() -> EntityTypeDef {
+    EntityTypeDef::new("core_vein")
+        .with_location(GROUND_DOMAIN, CellSize::new(3, 3), Solidity::Solid, GROUND)
+        .with_resource_source("gold", DepletionPolicy::Destroy)
+        .with_berths([("rim", BerthGroup::new([berth("1.5", "1.5")], 1))])
 }
 
 /// Runs exactly `ticks` fixed updates.
@@ -4514,7 +4559,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_resource_source("gold", DepletionPolicy::Destroy),
         );
-        // A spring holds no ground of its own; a well house is raised over one.
+        // A spring claims no cell; a well house is raised over one.
         registry.register(
             EntityTypeDef::new("spring")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Passable, GROUND)
@@ -4671,7 +4716,7 @@ pub fn register_orders_content(app: &mut App) {
                 )]),
         );
         // The form a pump house takes when it uproots: wider than the house, so
-        // the walk recentres it away from the cell the house was raised over,
+        // the walk recenters it away from the cell the house was raised over,
         // and it draws nothing itself.
         registry.register(
             EntityTypeDef::new("walking_pump")

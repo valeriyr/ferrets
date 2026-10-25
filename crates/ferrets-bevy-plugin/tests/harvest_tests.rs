@@ -24,6 +24,7 @@ use ferrets_simulation::{
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent},
     map::Map,
+    movement_model::MovementModel,
     order::{AttackTarget, Order},
     resources::PlayerResources,
     simulation_id::SimulationId,
@@ -1794,6 +1795,44 @@ fn attached_carrier_is_walked_through_and_never_pushed_under_continuous_model() 
         seat,
         "nothing shoulders an attached carrier aside"
     );
+}
+
+#[test]
+fn carrier_seated_inside_its_source_steps_out_of_whole_footprint() {
+    // A 3×3 core vein at (8..10, 5..7) seats one carrier at its middle cell,
+    // (9, 6), every neighbor of which is the vein's own. Stopped, the sylph
+    // comes out of the vein's whole footprint, beside it — of the cells two
+    // off its berth, (9, 4) is first by row — and is not left waiting off the
+    // map.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[], |registry, _| {
+        registry.register(utils::core_vein());
+    });
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 6, 0);
+    let (vein, vein_id) =
+        utils::create_entity(app.world_mut(), "core_vein", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(vein)
+        .unwrap()
+        .amount = 20;
+
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: vein_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(entity_def::attached(app.world(), sylph));
+    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(9, 6));
+
+    utils::force_cancel_orders(app.world_mut(), sylph);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(!entity_def::attached(app.world(), sylph));
+    assert!(!entity_def::hidden(app.world(), sylph));
+    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(9, 4));
 }
 
 #[test]

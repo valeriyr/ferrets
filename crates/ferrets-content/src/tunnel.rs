@@ -35,7 +35,7 @@ pub enum Passage {
         /// What happens to the bodies held when both ends are lost.
         fate: PassengerFate,
     },
-    /// It steps out at once beside the other end.
+    /// It steps out at once within the other end's unload range.
     Crosses,
 }
 

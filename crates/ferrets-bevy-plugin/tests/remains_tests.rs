@@ -155,10 +155,10 @@ fn canceled_death_leaves_no_body_under_engine_rule() {
 #[test]
 fn body_is_set_down_under_standing_mover() {
     let mut app = app(RemainsLimit::Unbounded);
-    // A wraith claims no cells, so a soldier stands in the same cell it dies
+    // A wraith claims no cells, so a trooper stands in the same cell it dies
     // in — and the body it leaves claims none either.
     let (wraith, _) = utils::create_owned(&mut app, "wraith", 5, 5, 0);
-    let (_, killer) = utils::create_owned(&mut app, "soldier", 5, 5, 1);
+    let (_, killer) = utils::create_owned(&mut app, "trooper", 5, 5, 1);
 
     kill(&mut app, wraith, killer, Slain::Remains);
 
@@ -171,32 +171,87 @@ fn body_is_set_down_under_standing_mover() {
     assert_eq!(
         utils::cell_of(app.world(), left[0]),
         CellPos::new(5, 5),
-        "and it lies where the wraith fell, not beside the soldier standing there"
+        "and it lies where the wraith fell, not beside the trooper standing there"
     );
 }
 
 #[test]
-fn solid_remains_are_not_laid_over_burrowed_entity() {
+fn solid_remains_are_laid_beside_burrowed_entity() {
     let mut app = app(RemainsLimit::Unbounded);
     let (_, killer) = utils::create_owned(&mut app, "soldier", 12, 12, 1);
     // The mole claims nothing on the grid, so the cart stands on its cell; the
-    // rubble the cart leaves would hold that ground, and is refused as a site
-    // founded there is.
+    // rubble the cart leaves would hold that ground, refused as a site founded
+    // there is, so it is laid on the search's next cell, (5, 4) straight out
+    // and first by row.
     utils::create_owned(&mut app, "mole", 5, 5, 0);
     let (cart, _) = utils::create_owned(&mut app, "cart", 5, 5, 0);
 
     kill(&mut app, cart, killer, Slain::Remains);
-    assert!(
-        bodies(&app).is_empty(),
-        "no rubble is laid over what has dug in"
-    );
 
-    // On open ground the same death lays it.
-    let (cart, _) = utils::create_owned(&mut app, "cart", 8, 5, 0);
-    kill(&mut app, cart, killer, Slain::Remains);
     let left = bodies(&app);
     assert_eq!(left.len(), 1);
-    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(8, 5));
+    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(5, 4));
+}
+
+#[test]
+fn burrowed_body_leaves_its_corpse_on_its_own_cell() {
+    // The mole holds its ground underfoot until its death ends; then it
+    // leaves that ground to its corpse, laid on (5, 5) where it fell.
+    let mut app = app(RemainsLimit::Unbounded);
+    let (mole, _) = utils::create_owned(&mut app, "mole", 5, 5, 0);
+    let (_, killer) = utils::create_owned(&mut app, "soldier", 7, 5, 1);
+
+    kill(&mut app, mole, killer, Slain::Remains);
+
+    let left = bodies(&app);
+    assert_eq!(left.len(), 1);
+    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(5, 5));
+}
+
+#[test]
+fn dying_body_holds_its_ground_until_its_death_ends() {
+    // Killed, the mole spends two ticks dying on (5, 5) and keeps a static
+    // footprint off its cell while it does; once its death ends, the cell
+    // goes to the corpse it leaves.
+    let mut app = app(RemainsLimit::Unbounded);
+    let (mole, _) = utils::create_owned(&mut app, "mole", 5, 5, 0);
+    let (_, killer) = utils::create_owned(&mut app, "soldier", 7, 5, 1);
+    damage::apply(
+        app.world_mut(),
+        killer,
+        mole,
+        FixedU64::from_num(1000),
+        Slain::Remains,
+    );
+    utils::run_ticks(&mut app, 1);
+    assert!(entity_def::dying(app.world(), mole));
+
+    let placed = utils::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0));
+    assert!(placed.is_none());
+
+    utils::run_ticks(&mut app, 3);
+    let left = bodies(&app);
+    assert_eq!(left.len(), 1);
+    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(5, 5));
+}
+
+#[test]
+fn static_footprint_is_not_raised_over_body_lying_there() {
+    // The corpse a soldier leaves at (5, 5) is passable and claims no cell:
+    // another soldier, a static solid body, is refused on it and stands one
+    // cell over.
+    let mut app = app(RemainsLimit::Unbounded);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 5, 5, 0);
+    let (_, killer) = utils::create_owned(&mut app, "soldier", 7, 5, 1);
+    kill(&mut app, soldier, killer, Slain::Remains);
+    let left = bodies(&app);
+    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(5, 5));
+
+    let place = |app: &mut App, x| {
+        utils::create_entity(app.world_mut(), "soldier", utils::pos(x, 5), Some(0)).is_some()
+    };
+    assert!(!place(&mut app, 5));
+    assert!(place(&mut app, 4));
 }
 
 //
@@ -304,12 +359,94 @@ fn kill_stands_up_what_is_not_body() {
 }
 
 #[test]
+fn remains_whose_domain_takes_water_lie_in_water() {
+    // A swimmer killed mid-pool at (10,10) leaves a wreck whose domain takes
+    // every terrain, water among them: it lies where the swimmer fell.
+    let mut app =
+        utils::dry_orders_app(MovementModel::Cell, &utils::water_pool(), |registry, _| {
+            registry.register(
+                EntityTypeDef::new("wreck")
+                    .with_location(
+                        utils::GROUND_DOMAIN,
+                        CellSize::ONE,
+                        Solidity::Passable,
+                        utils::GROUND,
+                    )
+                    .with_tags(["remains"])
+                    .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
+            );
+            registry.register(
+                EntityTypeDef::new("swimmer")
+                    .with_location(
+                        utils::GROUND_DOMAIN,
+                        CellSize::ONE,
+                        Solidity::Solid,
+                        utils::GROUND,
+                    )
+                    .with_pool(Pool::health(20))
+                    .with_dying(2, utils::leaves("wreck")),
+            );
+        });
+    let (swimmer, _) = utils::create_owned(&mut app, "swimmer", 10, 10, 0);
+    let (_, killer) = utils::create_owned(&mut app, "soldier", 20, 20, 1);
+
+    kill(&mut app, swimmer, killer, Slain::Remains);
+
+    let left = bodies(&app);
+    assert_eq!(left.len(), 1);
+    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(10, 10));
+}
+
+#[test]
+fn remains_refused_where_body_fell_lie_at_most_cell_beside_it() {
+    // A swimmer leaves a corpse whose domain takes land alone. Killed mid-pool
+    // at (10,10), every cell beside it is water and the land two cells off is
+    // out of reach: nothing is left. Killed at the pool's edge, (10,9), the
+    // land beside it takes the corpse, (10,8) straight out first.
+    let mut app = utils::dry_orders_app(
+        MovementModel::Cell,
+        &utils::water_pool(),
+        |registry, dry| {
+            registry.register(
+                EntityTypeDef::new("dry_corpse")
+                    .with_location(dry, CellSize::ONE, Solidity::Passable, utils::GROUND)
+                    .with_tags(["remains"])
+                    .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
+            );
+            registry.register(
+                EntityTypeDef::new("swimmer")
+                    .with_location(
+                        utils::GROUND_DOMAIN,
+                        CellSize::ONE,
+                        Solidity::Solid,
+                        utils::GROUND,
+                    )
+                    .with_pool(Pool::health(20))
+                    .with_dying(2, utils::leaves("dry_corpse")),
+            );
+        },
+    );
+    let (_, killer) = utils::create_owned(&mut app, "soldier", 20, 20, 1);
+    let (afloat, _) = utils::create_owned(&mut app, "swimmer", 10, 10, 0);
+    kill(&mut app, afloat, killer, Slain::Remains);
+    assert!(bodies(&app).is_empty());
+
+    let (at_edge, _) = utils::create_owned(&mut app, "swimmer", 10, 9, 0);
+    kill(&mut app, at_edge, killer, Slain::Remains);
+
+    let left = bodies(&app);
+    assert_eq!(left.len(), 1);
+    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(10, 8));
+}
+
+#[test]
 fn what_death_stands_up_stands_only_on_terrain_its_domain_takes() {
     // A pod standing in a pool of water, (9,9)..(11,11), its domain taking
     // every terrain, hands on two landlubbers whose domain takes land alone.
-    // The first ring about it is all water; of the second, the cells straight
-    // out lie nearest, two cells off, and in row then column order the first
-    // two are (10,8) and (8,10).
+    // Mid-pool at (10,10) every cell beside it is water, none a landlubber
+    // steps onto from there: nothing stands up. At the pool's edge, (10,9),
+    // the land of row 8 lies beside it: (10,8) straight out, then (9,8) of
+    // the two diagonals tied by row, by column.
     let mut app =
         utils::dry_orders_app(MovementModel::Cell, &utils::water_pool(), |registry, _| {
             registry.register(
@@ -335,12 +472,16 @@ fn what_death_stands_up_stands_only_on_terrain_its_domain_takes() {
     let (_, killer) = utils::create_owned(&mut app, "soldier", 20, 20, 1);
 
     kill(&mut app, pod, killer, Slain::Remains);
+    assert!(standing(&app, "landlubber").is_empty());
+
+    let (pod, _) = utils::create_owned(&mut app, "pod", 10, 9, 0);
+    kill(&mut app, pod, killer, Slain::Remains);
 
     let cells: Vec<CellPos> = standing(&app, "landlubber")
         .iter()
         .map(|&entity| CellPos::from(entity_def::position(app.world(), entity)))
         .collect();
-    assert_eq!(cells, vec![CellPos::new(10, 8), CellPos::new(8, 10)]);
+    assert_eq!(cells, vec![CellPos::new(10, 8), CellPos::new(9, 8)]);
 }
 
 #[test]
@@ -481,10 +622,11 @@ fn death_type_does_not_name_leaves_none_of_it() {
 //
 
 /// App with two players, a `corpse` type, a `soldier` leaving one by the
-/// engine's own rule, a `wraith` that claims no cells, a `sapper` leaving one
-/// only when something kills it, a `hive` that leaves two `broodling`s
-/// standing when something kills it, a `cart` leaving `rubble` that claims its
-/// cell, and a `mole` that stands underfoot.
+/// engine's own rule, a `trooper` that walks, a `wraith` that claims no
+/// cells, a `sapper` leaving one only when something kills it, a `hive` that
+/// leaves two `broodling`s standing when something kills it, a `cart` leaving
+/// `rubble` that claims its cell, and a `mole` that stands underfoot and
+/// leaves a corpse.
 fn app(limit: RemainsLimit) -> App {
     let mut app = utils::make_app_under(
         vec![
@@ -518,6 +660,23 @@ fn app(limit: RemainsLimit) -> App {
                 .with_pool(Pool::health(30))
                 .with_attack(utils::weapon(utils::GROUND), 10, 1, 1, 4, 2)
                 .with_dying(2, utils::leaves("corpse")),
+        );
+        registry.register(
+            EntityTypeDef::new("trooper")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_movement(
+                    utils::fixed("0.5"),
+                    utils::fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(30)),
         );
         registry.register(
             EntityTypeDef::new("dust")
@@ -705,7 +864,8 @@ fn app(limit: RemainsLimit) -> App {
                     Solidity::Underfoot,
                     utils::GROUND,
                 )
-                .with_pool(Pool::health(20)),
+                .with_pool(Pool::health(20))
+                .with_dying(2, utils::leaves("corpse")),
         );
     }
     app.world_mut().resource::<ContentRegistry>().validate();

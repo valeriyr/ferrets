@@ -229,6 +229,16 @@ pub enum SummonArrival {
     Rising,
 }
 
+/// Which cell a summoned body is set down on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummonPlacement {
+    /// Anchored on the aimed cell — for a type raised over a resource source,
+    /// on the source under it — or the cast is refused.
+    Exact,
+    /// The nearest cell around the aim that takes it.
+    Nearby,
+}
+
 /// Where a summon sets its units down.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SummonAt {
@@ -347,8 +357,7 @@ pub enum EntityCastEffect {
         /// entities standing on the patch.
         detection: Detection,
     },
-    /// Sets units down for the casting player, on the free cells nearest
-    /// where they are summoned.
+    /// Sets units down for the casting player where they are summoned.
     Summon {
         /// Where they are set down.
         at: SummonAt,
@@ -356,6 +365,8 @@ pub enum EntityCastEffect {
         entity_type: EntityTypeId,
         /// How many. A cast with nowhere to put them all does nothing.
         count: Quantity,
+        /// Which cell around the aim each takes.
+        placement: SummonPlacement,
         /// Which cells the casting side must know of to set them down on.
         landing: Landing,
         /// The field rules their cells must meet for their owner, where they

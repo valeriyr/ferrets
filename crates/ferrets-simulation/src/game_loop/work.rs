@@ -39,8 +39,7 @@ pub(super) fn requires_free_to_hide(
 /// Puts a worker where its presence has it stand as it takes up `job`: off
 /// the map for one it disappears into, in one of the job's berths for one it
 /// attaches to — both free any of the job's cells it was standing on. One that
-/// works in the open stays exactly where it walked to and is never moved on
-/// its own account.
+/// works in the open is left where it stands.
 pub(super) fn enter(world: &mut World, entity: Entity, presence: &WorkPresence, job: Entity) {
     match presence {
         WorkPresence::Hidden { .. } => {

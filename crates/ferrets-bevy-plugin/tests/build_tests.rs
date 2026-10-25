@@ -5,18 +5,23 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
+    affiliation::Affiliation,
     build::BuilderAttendance,
+    detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    field::{FieldCoverage, FieldDecay, FieldDef, FieldPlacement, FieldVision},
     location::Solidity,
     pool::Pool,
+    pool_def::PoolId,
     registry::ContentRegistry,
-    work::{CrewLimit, WorkPresence},
+    terrains::Terrains,
+    work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
-use ferrets_math::{FixedU64, facing::Facing};
+use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
     beside::Lean,
@@ -32,6 +37,7 @@ use ferrets_simulation::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
+    game_loop::orders::{self, Refusal},
     map::Map,
     movement_model::MovementModel,
     order::{AttackTarget, Order},
@@ -344,14 +350,14 @@ fn long_reach_builder_raises_site_without_closing_in() {
 }
 
 #[test]
-fn builder_standing_on_site_blocks_it_and_is_never_moved() {
-    // A builder that works in the open is left alone, so its own cells block the
-    // footprint exactly as anything else standing there would. The order gives up
-    // rather than shoving it out of the way.
+fn builder_standing_on_site_steps_off_it_and_raises_it() {
+    // A builder that works in the open stands on the cells its depot would
+    // take, (10, 10) to (11, 11): it walks off the footprint to the nearest
+    // cell it still builds from, (10, 9) straight up from its own, then raises
+    // the site and pays for it.
     let mut app = utils::orders_app();
     let (mason, mason_id) = utils::create_owned(&mut app, "mason", 10, 10, 0);
     utils::grant_gold(&mut app, 80);
-    let stood_at = utils::cell_of(app.world_mut(), mason);
 
     utils::push_command(
         &mut app,
@@ -364,23 +370,211 @@ fn builder_standing_on_site_blocks_it_and_is_never_moved() {
     );
     utils::run_ticks(&mut app, 12);
 
-    assert_eq!(
-        utils::count_of_type(app.world_mut(), "depot"),
-        0,
-        "the site is blocked by the builder itself"
-    );
-    assert_eq!(
-        utils::gold(app.world_mut()),
-        80,
-        "and nothing was paid for it"
-    );
-    assert_eq!(
-        utils::cell_of(app.world_mut(), mason),
-        stood_at,
-        "the builder is left exactly where it stood"
-    );
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    // 80 granted − the depot's 50.
+    assert_eq!(utils::gold(app.world_mut()), 30);
+    assert_eq!(utils::cell_of(app.world_mut(), mason), CellPos::new(10, 9));
     assert!(!entity_def::hidden(app.world(), mason));
+}
+
+#[test]
+fn builder_standing_on_site_it_cannot_pay_for_gives_up_where_it_stands() {
+    // Every gate is judged before the builder moves: with no gold for the
+    // depot, the mason gives the order up on (10, 10) without stepping off.
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 10, 10, 0);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 12);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert_eq!(utils::cell_of(app.world_mut(), mason), CellPos::new(10, 10));
     assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+}
+
+#[test]
+fn builder_leaving_site_to_itself_steps_off_it_and_raises_it() {
+    // The architect only places the depot, standing in the open on (10, 10)
+    // inside it: it walks to (10, 9), straight up from its own cell, and the
+    // site goes up behind it.
+    let mut app = utils::orders_app();
+    let (architect, architect_id) = utils::create_owned(&mut app, "architect", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, architect_id);
+    utils::run_ticks(&mut app, 12);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(
+        utils::cell_of(app.world_mut(), architect),
+        CellPos::new(10, 9)
+    );
+}
+
+#[test]
+fn builder_lying_across_site_edge_steps_wholly_off_it() {
+    // Under the continuous model the mason rests at (9.5, 10), across (9, 10)
+    // and (10, 10), the depot's first cell: it walks onto a cell wholly off
+    // the depot's (10..11, 10..11) instead of taking the half it already
+    // stands on as arrived, and raises the site.
+    let mut app = utils::continuous_orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    app.world_mut()
+        .get_mut::<LocationComponent>(mason)
+        .expect("the mason stands")
+        .position = FixedUVec2::new(utils::fixed("9.5"), utils::fixed("10"));
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 20);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(
+        entity_def::position(app.world(), mason),
+        FixedUVec2::from(CellPos::new(9, 10))
+    );
+}
+
+#[test]
+fn builder_whose_site_ground_takes_with_it_there_raises_it_where_it_stands() {
+    // A rug lies underfoot and is not kept off by a solid walker: the rug
+    // layer raises it on (10, 10) under itself without stepping off.
+    let mut app = builders_app();
+    let (layer, layer_id) = utils::create_owned(&mut app, "rug_layer", 10, 10, 0);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: layer_id,
+            type_name: "rug".into(),
+            position: utils::pos(10, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "rug"), 1);
+    assert_eq!(utils::cell_of(app.world_mut(), layer), CellPos::new(10, 10));
+}
+
+#[test]
+fn builder_steps_off_its_site_wherever_it_walks_whatever_its_placement_rules() {
+    // A warded mason may only be placed inside a ward, and no ward stands
+    // anywhere: it still walks off the depot's (10..11, 10..11) to (10, 9),
+    // straight up from its own cell, since a walk is held to no placement
+    // rule, and raises the site.
+    let mut app = builders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "warded_mason", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 12);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(utils::cell_of(app.world_mut(), mason), CellPos::new(10, 9));
+}
+
+#[test]
+fn consumed_builder_raises_site_it_stands_on_under_continuous_model() {
+    // Under the continuous model a body's claim is rebuilt after the orders
+    // run: the larva leaving the grid as it founds the depot on (10, 10) is
+    // set aside for the site's own placement too.
+    let mut app = utils::continuous_orders_app();
+    let (_, larva_id) = utils::create_owned(&mut app, "larva", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    utils::run_ticks(&mut app, 1);
+
+    order_depot(&mut app, larva_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+}
+
+#[test]
+fn attached_builder_raises_site_it_stands_on_under_continuous_model() {
+    let mut app = utils::continuous_orders_app();
+    let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    utils::run_ticks(&mut app, 1);
+
+    order_depot(&mut app, roofer_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert!(entity_def::attached(app.world(), roofer));
+}
+
+#[test]
+fn builder_that_never_walks_standing_on_site_gives_up() {
+    // A rooted mason works in the open on (10, 10), inside the depot it is
+    // told to raise: it cannot step off, so the order is refused for want of
+    // room, with nothing raised or paid.
+    let mut app = builders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "rooted_mason", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    let order = Order::Build {
+        type_name: "depot".into(),
+        position: utils::pos(10, 10),
+    };
+    assert_eq!(
+        orders::can_start(app.world(), mason, &order),
+        Err(Refusal::NoRoom)
+    );
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert_eq!(utils::gold(app.world_mut()), 80);
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+}
+
+#[test]
+fn builder_that_never_walks_is_not_blamed_for_site_another_body_holds() {
+    // A rooted mason on (10, 10) and a soldier on (11, 11), both inside the
+    // 2×2 depot ordered at (10, 10): set aside, the mason would leave the
+    // soldier keeping the site off, so the mason is not in its way and the
+    // order may start; the ground refuses the site on arrival.
+    let mut app = builders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "rooted_mason", 10, 10, 0);
+    utils::create_owned(&mut app, "soldier", 11, 11, 0);
+    utils::grant_gold(&mut app, 80);
+    let order = Order::Build {
+        type_name: "depot".into(),
+        position: utils::pos(10, 10),
+    };
+    assert_eq!(orders::can_start(app.world(), mason, &order), Ok(()));
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert_eq!(utils::gold(app.world_mut()), 80);
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+}
+
+#[test]
+fn wide_builder_standing_on_site_steps_off_it_and_raises_it() {
+    // A 2×2 giant mason over (10..11, 10..11) and a depot ordered at (11, 10):
+    // the giant walks to (9, 10), its footprint (9..10, 10..11) off the
+    // depot's (11..12, 10..11) and beside it, and raises the site.
+    let mut app = builders_app();
+    let (giant, giant_id) = utils::create_owned(&mut app, "giant_mason", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: giant_id,
+            type_name: "depot".into(),
+            position: utils::pos(11, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 20);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(utils::cell_of(app.world_mut(), giant), CellPos::new(9, 10));
 }
 
 #[test]
@@ -902,6 +1096,63 @@ fn attached_builder_stands_on_site_holding_no_cells() {
 }
 
 #[test]
+fn attached_builder_standing_on_site_raises_it_without_stepping_off() {
+    // The roofer stands on (10, 10), inside the depot's footprint: seated in
+    // its berths once the site stands, it holds none of the site's cells, so
+    // the site goes up at once and it takes the berth on the cell it stood on.
+    let mut app = utils::orders_app();
+    let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, roofer_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert!(entity_def::attached(app.world(), roofer));
+    assert_eq!(utils::cell_of(app.world(), roofer), CellPos::new(10, 10));
+}
+
+#[test]
+fn passable_attached_builder_raises_site_it_stands_on() {
+    // A passable builder holds its ground against static footprints though
+    // it claims no cells; set aside as it takes a berth, it raises the depot
+    // from (10, 10) inside it and sits on the cell it stood on.
+    let mut app = builders_app();
+    let (wisp, wisp_id) = utils::create_owned(&mut app, "wisp_roofer", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, wisp_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert!(entity_def::attached(app.world(), wisp));
+    assert_eq!(utils::cell_of(app.world(), wisp), CellPos::new(10, 10));
+}
+
+#[test]
+fn attached_builder_that_never_walks_raises_site_it_stands_on() {
+    // A rooted roofer marks its cell as a standing footprint: it leaves the
+    // grid before the depot is stamped over it, and the depot holds all four
+    // of its cells, (10..11, 10..11).
+    let mut app = builders_app();
+    let (roofer, roofer_id) = utils::create_owned(&mut app, "rooted_roofer", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, roofer_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert!(entity_def::attached(app.world(), roofer));
+    let grid = app.world().resource::<Map>().nav_grid();
+    for (x, y) in [(10, 10), (11, 10), (10, 11), (11, 11)] {
+        assert!(
+            grid.is_statically_occupied_by(utils::GROUND, CellPos::new(x, y)),
+            "({x}, {y})"
+        );
+    }
+}
+
+#[test]
 fn attached_builders_take_distinct_berths_of_site() {
     let mut app = utils::orders_app();
     let (first, first_id) = utils::create_owned(&mut app, "roofer", 9, 10, 0);
@@ -1277,12 +1528,22 @@ fn static_footprint_is_not_raised_over_what_stands_underfoot() {
 }
 
 #[test]
-fn static_footprint_is_raised_over_what_holds_nothing() {
+fn static_footprint_is_not_raised_over_passable_body() {
     let mut app = solidity_app();
     assert!(place(&mut app, "pebble", 10, 10).is_some());
 
-    // A fully passable body yields its ground: the depot goes up over it.
-    assert!(place(&mut app, "depot", 10, 10).is_some());
+    // The pebble claims no cell and is still there: a depot of another
+    // solidity is refused on it and raised one cell over.
+    assert!(place(&mut app, "depot", 10, 10).is_none());
+    assert!(place(&mut app, "depot", 12, 10).is_some());
+}
+
+#[test]
+fn passable_bodies_share_their_cells() {
+    let mut app = solidity_app();
+    assert!(place(&mut app, "pebble", 10, 10).is_some());
+
+    assert!(place(&mut app, "pebble", 10, 10).is_some());
 }
 
 #[test]
@@ -1374,6 +1635,142 @@ fn building_is_refused_on_terrain_its_domain_does_not_take() {
 }
 
 //
+// ─── Builders that never walk ─────────────────────────────────────────────────
+//
+
+#[test]
+fn builder_that_never_walks_works_site_in_range_from_where_it_stands() {
+    // A crew tower on (4, 10) raises a depot at (24, 10), 20 cells off and
+    // within its range of 30: it never moves, and the depot rises in its 6
+    // ticks.
+    let mut app = builders_app();
+    let (tower, tower_id) = utils::create_owned(&mut app, "crew_tower", 4, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_far_depot(&mut app, tower_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let depot = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    assert!(entity_def::rising(app.world(), depot));
+    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(4, 10));
+    utils::run_ticks(&mut app, 6);
+
+    assert!(!entity_def::rising(app.world(), depot));
+    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(4, 10));
+    assert!(entity_def::stands_on_grid(app.world(), tower));
+}
+
+#[test]
+fn builder_that_never_walks_is_refused_site_beyond_its_range() {
+    // A rooted mason on (4, 10) builds within 1 cell: a depot at (24, 10) is
+    // 20 cells off, so the order is refused as it is issued, nothing raised
+    // or paid.
+    let mut app = builders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "rooted_mason", 4, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    let order = Order::Build {
+        type_name: "depot".into(),
+        position: utils::pos(24, 10),
+    };
+    assert_eq!(
+        orders::can_start(app.world(), mason, &order),
+        Err(Refusal::OutOfReach)
+    );
+
+    order_far_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert_eq!(utils::gold(app.world_mut()), 80);
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+}
+
+#[test]
+fn unattended_builder_that_never_walks_founds_site_in_range_and_is_done() {
+    // A founding tower on (4, 10) founds the depot at (24, 10) and leaves it
+    // to itself, its order done the tick the site stands.
+    let mut app = builders_app();
+    let (tower, tower_id) = utils::create_owned(&mut app, "founding_tower", 4, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_far_depot(&mut app, tower_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert!(utils::order_queue_is_empty(app.world_mut(), tower));
+    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(4, 10));
+}
+
+#[test]
+fn hidden_builder_that_never_walks_comes_out_beside_site_in_range() {
+    // A sheltering tower on (4, 10) goes into the depot at (24, 10), freeing
+    // its cell, and comes out as the depot stands on the free cell beside it
+    // nearest where it went in, (23, 10).
+    let mut app = builders_app();
+    let (tower, tower_id) = utils::create_owned(&mut app, "sheltering_tower", 4, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_far_depot(&mut app, tower_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::hidden(app.world(), tower));
+    assert!(
+        !app.world()
+            .resource::<Map>()
+            .nav_grid()
+            .is_occupied_by(utils::GROUND, CellPos::new(4, 10))
+    );
+    utils::run_ticks(&mut app, 6);
+
+    let depot = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    assert!(!entity_def::rising(app.world(), depot));
+    assert!(!entity_def::hidden(app.world(), tower));
+    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(23, 10));
+}
+
+#[test]
+fn attached_builder_that_never_walks_takes_berth_of_site_in_range() {
+    // A roofing tower on (4, 10) leaves its cell for the depot's berth over
+    // (24, 10), and as the depot stands comes out on (24, 9), a free cell
+    // beside that berth.
+    let mut app = builders_app();
+    let (tower, tower_id) = utils::create_owned(&mut app, "roofing_tower", 4, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_far_depot(&mut app, tower_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::attached(app.world(), tower));
+    assert!(
+        !app.world()
+            .resource::<Map>()
+            .nav_grid()
+            .is_occupied_by(utils::GROUND, CellPos::new(4, 10))
+    );
+    utils::run_ticks(&mut app, 6);
+
+    let depot = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    assert!(!entity_def::rising(app.world(), depot));
+    assert!(!entity_def::attached(app.world(), tower));
+    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(24, 9));
+}
+
+#[test]
+fn consumed_builder_that_never_walks_is_spent_on_site_in_range() {
+    // A spent tower on (4, 10) disappears into the depot at (24, 10) and is
+    // despawned as it stands.
+    let mut app = builders_app();
+    let (tower, tower_id) = utils::create_owned(&mut app, "spent_tower", 4, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_far_depot(&mut app, tower_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::hidden(app.world(), tower));
+    utils::run_ticks(&mut app, 6);
+
+    let depot = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    assert!(!entity_def::rising(app.world(), depot));
+    assert!(!utils::alive(&app, tower_id));
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -1382,6 +1779,148 @@ fn building_is_refused_on_terrain_its_domain_does_not_take() {
 fn place(app: &mut App, type_name: &str, x: u32, y: u32) -> Option<Entity> {
     utils::create_entity(app.world_mut(), type_name, utils::pos(x, y), Some(0))
         .map(|(entity, _)| entity)
+}
+
+/// The orders roster plus five builders of depots: a `wisp_roofer`, a
+/// passable walker taking a berth of the site; a `rooted_roofer`, one that
+/// never walks; a 2×2 `giant_mason` working in the open; a `rooted_mason`,
+/// working in the open and never walking; and a `warded_mason` placed only
+/// inside a `ward` field nothing spreads. Plus a `rug_layer` raising `rug`s,
+/// underfoot sites, and five 1×1 builders of depots that never walk, with a
+/// build range of 30: a `crew_tower` working in the open, a `founding_tower`
+/// leaving its sites to themselves, a `sheltering_tower` working inside, a
+/// `roofing_tower` taking a berth, and a `spent_tower` consumed by its site.
+fn builders_app() -> App {
+    utils::dry_orders_app(MovementModel::Cell, &[], |registry, _| {
+        let roofing = || {
+            BuilderAttendance::Crew(WorkPresence::Attached(Attachment::new(
+                "rim",
+                BerthStance::Still,
+            )))
+        };
+        let walking = |def: EntityTypeDef, size: u32| {
+            def.with_movement(
+                utils::fixed("0.5"),
+                utils::fixed("0.5") * FixedU64::from_num(size),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            )
+        };
+        let builder = |name: &str, size: u32, solidity| {
+            EntityTypeDef::new(name)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(size, size),
+                    solidity,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(20))
+                .with_dying(2, [])
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+        };
+        registry.register(
+            walking(builder("wisp_roofer", 1, Solidity::Passable), 1)
+                .with_builder(["depot"], roofing()),
+        );
+        registry.register(
+            builder("rooted_roofer", 1, Solidity::Solid).with_builder(["depot"], roofing()),
+        );
+        let ward = registry.register_field(
+            "ward",
+            FieldDef::new(
+                Terrains::Any,
+                utils::GROUND.into(),
+                FieldDecay::Instant,
+                FieldVision::Dark,
+                Detection::Blind,
+            ),
+        );
+        registry.register(
+            walking(builder("warded_mason", 1, Solidity::Solid), 1)
+                .with_field_placement([FieldPlacement::Requires {
+                    field: ward,
+                    of: Affiliation::Anyone,
+                    coverage: FieldCoverage::Every,
+                }])
+                .with_builder(
+                    ["depot"],
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
+                ),
+        );
+        registry.register(
+            EntityTypeDef::new("rug")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Underfoot,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(20))
+                .with_dying(2, [])
+                .with_rise(6, utils::rise_initial_pools(&[PoolId::HEALTH])),
+        );
+        registry.register(
+            walking(builder("rug_layer", 1, Solidity::Solid), 1).with_builder(
+                ["rug"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            ),
+        );
+        registry.register(builder("rooted_mason", 1, Solidity::Solid).with_builder(
+            ["depot"],
+            BuilderAttendance::Crew(WorkPresence::Present {
+                crew: CrewLimit::ONE,
+            }),
+        ));
+        registry.register(
+            walking(builder("giant_mason", 2, Solidity::Solid), 2).with_builder(
+                ["depot"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            ),
+        );
+        for (name, attendance) in [
+            (
+                "crew_tower",
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            ),
+            ("founding_tower", BuilderAttendance::Unattended),
+            (
+                "sheltering_tower",
+                BuilderAttendance::Crew(WorkPresence::Hidden {
+                    crew: CrewLimit::ONE,
+                }),
+            ),
+            ("roofing_tower", roofing()),
+            ("spent_tower", BuilderAttendance::Consumed),
+        ] {
+            registry.register(
+                builder(name, 1, Solidity::Solid)
+                    .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(30))
+                    .with_builder(["depot"], attendance),
+            );
+        }
+    })
+}
+
+/// Orders `builder` to raise a depot at (24, 10), far from the others.
+fn order_far_depot(app: &mut App, builder: SimulationId) {
+    utils::push_command(
+        app,
+        PlayerCommand::BuildEntity {
+            builder,
+            type_name: "depot".into(),
+            position: utils::pos(24, 10),
+            flush: true,
+        },
+    );
 }
 
 /// Orders `builder` to raise a depot on the one site the sharing suite uses.
@@ -1398,7 +1937,7 @@ fn order_depot(app: &mut App, builder: SimulationId) {
 }
 
 /// The orders roster on a two-layer map, with a `mole` that stands underfoot
-/// and a `pebble` that holds nothing at all, both one cell of ground, and a
+/// and a `pebble` that is passable, both one cell of ground, and a
 /// `kite` that stands underfoot on the air layer. Two humans, session started.
 fn solidity_app() -> App {
     let mut app = utils::make_app(vec![

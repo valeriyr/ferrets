@@ -285,6 +285,12 @@ impl NavHierarchy {
         self.dirty = false;
     }
 
+    /// Whether a change was reported since the last
+    /// [`refresh`](Self::refresh), so regions may not reflect the grid.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     /// Returns the cells per cluster side.
     pub fn cluster_size(&self) -> u32 {
         self.cluster_size

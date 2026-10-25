@@ -61,7 +61,7 @@ fn site_over_spring_another_body_stands_on_is_not_raised() {
     let (_, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
     let (spring, _) = utils::create_entity(app.world_mut(), "spring", utils::pos(10, 10), None)
         .expect("the spring is registered");
-    // The spring holds no ground of its own, so another sylph stands on it.
+    // The spring claims no cell, so another sylph stands on it.
     utils::create_owned(&mut app, "sylph", 10, 10, 1);
     utils::grant_gold(&mut app, 30);
 
@@ -72,6 +72,27 @@ fn site_over_spring_another_body_stands_on_is_not_raised() {
     // The 30 granted, nothing paid.
     assert_eq!(utils::gold(app.world()), 30);
     assert!(entity_def::stands_on_grid(app.world(), spring));
+}
+
+#[test]
+fn builder_standing_on_spring_steps_off_it_and_raises_site_over_it() {
+    // The spring claims no cell, so the sylph stands on it at (10, 10): with
+    // the spring set aside, the sylph alone keeps the well house off, so it
+    // steps off to (10, 9), straight up from its own cell, and raises the
+    // site over the spring for 20 of its 30 gold.
+    let mut app = utils::orders_app();
+    let (spring, _) = utils::create_entity(app.world_mut(), "spring", utils::pos(10, 10), None)
+        .expect("the spring is registered");
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 10, 10, 0);
+    utils::grant_gold(&mut app, 30);
+
+    utils::build_entity(&mut app, sylph_id, "well_house", 10, 10);
+    utils::run_ticks(&mut app, utils::APPLY + 10);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "well_house"), 1);
+    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(10, 9));
+    assert_eq!(utils::gold(app.world()), 10);
+    utils::assert_despawned(app.world_mut(), spring);
 }
 
 #[test]

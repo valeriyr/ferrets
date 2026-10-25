@@ -96,8 +96,8 @@ pub fn survives_soft_cancel() -> bool {
 /// it — an immobile one, or one whose walk can make no more progress, lets its
 /// passengers out where it stands. Passengers then step out one per
 /// `unload_period` ticks (a zero period empties the hold at once), each set
-/// down — beside a transporter on the side of where it is sent, from a gateway
-/// on the free cell nearest the destination within its `unload_range` — and
+/// down within the holder's `unload_range` — a transporter's on the side of
+/// where it is sent, a gateway's on the free cell nearest the destination — and
 /// sent on: to the destination when the order named one — walking as close to
 /// it as the map allows — otherwise to the holder's rally point, if set. A
 /// passenger no cell it may stand on takes stays inside and the next one

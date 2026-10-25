@@ -10,7 +10,7 @@ use bevy_ecs::{
 use ferrets_content::{
     attack::Slain,
     base_stats::BaseStats,
-    brood::{BreederDef, OrphanFate},
+    brood::{BreederDef, BroodlingDef, OrphanFate},
     dying::{DeathKind, DyingDef},
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
@@ -72,7 +72,6 @@ use crate::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
-    fields,
     game_loop::{
         board, buffs,
         orders::{self, Refusal},
@@ -80,10 +79,11 @@ use crate::{
     },
     ground,
     impacts::PendingImpacts,
+    landing::{self, Bound, ComesFrom, Lander},
     links::{self, LinkKey, LinkPassengers, Membership},
     map::Map,
     movement_model::{self, MovementModel},
-    occupancy::OccupancyClass,
+    occupancy::{GridMark, OccupancyClass},
     order::Order,
     rally,
     ruleset::RemainsLimit,
@@ -95,6 +95,9 @@ use crate::{
 /// Look direction a freshly spawned entity starts with: south, the conventional
 /// resting facing toward the viewer.
 pub(crate) const DEFAULT_FACING: Facing = Facing::SOUTH;
+
+/// How many cells from the deceased's footprint its remains may be laid.
+const REMAINS_RANGE: u32 = 1;
 
 /// Which form a refit puts on an entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,9 +157,9 @@ pub enum Arrival<'a> {
 /// The `spawn_*` functions are the announcing counterparts, one per cause.
 ///
 /// Returns `(entity, simulation_id)`, or `None` if `type_name` is not registered
-/// or the position is blocked on the nav grid. Panics when a standing
-/// arrival's starts name a pool the type does not declare, name one twice,
-/// or start one where it cannot start, or when it arrives rising and its
+/// or the ground there does not take it ([`ground::can_place`]). Panics when a
+/// standing arrival's starts name a pool the type does not declare, name one
+/// twice, or start one where it cannot start, or when it arrives rising and its
 /// type never rises.
 pub fn create_entity(
     world: &mut World,
@@ -166,38 +169,14 @@ pub fn create_entity(
     reach: FieldReach,
     arrival: Arrival,
 ) -> Option<(Entity, SimulationId)> {
-    debug_assert!(
-        !movement_model::is_mid_crossing(position),
-        "entities spawn at rest: position must lie exactly on a cell origin"
-    );
-    // Both come off one borrow: the whole definition is never cloned for a
-    // placement test that reads two of its fields.
-    let (location_def, occupancy) = {
-        let registry = world.resource::<ContentRegistry>();
-        let def = registry.entity(type_name)?;
-        match &arrival {
-            Arrival::Standing { starts } => check_starts(registry, def, starts),
-            Arrival::Rising { .. } => {}
-        }
-        (def.location?, OccupancyClass::of(def))
-    };
-    let location = LocationComponent::new(position, DEFAULT_FACING);
-    if !ground::can_place(world, &location, location_def, occupancy, &[], &[]) {
-        return None;
-    }
-
-    let (entity, id) = conjure(world, type_name, location, owner, reach, arrival)?;
-    // Stamped from the location the entity now carries, not the one tested
-    // above.
-    restore_footprint(world, entity);
-    Some((entity, id))
+    create_entity_clear_of(world, type_name, position, owner, reach, arrival, &[], &[])
 }
 
 /// Creates one of the map's placements, each pool `starts` names started
 /// there in place of its type's initial, and announces it as placed.
 ///
-/// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid. Panics as [`create_entity`] does.
+/// Returns `None` if `type_name` is not registered or the ground there does
+/// not take it ([`ground::can_place`]). Panics as [`create_entity`] does.
 pub fn spawn_placed(
     world: &mut World,
     type_name: &str,
@@ -217,15 +196,16 @@ pub fn spawn_placed(
     )
 }
 
-/// Creates a unit finished in `trainer`'s queue and announces it as trained.
+/// Creates a unit finished in `trainer`'s queue for `owner` and announces it
+/// as trained.
 ///
-/// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid.
+/// Returns `None` if `type_name` is not registered or the ground there does
+/// not take it ([`ground::can_place`]).
 pub fn spawn_trained(
     world: &mut World,
     type_name: &str,
     position: FixedUVec2,
-    owner: Option<PlayerId>,
+    owner: PlayerId,
     reach: FieldReach,
     trainer: SimulationId,
 ) -> Option<(Entity, SimulationId)> {
@@ -233,7 +213,7 @@ pub fn spawn_trained(
         world,
         type_name,
         position,
-        owner,
+        Some(owner),
         reach,
         Arrival::Standing { starts: &[] },
         SpawnCause::Trained { trainer },
@@ -244,8 +224,8 @@ pub fn spawn_trained(
 /// unattended over its own rise time, the warper cooling down until
 /// `ready_at` for it, and announces it as warped in.
 ///
-/// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid. Panics when the type does not rise, or the
+/// Returns `None` if `type_name` is not registered or the ground there does
+/// not take it ([`ground::can_place`]). Panics when the type does not rise, or the
 /// warper is not alive.
 pub fn spawn_warped(
     world: &mut World,
@@ -282,10 +262,12 @@ pub fn spawn_warped(
 }
 
 /// Creates a construction site `builder` placed, attended as `attendance` says,
-/// and announces it as founded.
+/// on ground judged as though what `lifted` marks were off the grid and none
+/// of `ignored` stood on the map, and announces it as founded.
 ///
-/// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid. Panics when the type never rises.
+/// Returns `None` if `type_name` is not registered or the ground there does
+/// not take it ([`ground::can_place`]). Panics when the type never rises.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_founded(
     world: &mut World,
     type_name: &str,
@@ -294,8 +276,10 @@ pub fn spawn_founded(
     reach: FieldReach,
     builder: SimulationId,
     attendance: RiseAttendance,
+    lifted: &[GridMark],
+    ignored: &[Entity],
 ) -> Option<(Entity, SimulationId)> {
-    spawn(
+    spawn_clear_of(
         world,
         type_name,
         position,
@@ -306,6 +290,8 @@ pub fn spawn_founded(
             origin: RiseOrigin::Founded { payer: owner },
         },
         SpawnCause::Founded { builder },
+        lifted,
+        ignored,
     )
 }
 
@@ -345,8 +331,8 @@ pub(crate) fn spawn_bred(
 /// Creates an entity handed on by the death of `of` and announces it as
 /// bequeathed.
 ///
-/// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid.
+/// Returns `None` if `type_name` is not registered or the ground there does
+/// not take it ([`ground::can_place`]).
 pub fn spawn_bequeathed(
     world: &mut World,
     type_name: &str,
@@ -369,8 +355,8 @@ pub fn spawn_bequeathed(
 /// Creates an entity the caster `by` raised from the remains `from`, arriving
 /// as `arrival` says, and announces it as raised.
 ///
-/// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid.
+/// Returns `None` if `type_name` is not registered or the ground there does
+/// not take it ([`ground::can_place`]).
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_raised(
     world: &mut World,
@@ -396,8 +382,8 @@ pub fn spawn_raised(
 /// Creates an entity the caster `by` called up from nothing, arriving as
 /// `arrival` says, and announces it as summoned.
 ///
-/// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid.
+/// Returns `None` if `type_name` is not registered or the ground there does
+/// not take it ([`ground::can_place`]).
 pub fn spawn_summoned(
     world: &mut World,
     type_name: &str,
@@ -421,8 +407,8 @@ pub fn spawn_summoned(
 /// Creates the resource source put back where `by`, raised over it, died,
 /// and announces it as uncovered.
 ///
-/// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid.
+/// Returns `None` if `type_name` is not registered or the ground there does
+/// not take it ([`ground::can_place`]).
 pub fn spawn_uncovered(
     world: &mut World,
     type_name: &str,
@@ -445,8 +431,8 @@ pub fn spawn_uncovered(
 /// Creates an entity the sandbox spawn command conjured, and announces it as
 /// such.
 ///
-/// Returns `None` if `type_name` is not registered or the position is
-/// blocked on the nav grid.
+/// Returns `None` if `type_name` is not registered or the ground there does
+/// not take it ([`ground::can_place`]).
 pub fn spawn_sandbox(
     world: &mut World,
     type_name: &str,
@@ -481,9 +467,10 @@ pub fn spawn_sandbox(
 /// start at their initial reach and grow from there.
 ///
 /// The deceased has already freed its footprint, so the search starts on the
-/// ground it was standing on and works outward; what claims no cells is laid
-/// down there whatever stands over it. Fewer free cells than asked for set down
-/// fewer: half a brood is better than none of it.
+/// ground it was standing on and works outward — for remains, no further than
+/// the cells around that footprint; what claims no cells is laid down there
+/// whoever stands over it, never inside a standing footprint nor off its
+/// domain's ground. Fewer free cells than asked for set down fewer.
 pub(crate) fn spawn_bequest(
     world: &mut World,
     type_name: &str,
@@ -493,7 +480,7 @@ pub(crate) fn spawn_bequest(
     fallen: Fallen,
     slain: Slain,
 ) {
-    let (location_def, occupancy, left) = {
+    let (location_def, left) = {
         let registry = world.resource::<ContentRegistry>();
         let def = registry
             .entity(type_name)
@@ -509,7 +496,6 @@ pub(crate) fn spawn_bequest(
         };
         (
             def.location.expect("a registered type stands somewhere"),
-            OccupancyClass::of(def),
             left,
         )
     };
@@ -518,18 +504,54 @@ pub(crate) fn spawn_bequest(
         (Left::Remains { .. }, Slain::Remains) | (Left::Entity, _) => {}
     }
 
-    // The search knows what ground each of them needs: one that claims its
-    // cells takes the nearest free ones, one that shares them lies where it
-    // fell, under whoever is standing there. Either way it starts on the
-    // ground the deceased freed a moment ago.
-    let cells = world.resource::<Map>().find_placements_near(
-        around,
-        around_size,
-        entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def),
-        location_def.solidity(),
-        occupancy,
-        count as usize,
-    );
+    // Each is set down where the deceased stood and out from there, on the
+    // ground the deceased freed a moment ago, none on another's footprint:
+    // remains at most a cell out, what stands up as far as a release goes.
+    let cells: Vec<CellPos> = {
+        let registry = world.resource::<ContentRegistry>();
+        let def = registry
+            .entity(type_name)
+            .expect("validated content leaves registered types");
+        let fallen_location = registry
+            .def(fallen.entity_type)
+            .location
+            .expect("what falls stood somewhere");
+        let around = CellRect::new(around, around_size);
+        let lander = Lander {
+            def,
+            owner: fallen.owner,
+            from: ComesFrom::Footprint {
+                rect: around,
+                layer: entity_def::mover_shape(registry, &fallen_location).layer,
+                reach: match left {
+                    Left::Remains { .. } => REMAINS_RANGE,
+                    Left::Entity => 1,
+                },
+            },
+            bound: match left {
+                Left::Remains { .. } => Bound::Range {
+                    rect: around,
+                    range: REMAINS_RANGE,
+                },
+                Left::Entity => Bound::Radius,
+            },
+            around,
+            toward: around,
+        };
+        let mut cells: Vec<CellPos> = Vec::new();
+        for _ in 0..count {
+            let found = landing::set_down(world, lander, &[], &[], |_, footprint| {
+                !cells
+                    .iter()
+                    .any(|&taken| CellRect::new(taken, location_def.size()).intersects(footprint))
+            });
+            match found {
+                Some(cell) => cells.push(cell),
+                None => break,
+            }
+        }
+        cells
+    };
 
     for cell in cells {
         let position = FixedUVec2::from(cell);
@@ -590,13 +612,10 @@ fn spawn_remains(
     };
 
     let location = LocationComponent::new(position, DEFAULT_FACING);
-    // Remains that claim nothing are laid down whatever stands there: a mover
-    // in the cell a body falls in shares it with the body. Remains that do
-    // claim their cells — rubble — can genuinely be blocked, by what the grid
-    // marks and by what has dug in under it.
-    if location_def.solidity().claims_cells()
-        && !ground::can_place(world, &location, location_def, class, &[], &[])
-    {
+    // Remains lie only on ground their domain takes, out of every standing
+    // footprint; those that claim no cells share theirs with whoever stands
+    // there.
+    if !ground::can_place(world, &location, location_def, class, &[], &[]) {
         return;
     }
     world
@@ -836,6 +855,14 @@ pub(crate) fn attach_entity(
     job: Entity,
     attachment: &Attachment,
 ) {
+    free_to_seat(world, entity);
+    seat_unseated(world, entity, job, attachment);
+}
+
+/// Takes an entity on the map off the grid and out of any berth it sits in.
+///
+/// Panics for a hidden entity.
+pub(crate) fn free_to_seat(world: &mut World, entity: Entity) {
     assert!(
         !entity_def::hidden(world, entity),
         "only an entity on the map attaches to a job"
@@ -843,7 +870,6 @@ pub(crate) fn attach_entity(
     lift_footprint(world, entity);
     // A worker already seated elsewhere gives that berth up first.
     unseat(world, entity);
-    seat_unseated(world, entity, job, attachment);
 }
 
 /// Seats an entity that holds no cells and no berth — one that has just given
@@ -951,7 +977,7 @@ pub(crate) fn restore_footprint(world: &mut World, entity: Entity) {
 pub enum SetDown {
     /// It stands on the map: set down now, or standing already.
     Placed,
-    /// No free cell within the search radius; it stays off the map.
+    /// No cell within reach of the set-down takes it; it stays off the map.
     NoCell,
 }
 
@@ -977,36 +1003,44 @@ pub fn place_back_beside(world: &mut World, entity: Entity, beside: Beside, lean
     }
 }
 
-/// Stands the hidden `entity` back on the free cell nearest `point` at most
-/// `range` cells from `rect` that its placement rules admit, announcing it,
-/// or `SetDown::NoCell` when none within the search radius takes it. The
-/// search starts from the cell within the range nearest `point` (see
-/// [`Projection::nearest_in_range_of_rect`](ferrets_geometry::projection::Projection::nearest_in_range_of_rect)).
+/// Stands the hidden `entity` back out of the holder `holder` on the free
+/// cell nearest `point` within the holder's unload range of its footprint
+/// that the set-down search takes, announcing it, or `SetDown::NoCell` when
+/// none in range takes it. The search starts from the cell within the range
+/// nearest `point`, see
+/// [`Projection::nearest_in_range_of_rect`](ferrets_geometry::projection::Projection::nearest_in_range_of_rect).
+///
+/// Panics for a holder gone from the world.
 pub(crate) fn place_back_near(
     world: &mut World,
     entity: Entity,
     point: CellPos,
-    rect: CellRect,
-    range: u32,
+    holder: SimulationId,
 ) -> SetDown {
+    let holder_entity = world
+        .resource::<EntityIndex>()
+        .any(holder)
+        .expect("a holder lets its passengers out while it is in the world");
     let def = entity_def::of(world, entity);
     let location_def = def
         .location
         .expect("only entities with LocationDef can be placed back");
-    let class = OccupancyClass::of(def);
-    let owner = entity_def::owner(world, entity);
-    let size = location_def.size();
-    let spot = CellRect::new(point, CellSize::ONE);
-    let map = world.resource::<Map>();
-    let projection = map.projection();
-    let start = projection.nearest_in_range_of_rect(rect, range, point);
-    let cell = map.find_placement_near_toward_where(start, CellSize::ONE, size, spot, |cell| {
-        let placed = LocationComponent::new(FixedUVec2::from(cell), DEFAULT_FACING);
-        projection.in_range_for_rects(CellRect::new(cell, size), rect, range)
-            && ground::can_place(world, &placed, location_def, class, &[], &[])
-            && fields::allows_placement(world, owner, def, cell)
-    });
-    match cell {
+    let beside = Beside::Container(holder);
+    let rect = entity_def::beside_rect(world, entity, beside);
+    let range = entity_def::effective_stat_u32(world, holder_entity, EntityStatId::UNLOAD_RANGE);
+    let start = world
+        .resource::<Map>()
+        .projection()
+        .nearest_in_range_of_rect(rect, range, point);
+    let lander = Lander {
+        def,
+        owner: entity_def::owner(world, entity),
+        from: ComesFrom::beside(world, entity, beside, range),
+        bound: Bound::Range { rect, range },
+        around: CellRect::new(start, CellSize::ONE),
+        toward: CellRect::new(point, CellSize::ONE),
+    };
+    match landing::set_down(world, lander, &[], &[entity], |_, _| true) {
         Some(cell) => {
             place_back_at(world, entity, cell, &location_def);
             SetDown::Placed
@@ -1015,39 +1049,41 @@ pub(crate) fn place_back_near(
     }
 }
 
-/// Stands the hidden `entity` back beside `beside` on the free cell nearest
-/// it that its placement rules admit, leaning as `lean` says, announcing it,
-/// or `SetDown::NoCell` when none within the search radius takes it.
-pub(crate) fn place_back_beside_admitted(
+/// Stands the hidden `entity` back out of the holder `holder`, within the
+/// holder's unload range of its footprint, on the free cell nearest it that
+/// the set-down search takes, leaning as `lean` says, announcing it, or
+/// `SetDown::NoCell` when none in range takes it.
+///
+/// Panics for a holder gone from the world.
+pub(crate) fn place_back_from_holder(
     world: &mut World,
     entity: Entity,
-    beside: Beside,
+    holder: SimulationId,
     lean: Lean,
 ) -> SetDown {
+    let holder_entity = world
+        .resource::<EntityIndex>()
+        .any(holder)
+        .expect("a holder lets its passengers out while it is in the world");
     let def = entity_def::of(world, entity);
     let location_def = def
         .location
         .expect("only entities with LocationDef can be placed back");
-    let class = OccupancyClass::of(def);
-    let owner = entity_def::owner(world, entity);
+    let beside = Beside::Container(holder);
     let around = entity_def::beside_rect(world, entity, beside);
-    let toward = match lean {
-        Lean::WentIn => entity_def::went_in_rect(world, entity),
-        Lean::Toward(toward) => toward,
-        Lean::Nothing => around,
-    };
-    let cell = world.resource::<Map>().find_placement_near_toward_where(
-        around.origin,
-        around.size,
-        location_def.size(),
-        toward,
-        |cell| {
-            let placed = LocationComponent::new(FixedUVec2::from(cell), DEFAULT_FACING);
-            ground::can_place(world, &placed, location_def, class, &[], &[])
-                && fields::allows_placement(world, owner, def, cell)
+    let range = entity_def::effective_stat_u32(world, holder_entity, EntityStatId::UNLOAD_RANGE);
+    let lander = Lander {
+        def,
+        owner: entity_def::owner(world, entity),
+        from: ComesFrom::beside(world, entity, beside, range),
+        bound: Bound::Range {
+            rect: around,
+            range,
         },
-    );
-    match cell {
+        around,
+        toward: lean_rect(world, entity, around, lean),
+    };
+    match landing::set_down(world, lander, &[], &[entity], |_, _| true) {
         Some(cell) => {
             place_back_at(world, entity, cell, &location_def);
             SetDown::Placed
@@ -1157,29 +1193,66 @@ pub(crate) fn align_broodlings(
     }
 }
 
-/// Seats a bred entity again after a change of form ended early with it back
-/// in its bred form: in a free berth of its breeder's group, back on its
-/// brood — or, when its breeder is gone or has no seat left for it,
-/// **destroyed**. Nothing for an entity nobody bred.
-pub(crate) fn reseat_broodling(world: &mut World, entity: Entity) {
-    let Some(bred) = world.entity(entity).get::<BredComponent>().cloned() else {
-        return;
+/// Where a bred entity sits again as a change of form ends early.
+#[derive(Debug, Clone)]
+pub(crate) enum BroodlingSeat {
+    /// Nobody bred it.
+    NotBred,
+    /// A free berth of its breeder's group.
+    Free {
+        /// The breeder whose berth it takes.
+        breeder: Entity,
+        /// How its bred form sits in that breeder's berths.
+        attachment: Attachment,
+    },
+    /// None: its breeder `of` is gone or has no seat left for it.
+    NoneFree {
+        /// The breeder it was bred by.
+        of: SimulationId,
+    },
+}
+
+/// Where `entity`, as `form`, its bred form, sits again in its breeder's
+/// berths as a change of form ends early.
+pub(crate) fn broodling_seat(world: &World, entity: Entity, form: EntityTypeId) -> BroodlingSeat {
+    let Some(bred) = world.entity(entity).get::<BredComponent>() else {
+        return BroodlingSeat::NotBred;
     };
-    let id = entity_def::simulation_id(world, entity);
     let Some(breeder) = world.resource::<EntityIndex>().alive(bred.by) else {
-        despawn_entity(world, entity, DeathCause::Unseated { of: bred.by });
-        return;
+        return BroodlingSeat::NoneFree { of: bred.by };
     };
-    // Its own copy of the attachment: the seating below changes the world.
-    let attachment = brood::broodling_attachment(world, entity)
+    let attachment = world
+        .resource::<ContentRegistry>()
+        .def(form)
+        .broodling
+        .as_ref()
+        .map(BroodlingDef::attachment)
         .cloned()
-        .expect("a bred entity's type is a broodling");
+        .expect("a bred entity's bred form is a broodling");
     if brood::holds(world, breeder, entity, &attachment) {
-        attach_entity(world, entity, breeder, &attachment);
-        brood::add(world, breeder, id);
+        BroodlingSeat::Free {
+            breeder,
+            attachment,
+        }
     } else {
-        despawn_entity(world, entity, DeathCause::Unseated { of: bred.by });
+        BroodlingSeat::NoneFree { of: bred.by }
     }
+}
+
+/// Seats a bred entity in the free berth of `breeder`'s group named by
+/// `attachment` nearest to it, back on its brood.
+///
+/// Panics when the group has no free berth: a caller seats only where
+/// [`broodling_seat`] found one.
+pub(crate) fn reseat_broodling(
+    world: &mut World,
+    entity: Entity,
+    breeder: Entity,
+    attachment: &Attachment,
+) {
+    let id = entity_def::simulation_id(world, entity);
+    attach_entity(world, entity, breeder, attachment);
+    brood::add(world, breeder, id);
 }
 
 /// Where an entity set back down on the grid came from.
@@ -1726,9 +1799,9 @@ fn settle_link(world: &mut World, gateway: Entity, key: LinkKey, lost: DeathCaus
 
 /// Applies a dying transporter's declared passenger fate to everyone aboard.
 ///
-/// Ejection is one placement attempt per passenger, in id order, on the cells
-/// its placement rules admit; a passenger no such cell takes dies with its
-/// holder.
+/// Ejection is one placement attempt per passenger, in id order, within the
+/// holder's unload range on the cells its placement rules admit; a passenger
+/// no such cell takes dies with its holder.
 fn settle_passengers(world: &mut World, entity: Entity, lean: Lean) {
     let Some(passengers) = world
         .entity_mut(entity)
@@ -1798,9 +1871,9 @@ fn settle_workers(world: &mut World, job: Entity, lean: Lean) {
 }
 
 /// Settles one passenger of `holder` on `fate`: destroyed with `lost` as the
-/// cause, or set down on the nearest free cell beside `holder` that its
-/// placement rules admit, leaning as `lean` says, and destroyed with `lost`
-/// when there is none. Its boarding ends after it is settled.
+/// cause, or set down within `holder`'s unload range on the nearest free cell
+/// its placement rules admit, leaning as `lean` says, and destroyed with
+/// `lost` when there is none. Its boarding ends after it is settled.
 fn settle_passenger(
     world: &mut World,
     passenger: Entity,
@@ -1811,12 +1884,10 @@ fn settle_passenger(
 ) {
     match fate {
         PassengerFate::Destroy => despawn_entity(world, passenger, lost),
-        PassengerFate::Eject => {
-            match place_back_beside_admitted(world, passenger, Beside::Container(holder), lean) {
-                SetDown::Placed => {}
-                SetDown::NoCell => despawn_entity(world, passenger, lost),
-            }
-        }
+        PassengerFate::Eject => match place_back_from_holder(world, passenger, holder, lean) {
+            SetDown::Placed => {}
+            SetDown::NoCell => despawn_entity(world, passenger, lost),
+        },
     }
     world
         .entity_mut(passenger)
@@ -2338,7 +2409,76 @@ fn spawn(
     arrival: Arrival,
     cause: SpawnCause,
 ) -> Option<(Entity, SimulationId)> {
-    let (entity, id) = create_entity(world, type_name, position, owner, reach, arrival)?;
+    spawn_clear_of(
+        world,
+        type_name,
+        position,
+        owner,
+        reach,
+        arrival,
+        cause,
+        &[],
+        &[],
+    )
+}
+
+/// [`create_entity`] on ground judged as though what `lifted` marks were off
+/// the grid and none of `ignored` stood on the map.
+#[allow(clippy::too_many_arguments)]
+fn create_entity_clear_of(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+    arrival: Arrival,
+    lifted: &[GridMark],
+    ignored: &[Entity],
+) -> Option<(Entity, SimulationId)> {
+    debug_assert!(
+        !movement_model::is_mid_crossing(position),
+        "entities spawn at rest: position must lie exactly on a cell origin"
+    );
+    // Both come off one borrow: the whole definition is never cloned for a
+    // placement test that reads two of its fields.
+    let (location_def, occupancy) = {
+        let registry = world.resource::<ContentRegistry>();
+        let def = registry.entity(type_name)?;
+        match &arrival {
+            Arrival::Standing { starts } => check_starts(registry, def, starts),
+            Arrival::Rising { .. } => {}
+        }
+        (def.location?, OccupancyClass::of(def))
+    };
+    let location = LocationComponent::new(position, DEFAULT_FACING);
+    if !ground::can_place(world, &location, location_def, occupancy, lifted, ignored) {
+        return None;
+    }
+
+    let (entity, id) = conjure(world, type_name, location, owner, reach, arrival)?;
+    // Stamped from the location the entity now carries, not the one tested
+    // above.
+    restore_footprint(world, entity);
+    Some((entity, id))
+}
+
+/// [`spawn`] on ground judged as though what `lifted` marks were off the grid
+/// and none of `ignored` stood on the map.
+#[allow(clippy::too_many_arguments)]
+fn spawn_clear_of(
+    world: &mut World,
+    type_name: &str,
+    position: FixedUVec2,
+    owner: Option<PlayerId>,
+    reach: FieldReach,
+    arrival: Arrival,
+    cause: SpawnCause,
+    lifted: &[GridMark],
+    ignored: &[Entity],
+) -> Option<(Entity, SimulationId)> {
+    let (entity, id) = create_entity_clear_of(
+        world, type_name, position, owner, reach, arrival, lifted, ignored,
+    )?;
     tunnels::bind_at_birth(world, entity, cause);
     announce(world, id, cause);
     Some((entity, id))
@@ -2449,42 +2589,44 @@ fn check_starts(registry: &ContentRegistry, def: &EntityTypeDef, starts: &[(Pool
 }
 
 /// The cell [`place_back_beside`] would stand `entity` on, or `None` when
-/// nothing within the search radius takes its footprint: an attached entity
-/// searches around the cell of the berth it sits at; any other beside
-/// `beside`, the cells `lean` names first.
+/// nothing within the search radius takes it: an attached entity steps out
+/// of the berth it sits at; any other comes out beside `beside`, the cells
+/// `lean` names first.
 ///
 /// Panics for a `Lean::WentIn` on an entity that is not hidden.
 fn cell_back_beside(world: &World, entity: Entity, beside: Beside, lean: Lean) -> Option<CellPos> {
-    let def = entity_def::of(world, entity);
-    let location_def = def.location.expect("only entities with LocationDef stand");
-    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
-    let solidity = location_def.solidity();
-    let occupancy = OccupancyClass::of(def);
-    let map = world.resource::<Map>();
-    if entity_def::attached(world, entity) {
-        let berth = body::anchor(entity_def::position(world, entity));
-        return map.find_placement_near(berth, CellSize::new(1, 1), shape, solidity, occupancy);
-    }
-    let around = entity_def::beside_rect(world, entity, beside);
+    let (from, around, toward) = if entity_def::attached(world, entity) {
+        let berth = CellRect::new(
+            body::anchor(entity_def::position(world, entity)),
+            CellSize::ONE,
+        );
+        (ComesFrom::berth(world, entity, berth), berth, berth)
+    } else {
+        let around = entity_def::beside_rect(world, entity, beside);
+        (
+            ComesFrom::beside(world, entity, beside, 1),
+            around,
+            lean_rect(world, entity, around, lean),
+        )
+    };
+    let lander = Lander {
+        def: entity_def::of(world, entity),
+        owner: entity_def::owner(world, entity),
+        from,
+        bound: Bound::Radius,
+        around,
+        toward,
+    };
+    landing::set_down(world, lander, &[], &[entity], |_, _| true)
+}
+
+/// The cells a body set down beside `around` takes first as `lean` says.
+///
+/// Panics for a `Lean::WentIn` on an entity that is not hidden.
+fn lean_rect(world: &World, entity: Entity, around: CellRect, lean: Lean) -> CellRect {
     match lean {
-        Lean::WentIn => map.find_placement_near_toward(
-            around.origin,
-            around.size,
-            shape,
-            solidity,
-            occupancy,
-            entity_def::went_in_rect(world, entity),
-        ),
-        Lean::Toward(toward) => map.find_placement_near_toward(
-            around.origin,
-            around.size,
-            shape,
-            solidity,
-            occupancy,
-            toward,
-        ),
-        Lean::Nothing => {
-            map.find_placement_near(around.origin, around.size, shape, solidity, occupancy)
-        }
+        Lean::WentIn => entity_def::went_in_rect(world, entity),
+        Lean::Toward(toward) => toward,
+        Lean::Nothing => around,
     }
 }

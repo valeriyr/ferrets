@@ -68,6 +68,9 @@ pub enum Refusal {
     Busy,
     /// Nothing around the entity can take what the order stands on the ground.
     NoRoom,
+    /// The entity never walks, and what the order works on lies beyond its
+    /// reach.
+    OutOfReach,
     /// The player's supply has no room for what the order makes.
     NoSupply,
 }

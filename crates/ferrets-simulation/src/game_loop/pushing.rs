@@ -28,30 +28,11 @@ pub fn resolve(world: &mut World) {
     }
 
     // Gather, in simulation-id order.
-    let mut entities: Vec<Entity> = Vec::new();
+    let claimants = claimants(world);
     let mut bodies: Vec<Body> = Vec::new();
-    let mut shapes: Vec<MoverShape> = Vec::new();
 
-    let content_registry = world.resource::<ContentRegistry>();
-
-    for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        if !entity_def::stands_on_grid(world, entity) {
-            continue;
-        }
-        let Some(location) = world.entity(entity).get::<LocationComponent>() else {
-            continue;
-        };
-        let position = location.position;
-        let def = entity_def::of(world, entity);
-        if !def.can_move() {
-            continue;
-        }
-        let Some(location_def) = def.location else {
-            continue;
-        };
-        if !location_def.solidity().claims_cells() {
-            continue;
-        }
+    for &(entity, shape) in &claimants {
+        let position = entity_def::position(world, entity);
         let heading = world
             .entity(entity)
             .get::<MoveComponent>()
@@ -63,8 +44,6 @@ pub fn resolve(world: &mut World) {
                     waypoint.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
                 )
             });
-        let shape = entity_def::mover_shape(content_registry, &location_def);
-        entities.push(entity);
         bodies.push(Body {
             position,
             size: shape.size,
@@ -73,14 +52,13 @@ pub fn resolve(world: &mut World) {
             layers: shape.layers,
             heading,
         });
-        shapes.push(shape);
     }
 
     // Commit through terrain: a push may never overlap a body onto a
     // statically blocked cell — the blocked axis is dropped, sliding along
     // the other.
     let pushes = contact::separations(&bodies);
-    for (((&entity, body), &shape), push) in entities.iter().zip(&bodies).zip(&shapes).zip(pushes) {
+    for ((&(entity, shape), body), push) in claimants.iter().zip(&bodies).zip(pushes) {
         // A mover still rising pushes the others but stands where it was set
         // down, as a structure does, until it has risen.
         if push == FixedVec2::ZERO || entity_def::rising(world, entity) {
@@ -95,6 +73,16 @@ pub fn resolve(world: &mut World) {
             body.radius,
         );
         if committed != body.position {
+            debug_assert!(
+                {
+                    let hierarchy = world.resource::<Map>().hierarchy();
+                    hierarchy.is_dirty()
+                        || hierarchy
+                            .region_of(body::anchor(committed), shape)
+                            .is_some()
+                },
+                "a slid walker keeps an anchor in a region of its shape"
+            );
             world
                 .entity_mut(entity)
                 .get_mut::<LocationComponent>()
@@ -103,18 +91,54 @@ pub fn resolve(world: &mut World) {
         }
     }
 
+    rebuild_from(world, &claimants);
+}
+
+/// Re-derives the claim plane under the continuous model from where its
+/// claimants stand now.
+///
+/// Panics under the cell model, whose claims are never rebuilt.
+pub(crate) fn rebuild_claims(world: &mut World) {
+    let claimants = claimants(world);
+    rebuild_from(world, &claimants);
+}
+
+/// Every body standing on the grid that claims its cells as it moves, with
+/// the shape it moves as, in simulation-id order.
+fn claimants(world: &World) -> Vec<(Entity, MoverShape)> {
+    let registry = world.resource::<ContentRegistry>();
+    world
+        .resource::<EntityIndex>()
+        .alive_entries()
+        .into_iter()
+        .filter_map(|(_, entity)| {
+            if !entity_def::stands_on_grid(world, entity)
+                || !world.entity(entity).contains::<LocationComponent>()
+            {
+                return None;
+            }
+            let def = entity_def::of(world, entity);
+            let location_def = def.location?;
+            (def.can_move() && location_def.solidity().claims_cells())
+                .then(|| (entity, entity_def::mover_shape(registry, &location_def)))
+        })
+        .collect()
+}
+
+/// Rebuilds the claim plane from where `claimants` stand and from the ground
+/// in-flight form changes reserve.
+fn rebuild_from(world: &mut World, claimants: &[(Entity, MoverShape)]) {
     // The footprint under each settled body — anchored at the cell the eye
     // puts it on, and as wide as the body moves. Placement and spawning see
     // each unit where it stands (a pushed body's claim follows it), and a
     // walk claims one stepping footprint at a time, as under the cell model.
     // The claim plane is a cell-resolution summary, not the collision
     // geometry — contact and terrain stay with the circles.
-    let footprints: Vec<(LayerMask, CellSize, CellPos)> = entities
+    let footprints: Vec<(LayerMask, CellSize, CellPos)> = claimants
         .iter()
-        .zip(&bodies)
-        .map(|(&entity, body)| {
+        .map(|&(entity, shape)| {
             let position = entity_def::position(world, entity);
-            (body.layers, body.size, body::anchor(position))
+            (shape.layers, shape.size, body::anchor(position))
         })
         .collect();
 

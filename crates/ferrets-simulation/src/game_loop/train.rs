@@ -2,7 +2,7 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::cell_rect::CellRect;
+use ferrets_content::{landing::Landing, registry::ContentRegistry};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::orders::{self, Processing, Refusal};
@@ -12,13 +12,11 @@ use crate::{
         train::{TrainComponent, TrainQueueComponent},
     },
     entity_def,
-    map::Map,
-    occupancy::OccupancyClass,
+    landing::{self, Bound, ComesFrom, Lander, Landings},
     order::Order,
     rally,
     spawn::{self, FieldReach},
 };
-use ferrets_content::registry::ContentRegistry;
 
 /// Whether `entity` may start a Train: its type trains and it has risen.
 /// A disabled trainer is admitted and waits; an orphaned annex is not.
@@ -104,7 +102,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         .as_ref()
         .is_some_and(|t| t.can_train(&type_name));
 
-    let (train_time, unit_location_def, unit_class) = {
+    let train_time = {
         let registry = world.resource::<ContentRegistry>();
         let type_def = if allowed {
             registry.entity(&type_name)
@@ -123,13 +121,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             world.entity_mut(entity).insert(train_component);
             return Processing::state(OrderState::InProcessing);
         };
-        (
-            type_def.train_time.expect("queued type must be trainable"),
-            type_def
-                .location
-                .expect("validated content defines a location"),
-            OccupancyClass::of(type_def),
-        )
+        type_def.train_time.expect("queued type must be trainable")
     };
 
     if train_component.progress < train_time {
@@ -137,22 +129,28 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     }
 
     if train_component.progress >= train_time {
-        let CellRect { origin, size } = entity_def::footprint_rect(world, entity);
-
-        let content_registry = world.resource::<ContentRegistry>();
-        let placement = world.resource::<Map>().find_placement_near(
-            origin,
-            size,
-            entity_def::mover_shape(content_registry, &unit_location_def),
-            unit_location_def.solidity(),
-            unit_class,
-        );
+        let trainer_rect = entity_def::footprint_rect(world, entity);
+        let owner = entity_def::owner(world, entity)
+            .expect("a train queue is filled by its owner's command");
+        let unit_def = world
+            .resource::<ContentRegistry>()
+            .entity(&type_name)
+            .expect("the type was resolved a moment ago");
+        let mut landings = Landings::new(owner, Landing::Anywhere, &[], &[], &[]);
+        let lander = Lander {
+            def: unit_def,
+            owner: Some(owner),
+            from: ComesFrom::of(world, entity),
+            bound: Bound::Radius,
+            around: trainer_rect,
+            toward: trainer_rect,
+        };
+        let placement = landing::land(world, &mut landings, lander);
 
         // No free cell around the trainer — hold the finished unit and retry.
         // The unit leaves the queue only once it stands: a spawn the cell
         // refuses after all holds it the same way.
         let spawned = placement.and_then(|cell| {
-            let owner = entity_def::owner(world, entity);
             let trainer = entity_def::simulation_id(world, entity);
             spawn::spawn_trained(
                 world,

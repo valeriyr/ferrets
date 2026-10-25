@@ -5,19 +5,22 @@
 use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput, SpeedIntent, tick};
 use ferrets_content::{
+    build::BuilderAttendance,
     entity_type_def::EntityTypeDef,
     field::FieldPlacement,
     location::Solidity,
     registry::ContentRegistry,
-    skills::{EntityCastTarget, SkillCaster, SkillId},
+    skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillId, SummonAt, SummonPlacement},
+    work::WorkPresence,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
-use ferrets_nav_grid::layer_mask::LayerMask;
+use ferrets_nav_grid::{layer_mask::LayerMask, mover_shape::MoverShape};
 use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
+        attached::AttachedComponent,
         dying::RemainsComponent,
         entity_info::EntityInfoComponent,
         field_source::{Emitted, FieldSourcesComponent},
@@ -45,7 +48,7 @@ use ferrets_simulation::{
     selection::Selection,
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
-    visibility::VisibilityGrid,
+    visibility::{CellVisibility, VisibilityGrid},
 };
 
 use crate::{
@@ -826,6 +829,9 @@ pub enum AimVerdict {
     Takes,
     /// The cast would refuse what the cursor is over, for this reason.
     Refuses(AimRefusal),
+    /// The cast takes what the cursor is over, but the leading caster cannot
+    /// get within its reach of it.
+    OutOfReach,
 }
 
 /// While a skill is armed, notes what the cursor would cast it on.
@@ -885,7 +891,10 @@ pub fn judge_aim(world: &mut World) {
             match (hovered, player, caster) {
                 (Some(target), Some(player), Some(caster)) => {
                     match cast::aim(world, player, caster, skill, Some(target)) {
-                        Ok(_) => AimVerdict::Takes,
+                        Ok(aim) if cast::reaches_aim(world, caster, skill, aim) => {
+                            AimVerdict::Takes
+                        }
+                        Ok(_) => AimVerdict::OutOfReach,
                         Err(refusal) => AimVerdict::Refuses(refusal),
                     }
                 }
@@ -1036,7 +1045,7 @@ pub fn targeting_input(
                 return;
             };
             match *aim_verdict {
-                AimVerdict::Refuses(_) => return,
+                AimVerdict::Refuses(_) | AimVerdict::OutOfReach => return,
                 AimVerdict::Takes | AimVerdict::Idle => {}
             }
             for &caster in selection.get(local) {
@@ -1204,6 +1213,7 @@ pub fn placement_input(
         Option<&render::Sighted>,
         Option<&OwnerComponent>,
         Option<&FieldSourcesComponent>,
+        Option<&AttachedComponent>,
     )>,
 ) {
     let InputMode::PlacingBuild(type_name) = &*mode else {
@@ -1243,12 +1253,18 @@ pub fn placement_input(
     // What the perspective knows of the ground, and the fields the type
     // reads; a type raised over a source snaps to one under the cursor.
     let cursor = CellPos::new(cx, cy);
+    // The builder the order goes to is left out when it gets out of its own
+    // site's way: one that walks steps off where it keeps the site off, one
+    // that leaves the grid is set aside as the site goes up.
     let mut made_out = made_out_footprints(
         &registry,
         sources
             .iter()
-            .map(|(info, location, visibility, sighted, _, _)| {
-                (info, location, visibility, sighted)
+            .filter(|(info, ..)| {
+                Some(info.id()) != leading.0 || !gets_out_of_way(registry.def(info.type_id()))
+            })
+            .map(|(info, location, visibility, sighted, _, _, seated)| {
+                (info, location, visibility, sighted, seated)
             }),
     );
     made_out.extend(ghosts.remembered_footprints());
@@ -1266,7 +1282,7 @@ pub fn placement_input(
         cursor,
         sources
             .iter()
-            .map(|(info, location, visibility, sighted, _, _)| {
+            .map(|(info, location, visibility, sighted, _, _, _)| {
                 (info, location, visibility, sighted)
             }),
     );
@@ -1287,7 +1303,7 @@ pub fn placement_input(
         // Other sources of the same field, at what they put on the grid: the
         // side's own, allies included — another side's reach is its own to
         // know, whatever the fog shows of the source itself.
-        for (info, location, _, _, owner, states) in &sources {
+        for (info, location, _, _, owner, states, _) in &sources {
             let own_side = owner.is_some_and(|owner| session.are_allied(local, owner.player()));
             let Some(states) = states else {
                 continue;
@@ -1317,17 +1333,7 @@ pub fn placement_input(
             }
         }
     }
-    let center = Vec2::new(
-        (cx as f32 + size.width as f32 / 2.0) * CELL_PX,
-        -(cy as f32 + size.height as f32 / 2.0) * CELL_PX,
-    );
-    let extent = Vec2::new(size.width as f32, size.height as f32) * CELL_PX;
-    let color = if passable {
-        Color::srgb(0.3, 1.0, 0.4)
-    } else {
-        Color::srgb(1.0, 0.3, 0.3)
-    };
-    gizmos.rect_2d(Isometry2d::from_translation(center), extent, color);
+    draw_footprint_ghost(&mut gizmos, CellRect::new(anchor, size), passable);
 
     if mouse.just_pressed(MouseButton::Left)
         && let Some(builder) = leading.0
@@ -1370,6 +1376,7 @@ pub fn warp_placement_input(
         &LocationComponent,
         &Visibility,
         Option<&render::Sighted>,
+        Option<&AttachedComponent>,
     )>,
     ghosts: Res<render::Ghosts>,
     interactions: Query<&Interaction>,
@@ -1429,8 +1436,12 @@ pub fn warp_placement_input(
     };
     // A type raised over a source snaps to one under the cursor, as a build
     // ghost does.
-    let (anchor, placed) = ghost.placed(def, CellPos::new(cx, cy), seen.iter());
-    let (cx, cy) = (anchor.x, anchor.y);
+    let (anchor, placed) = ghost.placed(
+        def,
+        CellPos::new(cx, cy),
+        seen.iter()
+            .map(|(info, location, visibility, sighted, _)| (info, location, visibility, sighted)),
+    );
     let footprint = CellRect::new(anchor, size);
     let fits = placed
         && ghost.allows(warper_def.within(), footprint)
@@ -1442,17 +1453,7 @@ pub fn warp_placement_input(
             footprint,
         );
 
-    let center = Vec2::new(
-        (cx as f32 + size.width as f32 / 2.0) * CELL_PX,
-        -(cy as f32 + size.height as f32 / 2.0) * CELL_PX,
-    );
-    let extent = Vec2::new(size.width as f32, size.height as f32) * CELL_PX;
-    let color = if fits {
-        Color::srgb(0.3, 1.0, 0.4)
-    } else {
-        Color::srgb(1.0, 0.3, 0.3)
-    };
-    gizmos.rect_2d(Isometry2d::from_translation(center), extent, color);
+    draw_footprint_ghost(&mut gizmos, footprint, fits);
 
     if mouse.just_pressed(MouseButton::Left) {
         click.0 = Some(Warp {
@@ -1462,6 +1463,117 @@ pub fn warp_placement_input(
         });
         *mode = InputMode::Normal;
     }
+}
+
+/// While a summon aimed at a position is armed, mark the cell under the
+/// cursor: an exact summon draws the summoned type's footprint ghost there,
+/// fitting where the cast takes that aim — its reach — and the ground there
+/// takes the body as the leading caster's side knows it, inside the summon's
+/// field rules and its landing word; a nearby summon a pointer on the cell,
+/// as its search sets the body down beside it.
+///
+/// The click is [`targeting_input`]'s.
+#[allow(clippy::too_many_arguments)]
+pub fn summon_ghost(
+    mode: Res<InputMode>,
+    verdict: Res<AimVerdict>,
+    mut gizmos: Gizmos,
+    (map, registry, session, fields, visibility): (
+        Res<Map>,
+        Res<ContentRegistry>,
+        Res<GameSession>,
+        Res<FieldGrid>,
+        Res<VisibilityGrid>,
+    ),
+    seen: Query<(
+        &EntityInfoComponent,
+        &LocationComponent,
+        &Visibility,
+        Option<&render::Sighted>,
+        Option<&AttachedComponent>,
+    )>,
+    ghosts: Res<render::Ghosts>,
+    interactions: Query<&Interaction>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+) {
+    let &InputMode::Targeting(TargetedOrder::Skill(skill)) = &*mode else {
+        return;
+    };
+    let Some(SkillCaster::Entity {
+        effect:
+            EntityCastEffect::Summon {
+                at: SummonAt::Cell { .. },
+                entity_type,
+                placement,
+                landing,
+                within,
+                ..
+            },
+        ..
+    }) = registry.skill_def(skill).map(|def| &def.caster)
+    else {
+        return;
+    };
+    let Some(local) = session.local_player() else {
+        return;
+    };
+    if pointer_over_ui(&interactions) {
+        return;
+    }
+    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
+        return;
+    };
+    let Some(cursor) = cursor_world(window, camera, camera_transform) else {
+        return;
+    };
+    let Some((cx, cy)) = world_to_cell(cursor) else {
+        return;
+    };
+    match placement {
+        SummonPlacement::Exact => {}
+        SummonPlacement::Nearby => {
+            let center = Vec2::new((cx as f32 + 0.5) * CELL_PX, -(cy as f32 + 0.5) * CELL_PX);
+            gizmos.circle_2d(
+                Isometry2d::from_translation(center),
+                CELL_PX * 0.35,
+                Color::srgb(1.0, 0.85, 0.35),
+            );
+            return;
+        }
+    }
+    let def = registry.def(*entity_type);
+    let size = def
+        .location
+        .expect("validated content defines a location")
+        .size();
+    let mut made_out = made_out_footprints(&registry, seen.iter());
+    made_out.extend(ghosts.remembered_footprints());
+    let ghost = GhostView {
+        map: &map,
+        registry: &registry,
+        fields: &fields,
+        fog: &visibility,
+        session: &session,
+        player: local,
+        made_out: &made_out,
+    };
+    let (anchor, placed) = ghost.placed(
+        def,
+        CellPos::new(cx, cy),
+        seen.iter()
+            .map(|(info, location, visibility, sighted, _)| (info, location, visibility, sighted)),
+    );
+    let footprint = CellRect::new(anchor, size);
+    let takes_aim = match *verdict {
+        AimVerdict::Takes => true,
+        AimVerdict::Idle | AimVerdict::Refuses(_) | AimVerdict::OutOfReach => false,
+    };
+    let fits = takes_aim
+        && placed
+        && ghost.allows(within, footprint)
+        && landing::sees_in(&visibility, &session, local, *landing, footprint);
+    draw_footprint_ghost(&mut gizmos, footprint, fits);
 }
 
 /// A warp-in clicked this frame, not yet given to a warper.
@@ -1604,38 +1716,64 @@ pub struct GhostView<'a> {
     pub session: &'a GameSession,
     /// The player placing.
     pub player: PlayerId,
-    /// The footprints, with the layers they stand on and how solid they are,
-    /// of the entities the player makes out or remembers that hold their
-    /// ground.
-    pub made_out: &'a [(LayerMask, CellRect, Solidity)],
+    /// The footprints the player makes out or remembers.
+    pub made_out: &'a [render::MadeOutFootprint],
 }
 
 impl GhostView<'_> {
-    /// Whether the ghost of `def` anchored at `anchor` shows as fitting: on
-    /// ground the simulation's [`ground::takes`] says it takes, clear on a
-    /// layer it occupies of every footprint made out that claims its cells —
-    /// and, for a footprint on the static plane, of every one that holds its
-    /// ground — and its type's field rules met.
+    /// Whether the ghost of `def` anchored at `anchor` shows as fitting: its
+    /// footprint on the map, over ground the simulation's [`ground::takes`]
+    /// says it takes wherever the side has explored it; clear, on a layer it
+    /// occupies, of every footprint made out that claims its cells — of
+    /// standing ones alone for a body that claims none — and, for a footprint
+    /// on the static plane, of every ground holder that keeps it off; and its
+    /// type's field rules met.
     pub fn fits(&self, def: &EntityTypeDef, anchor: CellPos) -> bool {
         let location_def = def.location.expect("validated content defines a location");
         let shape = entity_def::mover_shape(self.registry, &location_def);
-        let footprint = CellRect::new(anchor, shape.size);
+        let placed = CellRect::new(anchor, shape.size);
         let class = OccupancyClass::of(def);
-        let refused_underfoot = match class {
-            OccupancyClass::Static => true,
-            OccupancyClass::Claim => false,
-        };
-        ground::takes(self.map, anchor, shape, class)
-            && !self.made_out.iter().any(|&(layers, standing, solidity)| {
-                layers & shape.layers != LayerMask::EMPTY
-                    && standing.intersects(footprint)
-                    && match solidity {
-                        Solidity::Solid => true,
-                        Solidity::Underfoot => refused_underfoot,
-                        Solidity::Passable => unreachable!("a passable body holds no ground"),
+        placed.cells().all(|cell| self.map.contains(cell))
+            && self.takes_explored(anchor, shape, class)
+            && !self.made_out.iter().any(|footprint| {
+                footprint.layers & shape.layers != LayerMask::EMPTY
+                    && footprint.rect.intersects(placed)
+                    && match (footprint.solidity, footprint.class) {
+                        // A body claiming its cells needs them clear of every
+                        // claim; one claiming none, of standing claims alone.
+                        (Solidity::Solid, OccupancyClass::Static) => true,
+                        (Solidity::Solid, OccupancyClass::Claim) => match location_def.solidity() {
+                            Solidity::Solid => true,
+                            Solidity::Underfoot | Solidity::Passable => false,
+                        },
+                        // A mover claiming nothing keeps solid standing
+                        // footprints off.
+                        (Solidity::Underfoot | Solidity::Passable, OccupancyClass::Claim) => {
+                            match (class, location_def.solidity()) {
+                                (OccupancyClass::Static, Solidity::Solid) => true,
+                                (
+                                    OccupancyClass::Static,
+                                    Solidity::Underfoot | Solidity::Passable,
+                                )
+                                | (
+                                    OccupancyClass::Claim,
+                                    Solidity::Solid | Solidity::Underfoot | Solidity::Passable,
+                                ) => false,
+                            }
+                        }
+                        // A standing ground holder keeps off what its
+                        // solidity keeps off.
+                        (Solidity::Underfoot | Solidity::Passable, OccupancyClass::Static) => {
+                            match class {
+                                OccupancyClass::Static => {
+                                    footprint.solidity.keeps_off(location_def.solidity())
+                                }
+                                OccupancyClass::Claim => false,
+                            }
+                        }
                     }
             })
-            && self.allows(&def.field_placement, footprint)
+            && self.allows(&def.field_placement, placed)
     }
 
     /// Where the ghost of `def` stands with the cursor on `cursor`, and whether
@@ -1703,10 +1841,51 @@ impl GhostView<'_> {
             },
         )
     }
+
+    /// Whether the ground the side has explored takes a footprint of `shape`
+    /// at `anchor` on the plane `occupancy` selects, as [`ground::takes`]
+    /// judges it, a cell never explored read as taking it: the whole
+    /// footprint when every cell is explored, else each explored cell alone,
+    /// on one level for a static footprint.
+    fn takes_explored(
+        &self,
+        anchor: CellPos,
+        shape: MoverShape,
+        occupancy: OccupancyClass,
+    ) -> bool {
+        let footprint = CellRect::new(anchor, shape.size);
+        let explored =
+            |cell: CellPos| match self
+                .fog
+                .visibility_to(self.session, self.player, cell.x, cell.y)
+            {
+                CellVisibility::Unexplored => false,
+                CellVisibility::Explored | CellVisibility::Visible => true,
+            };
+        if footprint.cells().all(explored) {
+            return ground::takes(self.map, anchor, shape, occupancy);
+        }
+        let single = MoverShape {
+            size: CellSize::ONE,
+            ..shape
+        };
+        let grid = self.map.nav_grid();
+        let level = |cell: CellPos| grid.relief(shape.layer, cell).map(|relief| relief.level);
+        let known: Vec<CellPos> = footprint.cells().filter(|&cell| explored(cell)).collect();
+        let one_level = match occupancy {
+            OccupancyClass::Static => known.iter().all(|&cell| level(cell) == level(known[0])),
+            OccupancyClass::Claim => true,
+        };
+        one_level
+            && known
+                .iter()
+                .all(|&cell| ground::takes(self.map, cell, single, occupancy))
+    }
 }
 
-/// The footprints, with the layers they stand on and their solidity, of every
-/// entity the perspective makes out whose footprint holds its ground.
+/// The footprint of every entity the perspective makes out standing on the
+/// map — a mover claiming no cells over every cell it stands across — but
+/// those seated in a berth.
 pub fn made_out_footprints<'a>(
     registry: &ContentRegistry,
     entities: impl Iterator<
@@ -1715,19 +1894,33 @@ pub fn made_out_footprints<'a>(
             &'a LocationComponent,
             &'a Visibility,
             Option<&'a render::Sighted>,
+            Option<&'a AttachedComponent>,
         ),
     >,
-) -> Vec<(LayerMask, CellRect, Solidity)> {
+) -> Vec<render::MadeOutFootprint> {
     entities
-        .filter(|&(_, _, visibility, sighted)| render::made_out(visibility, sighted))
-        .filter_map(|(info, location, _, _)| {
-            let location_def = registry.def(info.type_id()).location?;
-            location_def.solidity().holds_ground().then(|| {
-                (
-                    location_def.occupies(),
-                    CellRect::new(body::anchor(location.position), location_def.size()),
-                    location_def.solidity(),
-                )
+        .filter(|&(_, _, visibility, sighted, seated)| {
+            render::made_out(visibility, sighted) && seated.is_none()
+        })
+        .filter_map(|(info, location, _, _, _)| {
+            let def = registry.def(info.type_id());
+            let location_def = def.location?;
+            let class = OccupancyClass::of(def);
+            let footprint = match (class, location_def.solidity()) {
+                (OccupancyClass::Claim, Solidity::Underfoot | Solidity::Passable) => {
+                    body::standing_rect(location.position, location_def.size())
+                }
+                (OccupancyClass::Claim, Solidity::Solid)
+                | (
+                    OccupancyClass::Static,
+                    Solidity::Solid | Solidity::Underfoot | Solidity::Passable,
+                ) => CellRect::new(body::anchor(location.position), location_def.size()),
+            };
+            Some(render::MadeOutFootprint {
+                layers: location_def.occupies(),
+                rect: footprint,
+                solidity: location_def.solidity(),
+                class,
             })
         })
         .collect()
@@ -1755,6 +1948,22 @@ pub fn snaps_to(
     let footprint = CellRect::new(body::anchor(location.position), size);
     (footprint.contains(cursor) && render::made_out(visibility, sighted))
         .then_some(footprint.origin)
+}
+
+/// Whether an entity of `def` gets out of the way of a site it stands on and
+/// is to raise: a builder that walks, or whose attendance takes it off the
+/// grid as the site goes up.
+pub fn gets_out_of_way(def: &EntityTypeDef) -> bool {
+    match def.builder.as_ref().map(|builder| builder.attendance()) {
+        Some(
+            BuilderAttendance::Crew(WorkPresence::Hidden { .. } | WorkPresence::Attached(_))
+            | BuilderAttendance::Consumed,
+        ) => true,
+        Some(
+            BuilderAttendance::Crew(WorkPresence::Present { .. }) | BuilderAttendance::Unattended,
+        ) => def.can_move(),
+        None => false,
+    }
 }
 
 /// Outlines the reach of a `size` footprint anchored at `anchor`: a circle
@@ -1796,4 +2005,21 @@ fn skill_target_at(
             entity_at(cursor, Clicked::Standing, registry, entities).map(SkillTarget::Entity)
         }
     }
+}
+
+/// Draws a placement ghost over `footprint`: green when it `fits`, red when
+/// not.
+fn draw_footprint_ghost(gizmos: &mut Gizmos, footprint: CellRect, fits: bool) {
+    let CellRect { origin, size } = footprint;
+    let center = Vec2::new(
+        (origin.x as f32 + size.width as f32 / 2.0) * CELL_PX,
+        -(origin.y as f32 + size.height as f32 / 2.0) * CELL_PX,
+    );
+    let extent = Vec2::new(size.width as f32, size.height as f32) * CELL_PX;
+    let color = if fits {
+        Color::srgb(0.3, 1.0, 0.4)
+    } else {
+        Color::srgb(1.0, 0.3, 0.3)
+    };
+    gizmos.rect_2d(Isometry2d::from_translation(center), extent, color);
 }

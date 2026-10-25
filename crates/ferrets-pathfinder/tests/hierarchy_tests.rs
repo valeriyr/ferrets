@@ -428,6 +428,20 @@ fn refresh_re_derives_marked_borders() {
 }
 
 #[test]
+fn hierarchy_is_dirty_from_marked_change_until_refreshed() {
+    let mut grid = utils::grid(8, 4);
+    let mut hierarchy = utils::build_ground(&grid, 4);
+    assert!(!hierarchy.is_dirty());
+
+    grid.set_occupied_by(utils::GROUND, utils::nav(3, 2), true);
+    hierarchy.mark_dirty(utils::nav(3, 2));
+    assert!(hierarchy.is_dirty());
+
+    hierarchy.refresh(&grid);
+    assert!(!hierarchy.is_dirty());
+}
+
+#[test]
 fn refresh_restores_entrance_when_footprint_clears() {
     let mut grid = utils::grid(8, 4);
     let mut hierarchy = utils::build_ground(&grid, 4);

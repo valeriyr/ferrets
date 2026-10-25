@@ -25,11 +25,12 @@ use ferrets_content::{
     skills::{
         AimParty, CasterParty, Casting, Count, EntityCastEffect, EntityCastTarget, FromAimTo,
         FromCasterTo, GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach,
-        Refund, Shortfall, SkillCaster, SkillDef, SkillId, SummonArrival, Whom,
+        Refund, Shortfall, SkillCaster, SkillDef, SkillId, SummonArrival, SummonPlacement, Whom,
     },
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_physics::body;
 
 use super::{
     buffs::{self, Bearing},
@@ -50,7 +51,7 @@ use crate::{
     entity_index::EntityIndex,
     events::{EventRecord, SimulationEvent, SpendCause},
     game_loop::fields,
-    landing::{self, Landings},
+    landing::{self, Bound, ComesFrom, Lander, Landings},
     map::Map,
     order::Order,
     overbuild::{self, Cover},
@@ -284,6 +285,155 @@ pub fn by_player(
     }
 
     player_skills::cast(world, player, skill, cooldown);
+}
+
+/// Whether the caster has this skill ready and is in a state to cast at all.
+pub(super) fn ready(world: &World, caster: Entity, skill: SkillId) -> bool {
+    let has_skill = world
+        .entity(caster)
+        .get::<SkillsComponent>()
+        .is_some_and(|skills| skills.ready(skill));
+    has_skill && orders::requires_operating(world, caster).is_ok()
+}
+
+/// Why a cast cannot take what it was aimed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AimRefusal {
+    /// The cast takes a target of another shape than it was given: a cell
+    /// for an entity, or none at all.
+    Unaimed,
+    /// The cell lies off the map.
+    OffMap,
+    /// The entity is not one the caster's owner makes out, or is gone.
+    Unseen,
+    /// The entity stands on a side the cast does not take.
+    WrongSide,
+    /// The entity is not a kind the cast takes.
+    WrongKind,
+    /// The entity cannot take what the cast does to it: a buff modifying a
+    /// stat it lacks, or a heal without a health pool.
+    Uncarried,
+    /// The cell is where the cast would set bodies down, and the caster's side
+    /// does not see it as the cast's landing asks.
+    LandingUnseen,
+}
+
+/// Resolves what `caster`'s cast of `skill` acts on when aimed at `target`, or
+/// why it cannot take it — an entity that cannot carry the buff the cast
+/// applies included.
+///
+/// Fog applies to every named aim: what a player cannot see, it cannot name.
+/// Panics when `skill` is not cast by an entity.
+pub fn aim(
+    world: &World,
+    player: PlayerId,
+    caster: Entity,
+    skill: SkillId,
+    target: Option<SkillTarget>,
+) -> Result<CastAim, AimRefusal> {
+    let def = world
+        .resource::<ContentRegistry>()
+        .skill_def(skill)
+        .expect("a skill id comes from the registry");
+    let SkillCaster::Entity { effect, .. } = &def.caster else {
+        panic!("aim is asked of a skill an entity casts");
+    };
+    match effect.target() {
+        EntityCastTarget::Caster => {
+            takes(world, caster, effect)?;
+            Ok(CastAim::Entity(caster))
+        }
+        EntityCastTarget::Position { .. } => {
+            let Some(SkillTarget::Position(position)) = target else {
+                return Err(AimRefusal::Unaimed);
+            };
+            let cell = CellPos::from(position);
+            if !world.resource::<Map>().contains(cell) {
+                return Err(AimRefusal::OffMap);
+            }
+            match lands_at_aim(effect) {
+                Some(landing)
+                    if !landing::sees(
+                        world,
+                        player,
+                        landing,
+                        CellRect::new(cell, CellSize::ONE),
+                    ) =>
+                {
+                    Err(AimRefusal::LandingUnseen)
+                }
+                Some(_) | None => Ok(CastAim::Cell(cell)),
+            }
+        }
+        EntityCastTarget::Fallen { kinds, .. } => {
+            let Some(SkillTarget::Entity(id)) = target else {
+                return Err(AimRefusal::Unaimed);
+            };
+            // Anyone's body serves: what fell there stopped belonging to
+            // anybody when it fell.
+            let remains =
+                visibility::remains_interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
+            if !names(world, remains, kinds) {
+                return Err(AimRefusal::WrongKind);
+            }
+            Ok(CastAim::Remains(remains))
+        }
+        EntityCastTarget::Standing {
+            whom: Whom { side, kinds },
+            ..
+        } => {
+            let Some(SkillTarget::Entity(id)) = target else {
+                return Err(AimRefusal::Unaimed);
+            };
+            let target =
+                visibility::interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
+            let session = world.resource::<GameSession>();
+            let caster_owner = entity_def::owner(world, caster);
+            let target_owner = entity_def::owner(world, target);
+            if !owner::admits(session, *side, caster_owner, target_owner) {
+                return Err(AimRefusal::WrongSide);
+            }
+            if !names(world, target, kinds) {
+                return Err(AimRefusal::WrongKind);
+            }
+            takes(world, target, effect)?;
+            Ok(CastAim::Entity(target))
+        }
+    }
+}
+
+/// Whether `caster` reaches `aim` with `skill` from where it can get to: any
+/// aim, for a cast declaring no reach or a caster that walks into it; for one
+/// that cannot walk, an aim within the reach of every cell it stands on, as
+/// the cast order measures it.
+///
+/// Panics when `skill` is not a registered skill.
+pub fn reaches_aim(world: &World, caster: Entity, skill: SkillId, aim: CastAim) -> bool {
+    let def = world
+        .resource::<ContentRegistry>()
+        .skill_def(skill)
+        .expect("a skill id comes from the registry");
+    let Some(range) = reach_of(world, caster, def) else {
+        return true;
+    };
+    if entity_def::of(world, caster).can_move() {
+        return true;
+    }
+    let goal = match aim {
+        CastAim::Cell(cell) => CellRect::new(cell, CellSize::ONE),
+        CastAim::Entity(target) | CastAim::Remains(target) => {
+            let (position, size) = entity_def::footprint(world, target);
+            body::standing_rect(position, size)
+        }
+    };
+    let (position, size) = entity_def::footprint(world, caster);
+    entity_def::reaches(
+        world,
+        caster,
+        body::standing_rect(position, size),
+        goal,
+        range,
+    )
 }
 
 /// Where a resolved entity cast lands.
@@ -520,121 +670,6 @@ fn give_back(world: &mut World, caster: Entity, skill: SkillId, paid: Paid) {
     entity_skills::reset_cooldown(world, caster, skill);
 }
 
-/// Whether the caster has this skill ready and is in a state to cast at all.
-pub(super) fn ready(world: &World, caster: Entity, skill: SkillId) -> bool {
-    let has_skill = world
-        .entity(caster)
-        .get::<SkillsComponent>()
-        .is_some_and(|skills| skills.ready(skill));
-    has_skill && orders::requires_operating(world, caster).is_ok()
-}
-
-/// Why a cast cannot take what it was aimed at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AimRefusal {
-    /// The cast takes a target of another shape than it was given: a cell
-    /// for an entity, or none at all.
-    Unaimed,
-    /// The cell lies off the map.
-    OffMap,
-    /// The entity is not one the caster's owner makes out, or is gone.
-    Unseen,
-    /// The entity stands on a side the cast does not take.
-    WrongSide,
-    /// The entity is not a kind the cast takes.
-    WrongKind,
-    /// The entity cannot take what the cast does to it: a buff modifying a
-    /// stat it lacks, or a heal without a health pool.
-    Uncarried,
-    /// The cell is where the cast would set bodies down, and the caster's side
-    /// does not see it as the cast's landing asks.
-    LandingUnseen,
-}
-
-/// Resolves what `caster`'s cast of `skill` acts on when aimed at `target`, or
-/// why it cannot take it — an entity that cannot carry the buff the cast
-/// applies included.
-///
-/// Fog applies to every named aim: what a player cannot see, it cannot name.
-/// Panics when `skill` is not cast by an entity.
-pub fn aim(
-    world: &World,
-    player: PlayerId,
-    caster: Entity,
-    skill: SkillId,
-    target: Option<SkillTarget>,
-) -> Result<CastAim, AimRefusal> {
-    let def = world
-        .resource::<ContentRegistry>()
-        .skill_def(skill)
-        .expect("a skill id comes from the registry");
-    let SkillCaster::Entity { effect, .. } = &def.caster else {
-        panic!("aim is asked of a skill an entity casts");
-    };
-    match effect.target() {
-        EntityCastTarget::Caster => {
-            takes(world, caster, effect)?;
-            Ok(CastAim::Entity(caster))
-        }
-        EntityCastTarget::Position { .. } => {
-            let Some(SkillTarget::Position(position)) = target else {
-                return Err(AimRefusal::Unaimed);
-            };
-            let cell = CellPos::from(position);
-            if !world.resource::<Map>().contains(cell) {
-                return Err(AimRefusal::OffMap);
-            }
-            match lands_at_aim(effect) {
-                Some(landing)
-                    if !landing::sees(
-                        world,
-                        player,
-                        landing,
-                        CellRect::new(cell, CellSize::ONE),
-                    ) =>
-                {
-                    Err(AimRefusal::LandingUnseen)
-                }
-                Some(_) | None => Ok(CastAim::Cell(cell)),
-            }
-        }
-        EntityCastTarget::Fallen { kinds, .. } => {
-            let Some(SkillTarget::Entity(id)) = target else {
-                return Err(AimRefusal::Unaimed);
-            };
-            // Anyone's body serves: what fell there stopped belonging to
-            // anybody when it fell.
-            let remains =
-                visibility::remains_interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
-            if !names(world, remains, kinds) {
-                return Err(AimRefusal::WrongKind);
-            }
-            Ok(CastAim::Remains(remains))
-        }
-        EntityCastTarget::Standing {
-            whom: Whom { side, kinds },
-            ..
-        } => {
-            let Some(SkillTarget::Entity(id)) = target else {
-                return Err(AimRefusal::Unaimed);
-            };
-            let target =
-                visibility::interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
-            let session = world.resource::<GameSession>();
-            let caster_owner = entity_def::owner(world, caster);
-            let target_owner = entity_def::owner(world, target);
-            if !owner::admits(session, *side, caster_owner, target_owner) {
-                return Err(AimRefusal::WrongSide);
-            }
-            if !names(world, target, kinds) {
-                return Err(AimRefusal::WrongKind);
-            }
-            takes(world, target, effect)?;
-            Ok(CastAim::Entity(target))
-        }
-    }
-}
-
 /// Whether `entity` can take what `effect` does to it: a buff it carries, a
 /// heal when it has health, or any other effect.
 fn takes(world: &World, entity: Entity, effect: &EntityCastEffect) -> Result<(), AimRefusal> {
@@ -711,6 +746,7 @@ fn judge(
         EntityCastEffect::Summon {
             entity_type,
             count,
+            placement,
             landing,
             within,
             arrives,
@@ -721,6 +757,7 @@ fn judge(
             caster,
             *entity_type,
             *count,
+            *placement,
             *landing,
             within,
             *arrives,
@@ -742,7 +779,10 @@ fn judge(
 /// down, or `None` when it cannot set every one down: no headroom in the
 /// owner's supply, or not ground enough around the aim.
 ///
-/// The units stand where they may, nearest the aim: the same ground, placement
+/// The units stand where they may — on the aimed cell for an exact
+/// placement, or for a type raised over a source on the source under it;
+/// nearest the aim for a nearby one; over the ground of remains aimed at,
+/// which the cast spends first: the same ground, placement
 /// rules, landing and order a relocation lands by, inside the summon's
 /// `within` field rules; a type raised over a source lands only over a
 /// source of its type, which it covers.
@@ -753,6 +793,7 @@ fn summoning(
     caster: Entity,
     entity_type: EntityTypeId,
     count: Quantity,
+    placement: SummonPlacement,
     landing: Landing,
     within: &[FieldPlacement],
     arrives: SummonArrival,
@@ -768,14 +809,41 @@ fn summoning(
         return None;
     }
     let around = aimed_rect(world, aim);
-    let mut landings = Landings::new(player, landing, within, &[], &[]);
+    // Remains aimed at are spent before the bodies land, so their ground is
+    // free for them.
+    let (lifted, ignored) = match aim {
+        CastAim::Remains(remains) => (
+            entity_def::grid_mark(world, remains).into_iter().collect(),
+            vec![remains],
+        ),
+        CastAim::Entity(_) | CastAim::Cell(_) => (Vec::new(), Vec::new()),
+    };
+    let mut landings = Landings::new(player, landing, within, &lifted, &ignored);
+    let from = aimed_source(world, aim);
+    // An exact body raised over a source anchors on the source under the
+    // aimed cell; any other on the aimed cell itself.
+    let bound = match (placement, def.overbuilds.as_deref()) {
+        (SummonPlacement::Exact, Some(over)) => {
+            let source = overbuild::source_covering(world, over, around.origin)?;
+            Bound::At(entity_def::footprint_rect(world, source).origin)
+        }
+        (SummonPlacement::Exact, None) => Bound::At(around.origin),
+        (SummonPlacement::Nearby, _) => Bound::Radius,
+    };
+    let lander = Lander {
+        def,
+        owner: Some(player),
+        from,
+        bound,
+        around,
+        toward: around,
+    };
     // A type raised over a source lands on one of that type, which it covers.
     let cells = (0..count)
         .map(|_| match def.overbuilds.as_deref() {
-            Some(over) => landing::land_over(world, &mut landings, def, over, Some(player), around)
+            Some(over) => landing::land_over(world, &mut landings, over, lander)
                 .map(|(cell, source)| (cell, Cover::Source(source))),
-            None => landing::land(world, &mut landings, def, Some(player), around, around)
-                .map(|cell| (cell, Cover::Nothing)),
+            None => landing::land(world, &mut landings, lander).map(|cell| (cell, Cover::Nothing)),
         })
         .collect::<Option<Vec<(CellPos, Cover)>>>()?;
     Some(CastPlan::Summon {
@@ -831,10 +899,16 @@ fn relocation(
         Journey::FromCaster { party, to } => {
             // The body a journey goes to is never among those it moves.
             let (destination, goes_to) = match to {
-                FromCasterTo::Aim(_) => (aim_rect, aimed),
+                FromCasterTo::Aim(_) => ((aim_rect, aimed_source(world, aim)), aimed),
                 FromCasterTo::Home(kinds) => {
                     let home = home(world, player, kinds, caster_rect, &[caster])?;
-                    (entity_def::footprint_rect(world, home), Some(home))
+                    (
+                        (
+                            entity_def::footprint_rect(world, home),
+                            ComesFrom::of(world, home),
+                        ),
+                        Some(home),
+                    )
                 }
             };
             let not_gathered: Vec<Entity> = [Some(caster), goes_to].into_iter().flatten().collect();
@@ -864,10 +938,16 @@ fn relocation(
                 AimParty::Around { .. } => Vec::new(),
             };
             let (destination, goes_to) = match to {
-                FromAimTo::Caster => (caster_rect, caster),
+                FromAimTo::Caster => ((caster_rect, ComesFrom::of(world, caster)), caster),
                 FromAimTo::Home(kinds) => {
                     let home = home(world, player, kinds, aim_rect, &not_home)?;
-                    (entity_def::footprint_rect(world, home), home)
+                    (
+                        (
+                            entity_def::footprint_rect(world, home),
+                            ComesFrom::of(world, home),
+                        ),
+                        home,
+                    )
                 }
             };
             match party {
@@ -889,7 +969,13 @@ fn relocation(
         Journey::Swap { .. } => {
             let target = aimed.expect("a swap is aimed at an entity");
             let target_rect = entity_def::footprint_rect(world, target);
-            (vec![(caster, target_rect), (target, caster_rect)], None)
+            (
+                vec![
+                    (caster, (target_rect, ComesFrom::of(world, target))),
+                    (target, (caster_rect, ComesFrom::of(world, caster))),
+                ],
+                None,
+            )
         }
     };
     // The caster and an aimed body either go or the cast does not.
@@ -915,15 +1001,16 @@ fn relocation(
         .collect();
     let mut landings = Landings::new(player, landing, &[], &lifted, &bodies);
     // Each lands nearest where it goes, leaning toward the ground it stood on.
-    let mut land = |entity: Entity, around: CellRect| {
-        landing::land(
-            world,
-            &mut landings,
-            entity_def::of(world, entity),
-            entity_def::owner(world, entity),
+    let mut land = |entity: Entity, (around, from): (CellRect, ComesFrom)| {
+        let lander = Lander {
+            def: entity_def::of(world, entity),
+            owner: entity_def::owner(world, entity),
+            from,
+            bound: Bound::Radius,
             around,
-            entity_def::footprint_rect(world, entity),
-        )
+            toward: entity_def::footprint_rect(world, entity),
+        };
+        landing::land(world, &mut landings, lander)
     };
     let mut moves: Vec<(Entity, CellPos)> = Vec::new();
     for &(entity, around) in &singles {
@@ -1035,6 +1122,15 @@ fn aimed_standing_rect(world: &World, aim: CastAim) -> CellRect {
         CastAim::Entity(target) | CastAim::Remains(target) => {
             entity_def::standing_rect(world, target)
         }
+    }
+}
+
+/// Where a body set down at a resolved `aim` comes from: the aimed cell, or
+/// out of the aimed body's footprint.
+fn aimed_source(world: &World, aim: CastAim) -> ComesFrom {
+    match aim {
+        CastAim::Cell(cell) => ComesFrom::Point(cell),
+        CastAim::Entity(target) | CastAim::Remains(target) => ComesFrom::of(world, target),
     }
 }
 

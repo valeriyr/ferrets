@@ -26,7 +26,7 @@ use ferrets_content::{
     resource::DepletionPolicy,
     skills::{
         Casting, EntityCastEffect, PaymentPoint, Reach, Recipient, Refund, SkillCaster, SkillDef,
-        SummonArrival, SummonAt, Whom,
+        SummonArrival, SummonAt, SummonPlacement, Whom,
     },
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
@@ -45,7 +45,11 @@ use ferrets_simulation::{
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent, SpawnCause},
-    game_loop::{damage, fields},
+    game_loop::{
+        cast::{self, CastAim},
+        damage, fields,
+    },
+    movement_model::MovementModel,
     order::Order,
     player_buffs::PlayerBuffs,
     session::{player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
@@ -83,6 +87,64 @@ fn raise_spends_body_and_sets_down_what_it_makes() {
     assert!(
         owners(&app, "skeleton").all(|owner| owner == Some(0)),
         "what a caster raises is the caster's own"
+    );
+}
+
+#[test]
+fn exact_raise_stands_on_ground_of_body_it_spends() {
+    // The corpse at (6, 5) is passable, and a skeleton is a static solid
+    // body, which is never raised over a passable one: the body is spent
+    // before the skeleton lands, so its cell takes the skeleton.
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_in_place", body);
+    utils::run_ticks(&mut app, 5);
+
+    let skeletons = utils::owned_of_type(app.world_mut(), "skeleton", 0);
+    assert_eq!(
+        skeletons
+            .iter()
+            .map(|&skeleton| utils::cell_of(app.world(), skeleton))
+            .collect::<Vec<_>>(),
+        vec![CellPos::new(6, 5)]
+    );
+}
+
+#[test]
+fn exact_raise_stands_on_ground_of_solid_body_it_spends() {
+    // A golem leaves a wreck at (8, 5), solid remains that claim their cell:
+    // spent before the skeleton lands, the wreck frees the cell for it.
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let (golem, _) = utils::create_owned(&mut app, "golem", 8, 5, 1);
+    damage::apply(
+        app.world_mut(),
+        SimulationId(u32::MAX),
+        golem,
+        FixedU64::from_num(1000),
+        Slain::Remains,
+    );
+    utils::run_ticks(&mut app, 4);
+    let wreck = app
+        .world()
+        .resource::<EntityIndex>()
+        .remains_entries()
+        .last()
+        .expect("the golem left a wreck")
+        .0;
+
+    utils::cast_on(&mut app, necromancer, "raise_in_place", wreck);
+    utils::run_ticks(&mut app, 5);
+
+    let skeletons = utils::owned_of_type(app.world_mut(), "skeleton", 0);
+    assert_eq!(
+        skeletons
+            .iter()
+            .map(|&skeleton| utils::cell_of(app.world(), skeleton))
+            .collect::<Vec<_>>(),
+        vec![CellPos::new(8, 5)]
     );
 }
 
@@ -496,12 +558,51 @@ fn summon_raised_over_source_covers_it_and_finds_none_far_off() {
 }
 
 #[test]
+fn exact_summon_over_source_raises_only_on_source_under_aimed_cell() {
+    // A seam at (10, 10). Planted at (11, 10), beside it, the spire finds no
+    // seam under the aimed cell and nothing is raised, though a nearby raise
+    // would find the seam; planted at (10, 10), it covers the seam.
+    let mut app = app();
+    utils::create_entity(app.world_mut(), "seam", utils::pos(10, 10), None)
+        .expect("the seam is registered");
+    let acolyte = summoner(&mut app, 2, 2);
+    utils::run_ticks(&mut app, 1);
+
+    utils::cast_at(&mut app, acolyte, "plant_spire", 11, 10);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(count_of(&app, "spire"), 0);
+
+    utils::run_ticks(&mut app, 10);
+    utils::cast_at(&mut app, acolyte, "plant_spire", 10, 10);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let spire = utils::single_owned_of_type(app.world_mut(), "spire", 0);
+    assert_eq!(utils::cell_of(app.world(), spire), CellPos::new(10, 10));
+}
+
+#[test]
+fn exact_summon_over_wide_source_snaps_to_source_under_aimed_cell() {
+    // A 2×2 lode over (10..11, 10..11). Planted with the aim on its far cell,
+    // (11, 11), the derrick anchors on the lode under that cell, at (10, 10).
+    let mut app = app();
+    utils::create_entity(app.world_mut(), "lode", utils::pos(10, 10), None)
+        .expect("the lode is registered");
+    let acolyte = summoner(&mut app, 2, 2);
+    utils::run_ticks(&mut app, 1);
+
+    utils::cast_at(&mut app, acolyte, "plant_derrick", 11, 11);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let derrick = utils::single_owned_of_type(app.world_mut(), "derrick", 0);
+    assert_eq!(utils::cell_of(app.world(), derrick), CellPos::new(10, 10));
+}
+
+#[test]
 fn summon_over_spring_walker_stands_on_raises_nothing_until_walker_dies() {
     let mut app = app();
     utils::create_entity(app.world_mut(), "spring", utils::pos(10, 10), None)
         .expect("the spring is registered");
-    // The spring holds no ground of its own, so a soldier stands on it.
-    let (soldier, _) = utils::create_owned(&mut app, "soldier", 10, 10, 1);
+    // The spring claims no cell, so a walking necromancer stands on it.
+    let (walker, _) = utils::create_owned(&mut app, "necromancer", 10, 10, 1);
     let acolyte = summoner(&mut app, 2, 2);
     utils::run_ticks(&mut app, 1);
 
@@ -510,7 +611,7 @@ fn summon_over_spring_walker_stands_on_raises_nothing_until_walker_dies() {
     assert_eq!(count_of(&app, "well"), 0);
     assert_eq!(count_of(&app, "spring"), 1);
 
-    spawn::despawn_entity(app.world_mut(), soldier, DeathCause::Decayed);
+    spawn::despawn_entity(app.world_mut(), walker, DeathCause::Decayed);
     utils::cast_at(&mut app, acolyte, "raise_well", 10, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let well = utils::single_owned_of_type(app.world_mut(), "well", 0);
@@ -531,6 +632,135 @@ fn sighted_summon_lands_only_where_its_side_sees() {
     utils::cast_at(&mut app, acolyte, "sight_mound", 10, 2);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(count_of(&app, "mound"), 1);
+}
+
+#[test]
+fn summon_at_ground_body_cannot_stand_on_lands_only_where_it_steps_from_there() {
+    // A landlubber, its domain taking land alone, is called into a pool of
+    // water, (9,9)..(11,11). Called mid-pool to (10,10), every cell beside the
+    // aim is water, none it steps onto: the call is refused and nothing paid.
+    // Called to (10,9) at the pool's edge, the land of row 8 beside it takes
+    // the landlubber, (10,8) straight out first.
+    let mut app = pool_caller_app();
+    let (_, caller) = utils::create_owned(&mut app, "caller", 1, 1, 0);
+
+    utils::cast_at(&mut app, caller, "call_landlubber", 10, 10);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(utils::owned_of_type(app.world_mut(), "landlubber", 0).is_empty());
+    assert_eq!(energy_as_u32(&app, caller), 100);
+
+    utils::cast_at(&mut app, caller, "call_landlubber", 10, 9);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let landlubbers = utils::owned_of_type(app.world_mut(), "landlubber", 0);
+    assert_eq!(
+        landlubbers
+            .into_iter()
+            .map(|landlubber| utils::cell_of(app.world(), landlubber))
+            .collect::<Vec<_>>(),
+        vec![CellPos::new(10, 8)]
+    );
+}
+
+#[test]
+fn exact_summon_stands_only_on_aimed_cell() {
+    // Planted at (10,9), water at the pool's edge, the landlubber has no ground
+    // there: the cast is refused and nothing paid, though the shore beside it
+    // is free. Planted at (10,8), it stands there; planted there again, the
+    // cell is held, and (9,8) beside it does not stand in for it.
+    let mut app = pool_caller_app();
+    let (_, caller) = utils::create_owned(&mut app, "caller", 1, 1, 0);
+
+    utils::cast_at(&mut app, caller, "plant_landlubber", 10, 9);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(utils::owned_of_type(app.world_mut(), "landlubber", 0).is_empty());
+    assert_eq!(energy_as_u32(&app, caller), 100);
+
+    utils::cast_at(&mut app, caller, "plant_landlubber", 10, 8);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let planted = utils::owned_of_type(app.world_mut(), "landlubber", 0);
+    assert_eq!(planted.len(), 1);
+    assert_eq!(utils::cell_of(app.world(), planted[0]), CellPos::new(10, 8));
+    // 100 - 30 = 70.
+    assert_eq!(energy_as_u32(&app, caller), 70);
+
+    utils::run_ticks(&mut app, 10);
+    utils::cast_at(&mut app, caller, "plant_landlubber", 10, 8);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(
+        utils::owned_of_type(app.world_mut(), "landlubber", 0).len(),
+        1
+    );
+    assert_eq!(energy_as_u32(&app, caller), 70);
+}
+
+#[test]
+fn caster_that_cannot_walk_reaches_only_aims_within_its_reach() {
+    // The caller stands at (1, 1) and cannot walk. `call_near` reaches three
+    // cells: (4, 1) lies three off, (5, 1) four. `call_landlubber` declares no
+    // reach and takes any aim.
+    let mut app = pool_caller_app();
+    let (caller, _) = utils::create_owned(&mut app, "caller", 1, 1, 0);
+    let world = app.world();
+    let near = utils::skill_id(&app, "call_near");
+    let anywhere = utils::skill_id(&app, "call_landlubber");
+
+    assert!(cast::reaches_aim(
+        world,
+        caller,
+        near,
+        CastAim::Cell(CellPos::new(4, 1))
+    ));
+    assert!(!cast::reaches_aim(
+        world,
+        caller,
+        near,
+        CastAim::Cell(CellPos::new(5, 1))
+    ));
+    assert!(cast::reaches_aim(
+        world,
+        caller,
+        anywhere,
+        CastAim::Cell(CellPos::new(20, 20))
+    ));
+}
+
+#[test]
+fn caster_that_walks_reaches_any_aim() {
+    // A wanderer, walking, casts `call_near` too: (20, 20) lies far past its
+    // three cells, and it walks there.
+    let mut app = pool_caller_app();
+    let (wanderer, _) = utils::create_owned(&mut app, "wanderer", 1, 1, 0);
+    let near = utils::skill_id(&app, "call_near");
+
+    assert!(cast::reaches_aim(
+        app.world(),
+        wanderer,
+        near,
+        CastAim::Cell(CellPos::new(20, 20))
+    ));
+}
+
+#[test]
+fn summon_at_caster_comes_out_of_its_whole_footprint() {
+    // A 2×2 beacon at the map's corner, (0..1, 0..1): its corner cell's
+    // neighbors are beacon or off the map, yet its ring is open. The
+    // landlubber comes out of the whole footprint, on the ring cell nearest
+    // its middle first by row, (2, 0).
+    let mut app = pool_caller_app();
+    let (_, beacon) = utils::create_owned(&mut app, "beacon", 0, 0, 0);
+
+    utils::cast_self(&mut app, beacon, "call_beside");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let landlubbers = utils::owned_of_type(app.world_mut(), "landlubber", 0);
+    assert_eq!(
+        landlubbers
+            .into_iter()
+            .map(|landlubber| utils::cell_of(app.world(), landlubber))
+            .collect::<Vec<_>>(),
+        vec![CellPos::new(2, 0)]
+    );
 }
 
 #[test]
@@ -1136,9 +1366,10 @@ fn target_leaving_reach_breaks_cast_under_way() {
 /// App with two players and the raising roster: `raise_dead`, reaching four
 /// cells, on a `necromancer` that can walk; `raise_where_it_stands`, reaching
 /// nowhere, on a rooted `acolyte`; both cost 40 energy and make two
-/// `skeleton`s from a body. Plus a `soldier` that leaves a `corpse` and two
-/// summons that can never be set down — a `colossus` wider than the map and a
-/// `warden` costing supply nobody provides.
+/// `skeleton`s from a body. Plus a `soldier` that leaves a `corpse`, a `golem`
+/// that leaves a solid `wreck`, and two summons that can never be set down — a
+/// `colossus` wider than the map and a `warden` costing supply nobody
+/// provides.
 fn app() -> App {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
@@ -1156,6 +1387,28 @@ fn app() -> App {
                 )
                 .with_tags(["remains"])
                 .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
+        );
+        registry.register(
+            EntityTypeDef::new("wreck")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_tags(["remains"])
+                .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
+        );
+        registry.register(
+            EntityTypeDef::new("golem")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(30))
+                .with_dying(2, utils::leaves("wreck")),
         );
         registry.register(
             EntityTypeDef::new("skeleton")
@@ -1238,6 +1491,7 @@ fn app() -> App {
                             },
                             entity_type,
                             count: Quantity::Constant(2),
+                            placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
                             arrives: SummonArrival::Standing,
@@ -1313,6 +1567,7 @@ fn app() -> App {
                             },
                             entity_type,
                             count: Quantity::Constant(2),
+                            placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
                             arrives: SummonArrival::Standing,
@@ -1349,6 +1604,7 @@ fn app() -> App {
                             },
                             entity_type,
                             count: Quantity::Constant(2),
+                            placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
                             arrives: SummonArrival::Standing,
@@ -1417,6 +1673,7 @@ fn app() -> App {
                             },
                             entity_type,
                             count: Quantity::Stat(host_size),
+                            placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
                             arrives: SummonArrival::Standing,
@@ -1451,6 +1708,7 @@ fn app() -> App {
                             },
                             entity_type,
                             count: Quantity::Constant(2),
+                            placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
                             arrives: SummonArrival::Standing,
@@ -1537,6 +1795,7 @@ fn app() -> App {
                             },
                             entity_type,
                             count: Quantity::Constant(2),
+                            placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
                             arrives: SummonArrival::Standing,
@@ -1553,6 +1812,35 @@ fn app() -> App {
             "skeleton",
             Reach::Wherever,
         );
+        // One skeleton raised exactly where the body lies.
+        let raise_in_place = {
+            let entity_type = registry
+                .type_id("skeleton")
+                .expect("the summoned type is registered");
+            registry.register_skill(
+                "raise_in_place",
+                SkillDef {
+                    cooldown: 10,
+                    caster: SkillCaster::Entity {
+                        costs: Vec::new(),
+                        casting: Casting::Instant,
+                        effect: EntityCastEffect::Summon {
+                            at: SummonAt::Fallen {
+                                kinds: Kinds::Any,
+                                reach: Reach::Wherever,
+                            },
+                            entity_type,
+                            count: Quantity::Constant(1),
+                            placement: SummonPlacement::Exact,
+                            landing: Landing::Anywhere,
+                            within: Vec::new(),
+                            arrives: SummonArrival::Standing,
+                        },
+                    },
+                    requires: Vec::new(),
+                },
+            )
+        };
         registry.register(
             utils::walker("necromancer", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(40))
@@ -1573,6 +1861,7 @@ fn app() -> App {
                     raise_slowly,
                     raise_by_stat,
                     self_immolate,
+                    raise_in_place,
                 ]),
         );
         // A mound rises over ten ticks of its own work.
@@ -1691,7 +1980,56 @@ fn app() -> App {
                 Vec::new(),
             ),
         );
-        // A well rises over a spring, which holds no ground of its own.
+        let plant = summon_skill(
+            spire,
+            SummonAt::Cell {
+                reach: Reach::Wherever,
+            },
+            Landing::Anywhere,
+            Vec::new(),
+            SummonArrival::Rising,
+            Vec::new(),
+        );
+        let plant = exactly(plant);
+        let plant_spire = registry.register_skill("plant_spire", plant);
+        // A 2×2 lode, and a derrick raised over one, planted exactly.
+        registry.register(
+            EntityTypeDef::new("lode")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_resource_source("gold", DepletionPolicy::Destroy),
+        );
+        registry.register(
+            EntityTypeDef::new("derrick")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(20))
+                .with_dying(1, [])
+                .with_resource_source("gold", DepletionPolicy::Destroy)
+                .with_overbuilds("lode"),
+        );
+        let derrick = registry.type_id("derrick").expect("just registered");
+        let plant = summon_skill(
+            derrick,
+            SummonAt::Cell {
+                reach: Reach::Wherever,
+            },
+            Landing::Anywhere,
+            Vec::new(),
+            SummonArrival::Standing,
+            Vec::new(),
+        );
+        let plant = exactly(plant);
+        let plant_derrick = registry.register_skill("plant_derrick", plant);
+        // A well rises over a spring, which claims no cell.
         registry.register(
             EntityTypeDef::new("spring")
                 .with_location(
@@ -1768,6 +2106,8 @@ fn app() -> App {
                     sight_mound,
                     glow_mound,
                     raise_spire,
+                    plant_spire,
+                    plant_derrick,
                     raise_well,
                 ]),
         );
@@ -1913,6 +2253,108 @@ fn energy_as_u32(app: &App, caster: SimulationId) -> u32 {
     utils::energy_as_u32(app, entity)
 }
 
+/// [`utils::dry_orders_app`] over a pool of water, (9,9)..(11,11), with a
+/// `caller` of 100 energy, standing where it is put, that, for 30, calls a
+/// `landlubber` to the nearest cell around any aimed one, or plants one on
+/// exactly the aimed cell, and for nothing calls one within three cells; a
+/// `wanderer` that walks, calling one within three cells; and a `beacon`, a
+/// static 2×2, calling one beside itself.
+fn pool_caller_app() -> App {
+    utils::dry_orders_app(MovementModel::Cell, &utils::water_pool(), |registry, _| {
+        let landlubber = registry.type_id("landlubber").expect("just registered");
+        let call_landlubber = registry.register_skill(
+            "call_landlubber",
+            summon_skill(
+                landlubber,
+                SummonAt::Cell {
+                    reach: Reach::Wherever,
+                },
+                Landing::Anywhere,
+                Vec::new(),
+                SummonArrival::Standing,
+                vec![Cost::Energy(FixedU64::from_num(30))],
+            ),
+        );
+        let plant = summon_skill(
+            landlubber,
+            SummonAt::Cell {
+                reach: Reach::Wherever,
+            },
+            Landing::Anywhere,
+            Vec::new(),
+            SummonArrival::Standing,
+            vec![Cost::Energy(FixedU64::from_num(30))],
+        );
+        let plant = exactly(plant);
+        let plant_landlubber = registry.register_skill("plant_landlubber", plant);
+        let call_near = registry.register_skill(
+            "call_near",
+            summon_skill(
+                landlubber,
+                SummonAt::Cell {
+                    reach: Reach::Within(Quantity::Constant(3)),
+                },
+                Landing::Anywhere,
+                Vec::new(),
+                SummonArrival::Standing,
+                Vec::new(),
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("caller")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(40))
+                .with_pool(Pool::energy(100))
+                .with_skills([call_landlubber, plant_landlubber, call_near]),
+        );
+        let call_beside = registry.register_skill(
+            "call_beside",
+            summon_skill(
+                landlubber,
+                SummonAt::Caster,
+                Landing::Anywhere,
+                Vec::new(),
+                SummonArrival::Standing,
+                Vec::new(),
+            ),
+        );
+        registry.register(
+            EntityTypeDef::new("beacon")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(40))
+                .with_skills([call_beside]),
+        );
+        registry.register(
+            EntityTypeDef::new("wanderer")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_movement(
+                    utils::fixed("0.5"),
+                    utils::fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(40))
+                .with_skills([call_near]),
+        );
+    })
+}
+
 /// A skill summoning one `entity_type` at `at`, landing as `landing` asks
 /// inside the field rules `within`, arriving as `arrives` says, for `costs`.
 fn summon_skill(
@@ -1932,6 +2374,7 @@ fn summon_skill(
                 at,
                 entity_type,
                 count: Quantity::Constant(1),
+                placement: SummonPlacement::Nearby,
                 landing,
                 within,
                 arrives,
@@ -1939,4 +2382,17 @@ fn summon_skill(
         },
         requires: Vec::new(),
     }
+}
+
+/// `skill`, a summon, set down exactly on its aimed cell.
+fn exactly(mut skill: SkillDef) -> SkillDef {
+    let SkillCaster::Entity {
+        effect: EntityCastEffect::Summon { placement, .. },
+        ..
+    } = &mut skill.caster
+    else {
+        panic!("only a summon is set down exactly");
+    };
+    *placement = SummonPlacement::Exact;
+    skill
 }

@@ -18,7 +18,7 @@ use crate::{
 
 /// Where a chaser stands relative to its destination this tick.
 pub enum Destination {
-    /// Within range of the destination footprint.
+    /// At the destination: within range of its footprint, or on its point.
     Arrived,
     /// A walk toward the destination should be issued as a sub-order.
     Walk(Order),
@@ -69,6 +69,28 @@ pub fn advance_to_entity(
         destination_position,
         destination_size,
         range,
+    )
+}
+
+/// Decides whether `chaser` stands exactly on the point `destination`, and
+/// otherwise whether to walk onto it or give up.
+pub fn advance_onto_point(
+    last_chase: &mut ChaseState,
+    world: &World,
+    chaser: Entity,
+    destination: FixedUVec2,
+) -> Destination {
+    let position = entity_def::position(world, chaser);
+    if position == destination {
+        *last_chase = None;
+        return Destination::Arrived;
+    }
+    walk_or_give_up(
+        last_chase,
+        body::anchor(position),
+        destination,
+        CellSize::ONE,
+        0,
     )
 }
 
@@ -170,7 +192,26 @@ fn close_on(
         return Destination::Arrived;
     }
 
-    let (own, destination_cell) = (body::anchor(from), CellPos::from(destination));
+    walk_or_give_up(
+        last_chase,
+        body::anchor(from),
+        destination,
+        destination_size,
+        range,
+    )
+}
+
+/// Walks from `own` to within `range` of the footprint at `destination`, of
+/// `destination_size`, or gives up when the last walk toward the same
+/// destination from the same cell made no progress.
+fn walk_or_give_up(
+    last_chase: &mut ChaseState,
+    own: CellPos,
+    destination: FixedUVec2,
+    destination_size: CellSize,
+    range: u32,
+) -> Destination {
+    let destination_cell = CellPos::from(destination);
     match last_chase {
         Some(round) if (round.own, round.destination) == (own, destination_cell) => {
             round.repeats += 1;

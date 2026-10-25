@@ -6,7 +6,10 @@ use crate::work::{CrewLimit, Crewing, WorkPresence};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuilderAttendance {
     /// Joins the site's crew: its build order stays on the site and advances
-    /// the progress one tick per tick, standing as the presence says.
+    /// the progress one tick per tick, standing as the presence says. A
+    /// presence off the grid, inside the site or in its berths, comes out
+    /// beside the site when the work ends, a builder that never walks
+    /// included.
     Crew(WorkPresence),
     /// Leaves the site unattended: its build order ends once the site is
     /// placed and paid for, and the site advances itself.

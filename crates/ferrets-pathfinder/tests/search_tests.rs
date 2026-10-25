@@ -294,13 +294,13 @@ fn placement_returns_free_anchor_cell_first() {
 
 #[test]
 fn free_placement_skips_occupied_anchor_where_shared_takes_it() {
-    // . . . . . .   y=2   anchor 2×2 at (3,3) fully occupied → ring 1 spans
+    // . . . . . .   y=2   anchor 2×2 at (3,3) fully claimed → ring 1 spans
     // . . A A . .   y=3   (2,2)..(5,5); the free cell nearest the anchor's
     // . . A A . .   y=4   middle is (3,2), not the corner (2,2).
     let mut grid = utils::grid(10, 10);
     for y in 3..5 {
         for x in 3..5 {
-            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
+            grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
 
@@ -328,10 +328,10 @@ fn placement_requires_whole_spawn_footprint() {
     // Single free cells are not enough for a 2×2 spawn: the position nearest
     // the middle whose whole 2×2 footprint is free wins.
     let mut grid = utils::grid(8, 8);
-    // Occupy the anchor cell and checker the first ring so no 2×2 fits there.
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
+    // Claim the anchor cell and checker the first ring so no 2×2 fits there.
+    grid.set_claimed_by(utils::GROUND, utils::nav(3, 3), true);
     for &(x, y) in &[(2, 2), (4, 2), (2, 4), (4, 4)] {
-        grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
+        grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
     }
 
     let asked = |footing| {
@@ -363,17 +363,17 @@ fn placement_requires_whole_spawn_footprint() {
     assert_eq!(
         asked(Footing::Shared),
         Some(utils::nav(3, 3)),
-        "a shared footing needs the whole 2×2 too, but only from the terrain"
+        "a shared footing needs the whole 2×2 too, but not free of claims"
     );
 }
 
 #[test]
 fn free_placement_gives_up_beyond_max_radius_where_shared_does_not() {
-    // Everything within radius 1 of the anchor is occupied; radius 1 search fails.
+    // Everything within radius 1 of the anchor is claimed; radius 1 search fails.
     let mut grid = utils::grid(10, 10);
     for y in 2..6 {
         for x in 2..6 {
-            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
+            grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
 
@@ -390,7 +390,7 @@ fn free_placement_gives_up_beyond_max_radius_where_shared_does_not() {
     assert_eq!(
         asked(Footing::Shared),
         Some(utils::nav(3, 3)),
-        "a shared footing gives up on nothing here: held ground is ground enough"
+        "a shared footing gives up on nothing here: claimed ground is ground enough"
     );
     let found = asked(Footing::Free);
 
@@ -579,17 +579,17 @@ fn placements_never_overlap_each_other() {
 
 #[test]
 fn placements_return_fewer_than_asked_when_room_runs_out() {
-    // Everything is held but (2,2) and (0,0), and (1,1) is water. What is held
-    // is room for a shared footing and not for a free one; what the terrain
-    // refuses is room for neither.
+    // Everything is claimed but (2,2) and (0,0), and (1,1) is water. What is
+    // claimed is room for a shared footing and not for a free one; what the
+    // terrain refuses is room for neither.
     let mut grid = utils::grid_with_water(5, 5, &[utils::nav(1, 1)]);
     for y in 0..5 {
         for x in 0..5 {
-            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
+            grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
         }
     }
-    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), false);
-    grid.set_occupied_by(utils::GROUND, utils::nav(0, 0), false);
+    grid.set_claimed_by(utils::GROUND, utils::nav(2, 2), false);
+    grid.set_claimed_by(utils::GROUND, utils::nav(0, 0), false);
 
     let asked = |footing| {
         search::find_placements_near(
@@ -616,15 +616,15 @@ fn placements_return_fewer_than_asked_when_room_runs_out() {
             utils::nav(1, 2),
             utils::nav(3, 2)
         ],
-        "a shared footing takes held ground in scan order, and never the water"
+        "a shared footing takes claimed ground in scan order, and never the water"
     );
 }
 
 #[test]
-fn free_placements_ring_building_while_shared_lie_under_it() {
-    // What a cast summons around a standing 3×3 building: the building holds
-    // its own footprint, so ring 0 yields nothing and the four stand at the
-    // middle of each side of it rather than along one edge.
+fn placements_ring_building_on_either_footing() {
+    // Four placements around a standing 3×3 building: the building holds its
+    // own footprint, so ring 0 yields nothing and the four stand at the middle
+    // of each side of it rather than along one edge.
     // . . . . x . . . .   y=3   x = the placements: (5,3), (3,5), (7,5) and
     // . . . B B B . . .   y=4       (5,7), one to each side
     // . . x B B B x . .   y=5   B = the building at (4,4), 3×3
@@ -662,12 +662,12 @@ fn free_placements_ring_building_while_shared_lie_under_it() {
     assert_eq!(
         asked(Footing::Shared),
         vec![
-            utils::nav(5, 5),
-            utils::nav(5, 4),
-            utils::nav(4, 5),
-            utils::nav(6, 5)
+            utils::nav(5, 3),
+            utils::nav(3, 5),
+            utils::nav(7, 5),
+            utils::nav(5, 7)
         ],
-        "a shared one lies under it, starting at its middle"
+        "a shared footing lies on no cell a standing footprint holds either"
     );
 }
 

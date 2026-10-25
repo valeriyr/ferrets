@@ -53,7 +53,7 @@ use ferrets_content::{
     skills::{
         AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, FromAimTo, FromCasterTo,
         GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach, Recipient,
-        Shortfall, SkillCaster, SkillDef, Spot, SummonArrival, SummonAt, Whom,
+        Shortfall, SkillCaster, SkillDef, Spot, SummonArrival, SummonAt, SummonPlacement, Whom,
     },
     stack_rule::StackRule,
     stand::StandingAct,
@@ -995,6 +995,7 @@ fn register_rejects_rising_summon_of_type_that_never_rises() {
                     at: SummonAt::Caster,
                     entity_type: mound,
                     count: Quantity::Constant(1),
+                    placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
                     arrives: SummonArrival::Rising,
@@ -2370,18 +2371,22 @@ fn register_accepts_gateways_reading_only_stats_they_use() {
     let warren = registry.register_network("warren", warren_def(255));
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
     // A held gateway both ways reads all four; a crossing one the boarding
-    // pair; a crossing way out nothing at all.
+    // pair and the unload range; a crossing way out the unload range alone.
     registry.register(leaving(entering(gateway(
         "burrow",
         Joins::Network(warren),
         Doors::Both,
     ))));
-    registry.register(entering(gateway(
+    registry.register(crossed(entering(gateway(
         "tunnel",
         Joins::Tunnel(tunnel),
         Doors::Both,
+    ))));
+    registry.register(crossed(gateway(
+        "tunnel_exit",
+        Joins::Tunnel(tunnel),
+        Doors::Exit,
     )));
-    registry.register(gateway("tunnel_exit", Joins::Tunnel(tunnel), Doors::Exit));
 }
 
 #[test]
@@ -2420,9 +2425,9 @@ fn register_rejects_held_tunnel_end_without_unloading_stats() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'tunnel' declares unload_range, which nothing it does reads"
+    expected = "entity type 'tunnel' declares unload_period, which nothing it does reads"
 )]
-fn register_rejects_unloading_stats_on_crossing_gateway() {
+fn register_rejects_unload_period_on_crossing_gateway() {
     let mut registry = utils::ground_registry();
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
     registry.register(leaving(entering(gateway(
@@ -2430,6 +2435,18 @@ fn register_rejects_unloading_stats_on_crossing_gateway() {
         Joins::Tunnel(tunnel),
         Doors::Both,
     ))));
+}
+
+#[test]
+#[should_panic(expected = "entity type 'tunnel' is missing unload_range")]
+fn register_rejects_crossing_gateway_without_unload_range() {
+    let mut registry = utils::ground_registry();
+    let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
+    registry.register(entering(gateway(
+        "tunnel",
+        Joins::Tunnel(tunnel),
+        Doors::Both,
+    )));
 }
 
 #[test]
@@ -2452,8 +2469,12 @@ fn register_rejects_capacity_on_gateway() {
     let mut registry = utils::ground_registry();
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
     registry.register(
-        entering(gateway("tunnel", Joins::Tunnel(tunnel), Doors::Both))
-            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4)),
+        crossed(entering(gateway(
+            "tunnel",
+            Joins::Tunnel(tunnel),
+            Doors::Both,
+        )))
+        .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4)),
     );
 }
 
@@ -2521,7 +2542,7 @@ fn validate_rejects_tunnel_letting_in_its_own_gateway() {
     let mut registry = utils::ground_registry();
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
     registry.register(
-        gateway("exit", Joins::Tunnel(tunnel), Doors::Exit)
+        crossed(gateway("exit", Joins::Tunnel(tunnel), Doors::Exit))
             .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
     );
     registry.validate();
@@ -2534,7 +2555,7 @@ fn validate_rejects_network_letting_in_tunnel_gateway() {
     registry.register_network("warren", warren_def(255));
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
     registry.register(
-        gateway("exit", Joins::Tunnel(tunnel), Doors::Exit)
+        crossed(gateway("exit", Joins::Tunnel(tunnel), Doors::Exit))
             .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
     );
     registry.validate();
@@ -2590,23 +2611,41 @@ fn validate_accepts_tunnel_end_raised_by_build_summon_or_training() {
     let mut registry = utils::ground_registry();
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
     registry.register(
-        entering(gateway("exit", Joins::Tunnel(tunnel), Doors::Both))
-            .with_pool(Pool::health(100))
-            .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
-            .with_train_time(10),
+        crossed(entering(gateway(
+            "exit",
+            Joins::Tunnel(tunnel),
+            Doors::Both,
+        )))
+        .with_pool(Pool::health(100))
+        .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
+        .with_train_time(10),
     );
     let exit = registry.type_id("exit").expect("just registered");
     let dig = registry.register_skill("dig", summoning_end(exit, 1));
     registry.register(
-        entering(gateway("built", Joins::Tunnel(tunnel), Doors::Both))
-            .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
-            .with_builder(["exit"], BuilderAttendance::Unattended),
+        crossed(entering(gateway(
+            "built",
+            Joins::Tunnel(tunnel),
+            Doors::Both,
+        )))
+        .with_stat(EntityStatId::BUILD_RANGE, FixedU64::from_num(40))
+        .with_builder(["exit"], BuilderAttendance::Unattended),
     );
     registry.register(
-        entering(gateway("summoned", Joins::Tunnel(tunnel), Doors::Both)).with_skills([dig]),
+        crossed(entering(gateway(
+            "summoned",
+            Joins::Tunnel(tunnel),
+            Doors::Both,
+        )))
+        .with_skills([dig]),
     );
     registry.register(
-        entering(gateway("trained", Joins::Tunnel(tunnel), Doors::Both)).with_trainer(["exit"]),
+        crossed(entering(gateway(
+            "trained",
+            Joins::Tunnel(tunnel),
+            Doors::Both,
+        )))
+        .with_trainer(["exit"]),
     );
     registry.validate();
 }
@@ -2616,17 +2655,22 @@ fn validate_accepts_tunnel_end_raised_by_warp() {
     let mut registry = utils::ground_registry();
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
     registry.register(
-        entering(gateway("exit", Joins::Tunnel(tunnel), Doors::Both))
-            .with_pool(Pool::health(100))
-            .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
-            .with_train_time(10),
+        crossed(entering(gateway(
+            "exit",
+            Joins::Tunnel(tunnel),
+            Doors::Both,
+        )))
+        .with_pool(Pool::health(100))
+        .with_rise(10, utils::rise_initial_pools(&[PoolId::HEALTH]))
+        .with_train_time(10),
     );
     registry.register(
-        entering(gateway("warped", Joins::Tunnel(tunnel), Doors::Both)).with_warper(
-            ["exit"],
-            Vec::new(),
-            Landing::Sighted,
-        ),
+        crossed(entering(gateway(
+            "warped",
+            Joins::Tunnel(tunnel),
+            Doors::Both,
+        )))
+        .with_warper(["exit"], Vec::new(), Landing::Sighted),
     );
     registry.validate();
 }
@@ -2635,7 +2679,7 @@ fn validate_accepts_tunnel_end_raised_by_warp() {
 fn validate_accepts_one_way_tunnel() {
     let mut registry = utils::ground_registry();
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
-    registry.register(gateway("exit", Joins::Tunnel(tunnel), Doors::Exit));
+    registry.register(crossed(gateway("exit", Joins::Tunnel(tunnel), Doors::Exit)));
     let exit = registry.type_id("exit").expect("just registered");
     let dig = registry.register_skill("dig", summoning_end(exit, 1));
     registry.register(
@@ -2651,16 +2695,16 @@ fn validate_accepts_one_way_tunnel() {
 fn validate_rejects_tunnel_whose_ends_never_raise_another() {
     let mut registry = utils::ground_registry();
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
-    registry.register(entering(gateway(
+    registry.register(crossed(entering(gateway(
         "entrance",
         Joins::Tunnel(tunnel),
         Doors::Both,
-    )));
-    registry.register(entering(gateway(
+    ))));
+    registry.register(crossed(entering(gateway(
         "exit",
         Joins::Tunnel(tunnel),
         Doors::Both,
-    )));
+    ))));
     registry.validate();
 }
 
@@ -2704,11 +2748,11 @@ fn validate_accepts_change_of_form_into_gateway() {
 fn register_rejects_summon_of_several_tunnel_ends() {
     let mut registry = utils::ground_registry();
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
-    registry.register(entering(gateway(
+    registry.register(crossed(entering(gateway(
         "exit",
         Joins::Tunnel(tunnel),
         Doors::Both,
-    )));
+    ))));
     let exit = registry.type_id("exit").expect("just registered");
     registry.register_skill("dig", summoning_end(exit, 2));
 }
@@ -5258,7 +5302,7 @@ fn validate_rejects_nearby_landing_into_form_that_cannot_move() {
 
 #[test]
 fn validate_accepts_transition_with_odd_footprint_difference() {
-    // 1x1 -> 2x2 recentres by half a cell; the landing settles the anchor
+    // 1x1 -> 2x2 recenters by half a cell; the landing settles the anchor
     // onto the lattice where the model needs it, so nothing is refused here.
     let mut registry = utils::ground_registry();
     registry.register(
@@ -5287,7 +5331,7 @@ fn validate_accepts_transition_with_odd_footprint_difference() {
 
 #[test]
 fn validate_accepts_transition_with_even_footprint_difference() {
-    // 1x1 -> 3x3 recentres by a whole cell per axis, which stays on lattice.
+    // 1x1 -> 3x3 recenters by a whole cell per axis, which stays on lattice.
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("walker", utils::GROUND_DOMAIN)
@@ -6350,6 +6394,7 @@ fn register_rejects_summon_of_remains() {
                     },
                     entity_type: corpse,
                     count: Quantity::Constant(2),
+                    placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
                     arrives: SummonArrival::Standing,
@@ -6379,6 +6424,7 @@ fn register_accepts_remains_cast_with_summon_effect() {
                     },
                     entity_type: skeleton,
                     count: Quantity::Constant(2),
+                    placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
                     arrives: SummonArrival::Standing,
@@ -6468,6 +6514,7 @@ fn register_accepts_summon_aimed_at_caster_and_at_cell() {
                 at,
                 entity_type: skeleton,
                 count: Quantity::Constant(1),
+                placement: SummonPlacement::Nearby,
                 landing: Landing::Anywhere,
                 within: Vec::new(),
                 arrives: SummonArrival::Standing,
@@ -6504,6 +6551,7 @@ fn register_rejects_summon_of_foreign_type() {
                     },
                     entity_type: skeleton,
                     count: Quantity::Constant(1),
+                    placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
                     arrives: SummonArrival::Standing,
@@ -6512,6 +6560,61 @@ fn register_rejects_summon_of_foreign_type() {
             requires: Vec::new(),
         },
     );
+}
+
+#[test]
+fn register_accepts_exact_summon_of_one_at_aimed_cell() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("burrow", utils::GROUND_DOMAIN));
+    let burrow = registry.type_id("burrow").expect("just registered");
+    let at = SummonAt::Cell {
+        reach: Reach::Wherever,
+    };
+    registry.register_skill("raise_burrow", summoning_exactly(burrow, at, 1));
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'raise_burrows' summons 'burrow' exactly in a count other than one"
+)]
+fn register_rejects_exact_summon_of_several() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("burrow", utils::GROUND_DOMAIN));
+    let burrow = registry.type_id("burrow").expect("just registered");
+    let at = SummonAt::Cell {
+        reach: Reach::Wherever,
+    };
+    registry.register_skill("raise_burrows", summoning_exactly(burrow, at, 2));
+}
+
+#[test]
+#[should_panic(expected = "skill 'raise_burrow' summons 'burrow' exactly on its caster")]
+fn register_rejects_exact_summon_on_caster() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("burrow", utils::GROUND_DOMAIN));
+    let burrow = registry.type_id("burrow").expect("just registered");
+    registry.register_skill(
+        "raise_burrow",
+        summoning_exactly(burrow, SummonAt::Caster, 1),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'raise_burrow' summons 'burrow' exactly on a standing body it is not raised over"
+)]
+fn register_rejects_exact_summon_on_standing_body_it_is_not_raised_over() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("burrow", utils::GROUND_DOMAIN));
+    let burrow = registry.type_id("burrow").expect("just registered");
+    let at = SummonAt::Standing {
+        whom: Whom {
+            side: Affiliation::Own,
+            kinds: Kinds::Any,
+        },
+        reach: Reach::Wherever,
+    };
+    registry.register_skill("raise_burrow", summoning_exactly(burrow, at, 1));
 }
 
 #[test]
@@ -6534,6 +6637,7 @@ fn register_rejects_summon_of_nobody() {
                     },
                     entity_type: skeleton,
                     count: Quantity::Constant(0),
+                    placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
                     arrives: SummonArrival::Standing,
@@ -8005,6 +8109,29 @@ fn summoning(registry: &mut ContentRegistry, count: EntityStatId) -> SkillDef {
                 at: SummonAt::Caster,
                 entity_type: skeleton,
                 count: Quantity::Stat(count),
+                placement: SummonPlacement::Nearby,
+                landing: Landing::Anywhere,
+                within: Vec::new(),
+                arrives: SummonArrival::Standing,
+            },
+        },
+        requires: Vec::new(),
+    }
+}
+
+/// A free, instant entity skill summoning `count` of `entity_type` exactly
+/// `at` the aim, standing, landing anywhere.
+fn summoning_exactly(entity_type: EntityTypeId, at: SummonAt, count: u32) -> SkillDef {
+    SkillDef {
+        cooldown: 1,
+        caster: SkillCaster::Entity {
+            costs: Vec::new(),
+            casting: Casting::Instant,
+            effect: EntityCastEffect::Summon {
+                at,
+                entity_type,
+                count: Quantity::Constant(count),
+                placement: SummonPlacement::Exact,
                 landing: Landing::Anywhere,
                 within: Vec::new(),
                 arrives: SummonArrival::Standing,
@@ -8113,6 +8240,7 @@ fn summoning_end(entity_type: EntityTypeId, count: u32) -> SkillDef {
                 },
                 entity_type,
                 count: Quantity::Constant(count),
+                placement: SummonPlacement::Nearby,
                 landing: Landing::Anywhere,
                 within: Vec::new(),
                 arrives: SummonArrival::Standing,
@@ -8126,6 +8254,11 @@ fn summoning_end(entity_type: EntityTypeId, count: u32) -> SkillDef {
 fn entering(def: EntityTypeDef) -> EntityTypeDef {
     def.with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
         .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+}
+
+/// `def` with the unload range a crossing reads.
+fn crossed(def: EntityTypeDef) -> EntityTypeDef {
+    def.with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
 }
 
 /// `def` with the unloading pair of stats.
@@ -8186,6 +8319,7 @@ fn register_summon(
                     at: SummonAt::Caster,
                     entity_type,
                     count: Quantity::Constant(1),
+                    placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within,
                     arrives: SummonArrival::Rising,

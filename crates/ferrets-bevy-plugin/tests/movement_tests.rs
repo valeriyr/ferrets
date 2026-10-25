@@ -19,6 +19,7 @@ use ferrets_simulation::{
     movement_model::MovementModel,
     order::Order,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
+    spawn,
 };
 
 //
@@ -522,6 +523,24 @@ fn cell_walk_comes_round_before_it_claims() {
         start,
         "then it crosses"
     );
+}
+
+//
+// ─── Walks off every region ─────────────────────────────────────────────────────
+//
+
+#[test]
+#[should_panic(expected = "a walker stands on an anchor in a region of its shape")]
+fn walk_starting_where_its_shape_has_no_region_panics() {
+    // A landlubber, its domain taking land alone, is moved onto the water at
+    // the pool's edge, (10,9), where its shape has no region: no set-down puts
+    // a walker there, and a walk from there is refused loudly.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &utils::water_pool(), |_, _| {});
+    let (landlubber, _) = utils::create_owned(&mut app, "landlubber", 10, 7, 0);
+    spawn::relocate(app.world_mut(), &[(landlubber, CellPos::new(10, 9))]);
+
+    utils::order_move(&mut app, landlubber, 10, 4);
+    utils::run_ticks(&mut app, 2);
 }
 
 //

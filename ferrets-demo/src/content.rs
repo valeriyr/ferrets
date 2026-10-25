@@ -1026,12 +1026,12 @@ pub const CONTENT: &str = r#"
     -- larvae are what every swarm unit grows from inside an egg: the pit only
     -- unlocks the swarmling. A drone is spent on what it builds: it walks to
     -- the site, pays, and becomes the structure going up, so the swarm has no
-    -- repairers. Every structure but the hall must stand on creep; the hall
-    -- itself spreads it, at full reach when it is placed by the map, and from
-    -- three cells a cell every third of a second when it is built, showing a
-    -- patch under itself while still going up. Structures left off creep
-    -- waste away once built; a larva off creep is gone in a second; swarmlings run a
-    -- third faster on anyone's creep.
+    -- repairers. Every structure but the hall and the burrow must stand on
+    -- creep; the hall itself spreads it, at full reach when it is placed by
+    -- the map, and from three cells a cell every third of a second when it is
+    -- built, showing a patch under itself while still going up. Structures
+    -- left off creep waste away once built; a larva off creep is gone in a
+    -- second; swarmlings run a third faster on anyone's creep.
     local ON_CREEP = { requires = "creep", of = "anyone", coverage = "every" }
     local WITHERS_OFF_CREEP = { field = "creep", of = "anyone", coverage = "any",
         holds_while = "risen",
@@ -1281,11 +1281,13 @@ pub const CONTENT: &str = r#"
         carries = { tags = { "biological" } }, boarding = "own", capacity = 40, fate = "destroy",
     })
 
-    -- A burrow breaks ground on creep, and spreads a little of its own.
+    -- A burrow breaks ground wherever its side sees, and spreads a little
+    -- creep of its own. Told to unload at a point, a warren mouth lets its
+    -- swarm out near that point, up to three cells off.
     define_entity("burrow", {
         race = "swarm",
         location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
-        stats = { sight_range = 6, load_range = 1, load_period = 2, unload_range = 1, unload_period = 4 },
+        stats = { sight_range = 6, load_range = 1, load_period = 2, unload_range = 3, unload_period = 4 },
         pools = { health = { maximum = 300 } },
         dying = { time = 2 },
         -- Raised by the warren, it breaks ground over three seconds, from a
@@ -1335,15 +1337,23 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 280,
         cost = { resources = { gold = 75, wood = 75 } },
-        -- A burrow breaks ground only on creep, and is lost if the creep under
-        -- it withers before it has risen.
-        effect = { summon = { at = { kind = "position", range = 30 }, entity = "burrow", count = 1, landing = "sighted", within = { ON_CREEP }, arrives = "rising" } },
+        -- A burrow breaks ground where it is put, on any cell its side sees
+        -- however far from the warren, as a burrower digs in wherever it
+        -- stands.
+        effect = { summon = {
+            at = { kind = "position" },
+            entity = "burrow",
+            count = 1,
+            placement = "exact",
+            landing = "sighted",
+            arrives = "rising",
+        } },
     })
 
     define_entity("warren", {
         race = "swarm",
         location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
-        stats = { sight_range = 7, load_range = 1, load_period = 2, unload_range = 1, unload_period = 4 },
+        stats = { sight_range = 7, load_range = 1, load_period = 2, unload_range = 3, unload_period = 4 },
         pools = { health = { maximum = 600 } },
         dying = { time = 2, leaves = BURSTS },
         price = { gold = 150, wood = 150 },
@@ -1365,7 +1375,7 @@ pub const CONTENT: &str = r#"
     define_entity("tunnel", {
         race = "swarm",
         location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
-        stats = { sight_range = 6, load_range = 1, load_period = 1, build_range = 40 },
+        stats = { sight_range = 6, load_range = 1, load_period = 1, unload_range = 1, build_range = 40 },
         pools = { health = { maximum = 250 } },
         dying = { time = 2 },
         price = { gold = 100, wood = 50 },
@@ -2687,6 +2697,7 @@ pub const CONTENT: &str = r#"
             at = { kind = "fallen", only = { types = { "corpse" } }, range = 6 },
             entity = "skeleton",
             count = 2,
+            placement = "nearby",
             landing = "anywhere",
             arrives = "standing",
         } },

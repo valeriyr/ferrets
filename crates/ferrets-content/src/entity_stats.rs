@@ -73,8 +73,8 @@ impl EntityStatId {
     /// How close a boarder must be to its holder, in cells.
     pub const LOAD_RANGE: EntityStatId = EntityStatId(21);
     /// How close a holder must be to an unload destination before it starts
-    /// letting bodies out, in cells; how far from itself a gateway sets one
-    /// down.
+    /// letting bodies out, in cells; how far from itself it sets one down,
+    /// and a gateway one crossing to it.
     pub const UNLOAD_RANGE: EntityStatId = EntityStatId(22);
     /// Minimum ticks between successive boardings into one holder. Zero
     /// admits passengers as fast as they arrive.

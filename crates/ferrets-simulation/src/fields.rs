@@ -271,6 +271,9 @@ pub fn rules_allow(
     rules: &[FieldPlacement],
     rect: CellRect,
 ) -> bool {
+    if rules.is_empty() {
+        return true;
+    }
     rules_allow_in(
         world.resource::<FieldGrid>(),
         world.resource::<GameSession>(),

@@ -1,5 +1,5 @@
 //! What a gateway does with a body that enters it: puts it in its link,
-//! or sets it down beside the other end of its tunnel.
+//! or sets it down within the other end of its tunnel's unload range.
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{
@@ -19,7 +19,7 @@ use super::{
     orders::{self, Refusal},
 };
 use crate::{
-    beside::{Beside, Lean},
+    beside::Lean,
     components::{
         gateway::GatewayComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
@@ -28,7 +28,7 @@ use crate::{
     },
     entity_def::{self, Operation},
     entity_index::EntityIndex,
-    landing::{self, Landings},
+    landing::{self, Bound, ComesFrom, Lander, Landings},
     links::{self, LinkKey, LinkPassengers, Membership},
     rally,
     session::GameSession,
@@ -42,7 +42,7 @@ use crate::{
 pub(crate) enum Entry {
     /// The body goes into this link.
     Held(LinkKey),
-    /// The body steps out beside this other end at once.
+    /// The body steps out within this other end's unload range at once.
     Crosses(Entity),
 }
 
@@ -117,9 +117,9 @@ pub(crate) fn would_enter(
 pub(crate) enum Through {
     /// Into this link.
     Into(LinkKey),
-    /// Onto this cell beside this other end.
+    /// Onto this cell within this other end's unload range.
     Across {
-        /// The other end it steps out beside.
+        /// The other end it steps out of.
         other: Entity,
         /// The anchor it steps out on.
         cell: CellPos,
@@ -131,13 +131,15 @@ pub(crate) enum Through {
 pub(crate) enum Intake {
     /// It went this way.
     Taken(Through),
-    /// No cell beside the other end takes it now; nothing was touched.
+    /// No cell within the other end's unload range takes it now; nothing
+    /// was touched.
     Waits,
 }
 
 /// Takes `body`, judged this tick, through `gateway`: whatever it was doing is
 /// soft-canceled first, then it turns to the door and goes into the link or
-/// across to the other end, unless no cell beside the other end takes it now.
+/// across to the other end, unless no cell within the other end's unload
+/// range takes it now.
 pub(crate) fn take_in(world: &mut World, gateway: Entity, body: Entity) -> Intake {
     let entry = would_enter(world, body, gateway)
         .unwrap_or_else(|refusal| unreachable!("judged this tick, got {refusal:?}"));
@@ -192,10 +194,9 @@ pub(crate) fn next_held(
     links::passengers_of(world, gateway).find(|&id| after.is_none_or(|after| id > after))
 }
 
-/// Sets `body` down out of `gateway`'s link: on the free cell nearest
-/// `at` at most `unload_range` from the gateway when the order names a point
-/// and one takes it, else beside the gateway as `lean` says. Out, it leaves
-/// the link.
+/// Sets `body` down out of `gateway`'s link within the gateway's
+/// `unload_range`: on the free cell nearest `at` when the order names a point,
+/// else nearest the gateway as `lean` says. Out, it leaves the link.
 pub(crate) fn let_out(
     world: &mut World,
     gateway: Entity,
@@ -204,21 +205,9 @@ pub(crate) fn let_out(
     lean: Lean,
 ) -> SetDown {
     let gateway_id = entity_def::simulation_id(world, gateway);
-    let near = match at {
-        Some(at) => spawn::place_back_near(
-            world,
-            body,
-            CellPos::from(at),
-            entity_def::footprint_rect(world, gateway),
-            entity_def::effective_stat_u32(world, gateway, EntityStatId::UNLOAD_RANGE),
-        ),
-        None => SetDown::NoCell,
-    };
-    let set_down = match near {
-        SetDown::Placed => SetDown::Placed,
-        SetDown::NoCell => {
-            spawn::place_back_beside_admitted(world, body, Beside::Container(gateway_id), lean)
-        }
+    let set_down = match at {
+        Some(at) => spawn::place_back_near(world, body, CellPos::from(at), gateway_id),
+        None => spawn::place_back_from_holder(world, body, gateway_id, lean),
     };
     match set_down {
         SetDown::Placed => {
@@ -238,7 +227,7 @@ pub(crate) fn drop_stale(world: &mut World, gateway: Entity, body: SimulationId)
 }
 
 /// Lets `entity` through `gateway` as `through` says — into its link, or onto
-/// its cell beside the other end, due the other end's rally unless it names
+/// its cell out of the other end, due the other end's rally unless it names
 /// either end — and starts the gateway's pace.
 fn enter(world: &mut World, gateway: Entity, entity: Entity, through: Through) {
     match through {
@@ -266,13 +255,13 @@ fn enter(world: &mut World, gateway: Entity, entity: Entity, through: Through) {
         .boarding_ready_at = tick + period;
 }
 
-/// Where `entity` goes as `entry` says, or `None` when no cell beside the
-/// other end takes it now: it steps out nearest where it stood.
+/// Where `entity` goes as `entry` says, or `None` when no cell within the
+/// other end's unload range takes it now.
 fn way_through(world: &World, entity: Entity, entry: Entry) -> Option<Through> {
     match entry {
         Entry::Held(key) => Some(Through::Into(key)),
         Entry::Crosses(other) => {
-            beside_other_end(world, entity, other).map(|cell| Through::Across { other, cell })
+            out_of_other_end(world, entity, other).map(|cell| Through::Across { other, cell })
         }
     }
 }
@@ -288,21 +277,25 @@ fn held_cargo(world: &World, key: LinkKey) -> u32 {
         .sum()
 }
 
-/// The anchor beside `other` that `entity` steps out on, nearest where it
-/// stood, or `None` when nothing beside it takes `entity` now.
-fn beside_other_end(world: &World, entity: Entity, other: Entity) -> Option<CellPos> {
+/// The anchor within `other`'s unload range that `entity` steps out on,
+/// nearest the other end and then where it stood, or `None` when nothing in
+/// range takes `entity` now.
+fn out_of_other_end(world: &World, entity: Entity, other: Entity) -> Option<CellPos> {
     let owner = entity_def::owner(world, entity).expect("a body that enters a gateway is owned");
     let lifted: Vec<_> = entity_def::grid_mark(world, entity).into_iter().collect();
     let ignored = [entity];
     let mut landings = Landings::new(owner, Landing::Anywhere, &[], &lifted, &ignored);
-    landing::land(
-        world,
-        &mut landings,
-        entity_def::of(world, entity),
-        Some(owner),
-        entity_def::footprint_rect(world, other),
-        entity_def::footprint_rect(world, entity),
-    )
+    let rect = entity_def::footprint_rect(world, other);
+    let range = entity_def::effective_stat_u32(world, other, EntityStatId::UNLOAD_RANGE);
+    let lander = Lander {
+        def: entity_def::of(world, entity),
+        owner: Some(owner),
+        from: ComesFrom::within(world, other, range),
+        bound: Bound::Range { rect, range },
+        around: rect,
+        toward: entity_def::footprint_rect(world, entity),
+    };
+    landing::land(world, &mut landings, lander)
 }
 
 /// `gateway`'s definition as a gateway.

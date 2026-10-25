@@ -8,8 +8,8 @@ use crate::{affiliation::Affiliation, kinds::Kinds};
 pub enum PassengerFate {
     /// Passengers die with the holder.
     Destroy,
-    /// Passengers are placed around the holder's footprint; one that cannot be
-    /// placed dies anyway.
+    /// Passengers are placed within the holder's unload range of its
+    /// footprint; one that cannot be placed dies anyway.
     Eject,
 }
 

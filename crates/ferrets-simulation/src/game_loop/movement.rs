@@ -836,8 +836,17 @@ fn next_segment(
     }
 
     // A fresh plan: reuse the tick's shared corridor for this goal and start
-    // locality, planning it once for the whole fanned group.
-    let region = world.resource::<Map>().hierarchy().region_of(from, shape)?;
+    // locality, planning it once for the whole fanned group. A walker stands
+    // in a region of its shape: every set-down is judged, a step enters only
+    // anchors its shape fits, a push slides only onto them, no solid footprint
+    // goes up over a standing mover, a relocation drops the moved bodies' orders,
+    // regions are refreshed once before the orders run, and each entity's
+    // order is processed once a tick.
+    let region = world
+        .resource::<Map>()
+        .hierarchy()
+        .region_of(from, shape)
+        .expect("a walker stands on an anchor in a region of its shape");
     let tick = world.resource::<GameSession>().tick();
     let key = ShareKey {
         shape,

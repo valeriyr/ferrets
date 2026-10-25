@@ -55,6 +55,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
             | Refusal::NothingToDo
             | Refusal::TargetGone
             | Refusal::NoRoom
+            | Refusal::OutOfReach
             | Refusal::NoSupply),
         ) => unreachable!("would_board judges fit only, got {refusal:?}"),
     }
@@ -177,8 +178,8 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         Some(Holder::Transporter(_)) => transporters::admit(world, entity, target),
         Some(Holder::Gateway(_)) => match gateways::take_in(world, entity, target) {
             Intake::Taken(_) => {}
-            // Nothing beside the other end takes it yet: it waits its turn
-            // again.
+            // Nothing in the other end's unload range takes it yet: it waits
+            // its turn again.
             Intake::Waits => {
                 world.entity_mut(entity).insert(load);
                 return Processing::state(OrderState::InProcessing);

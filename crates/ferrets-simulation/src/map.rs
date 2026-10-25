@@ -17,7 +17,7 @@ use ferrets_nav_grid::{
 };
 use ferrets_pathfinder::{
     hierarchy::{DEFAULT_CLUSTER_SIZE, NavHierarchy},
-    search::{self, Footing},
+    search,
 };
 
 use ferrets_math::FixedU64;
@@ -25,19 +25,15 @@ use ferrets_physics::body;
 
 use crate::{
     components::location::LocationComponent,
-    entity_def, ground,
+    entity_def,
     map_data::{MapData, MapSlot, Placement},
     movement_model::MovementModel,
     occupancy::{GridMark, OccupancyClass},
     session::player_id::PlayerId,
 };
 use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
-    registry::ContentRegistry,
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, registry::ContentRegistry,
 };
-
-/// How far out from a rectangle a placement search looks before giving up.
-const MAX_RADIUS: u32 = 8;
 
 /// The active game map.
 #[derive(Resource)]
@@ -344,6 +340,29 @@ impl Map {
         &self.nav_grid
     }
 
+    /// Returns `true` if no standing footprint holds a cell of a footprint of
+    /// `to` at `placed` on its layers but for what `lifted` marks there,
+    /// whatever the ground under it and whoever's claims lie on it.
+    pub fn is_statically_free_over_lifted(
+        &self,
+        placed: &LocationComponent,
+        to: MoverShape,
+        lifted: &[GridMark],
+    ) -> bool {
+        let anchor = body::anchor(placed.position);
+        CellRect::new(anchor, to.size).cells().all(|cell| {
+            let static_lifted = lifted
+                .iter()
+                .filter(|mark| mark.footprint.contains(cell))
+                .fold(LayerMask::EMPTY, |layers, mark| match mark.class {
+                    OccupancyClass::Static => layers | mark.layers,
+                    OccupancyClass::Claim => layers,
+                });
+            let beyond = to.layers & !static_lifted;
+            beyond == LayerMask::EMPTY || !self.nav_grid.is_statically_occupied_by(beyond, cell)
+        })
+    }
+
     /// Returns `true` if every cell in a footprint of `to` at `placed` is free
     /// on its layers but for what `lifted` marks there, whatever the ground
     /// under it.
@@ -381,60 +400,16 @@ impl Map {
         })
     }
 
-    /// Finds a free position for a body of `shape` and `solidity` on the
-    /// ground [`ground::takes`] for `occupancy`, scanning outward from the
-    /// rectangle of cells at `origin` with the given `size`.
-    ///
-    /// Cells are scanned ring by ring in row-major order, so the result is
-    /// deterministic. Returns `None` when nothing is free within the search radius.
-    pub fn find_placement_near(
-        &self,
-        origin: CellPos,
-        size: CellSize,
-        shape: MoverShape,
-        solidity: Solidity,
-        occupancy: OccupancyClass,
-    ) -> Option<CellPos> {
-        search::find_placement_near(
-            &self.nav_grid,
-            shape,
-            CellRect::new(origin, size),
-            MAX_RADIUS,
-            footing(solidity),
-            |cell| ground::takes(self, cell, shape, occupancy),
-        )
-    }
-
-    /// Like [`Map::find_placement_near`], within each ring taking the free
-    /// position closest to the rectangle `toward` first.
-    pub fn find_placement_near_toward(
-        &self,
-        origin: CellPos,
-        size: CellSize,
-        shape: MoverShape,
-        solidity: Solidity,
-        occupancy: OccupancyClass,
-        toward: CellRect,
-    ) -> Option<CellPos> {
-        search::find_placement_near_toward(
-            &self.nav_grid,
-            shape,
-            CellRect::new(origin, size),
-            MAX_RADIUS,
-            footing(solidity),
-            toward,
-            |cell| ground::takes(self, cell, shape, occupancy),
-        )
-    }
-
     /// Finds the first anchor near the rectangle at `origin` that `accept`
-    /// takes for a `footprint`-sized body, within the placement search radius,
-    /// in the order [`Map::find_placement_near_toward`] tries them.
+    /// takes for a `footprint`-sized body, within `radius` rings of it: ring by
+    /// ring outward, each cell once, within a ring the ground closest to
+    /// `toward` first.
     pub fn find_placement_near_toward_where(
         &self,
         origin: CellPos,
         size: CellSize,
         footprint: CellSize,
+        radius: u32,
         toward: CellRect,
         accept: impl FnMut(CellPos) -> bool,
     ) -> Option<CellPos> {
@@ -442,32 +417,9 @@ impl Map {
             &self.nav_grid,
             CellRect::new(origin, size),
             footprint,
-            MAX_RADIUS,
+            radius,
             toward,
             accept,
-        )
-    }
-
-    /// Finds at most `max_amount` free placements for a body of `shape` and
-    /// `solidity` on the ground [`ground::takes`] for `occupancy`, near the
-    /// rectangle at `origin`, none overlapping another.
-    pub fn find_placements_near(
-        &self,
-        origin: CellPos,
-        size: CellSize,
-        shape: MoverShape,
-        solidity: Solidity,
-        occupancy: OccupancyClass,
-        max_amount: usize,
-    ) -> Vec<CellPos> {
-        search::find_placements_near(
-            &self.nav_grid,
-            shape,
-            CellRect::new(origin, size),
-            MAX_RADIUS,
-            max_amount,
-            footing(solidity),
-            |cell| ground::takes(self, cell, shape, occupancy),
         )
     }
 
@@ -675,27 +627,34 @@ impl Map {
     /// [`release_claim`](Self::release_claim) can let them go.
     ///
     /// This is how ground is secured ahead of standing on it: the claims read
-    /// as occupied to placement, spawning, and claim-honoring movement, while
-    /// cells someone else already holds stay theirs — the caller is expected
-    /// to have verified the footprint is free first.
+    /// as occupied to placement, spawning, and claim-honoring movement. Cells
+    /// `standing` — what the reserving entity marks where it stands now —
+    /// already claims stay under that claim and are not returned.
     ///
-    /// The rect is filtered rather than asserted free, because the reserving
-    /// entity's own standing claim may already hold destination cells on
-    /// shared layers; those stay under the standing claim, and releasing only
-    /// what this call flipped is what lets a canceled reservation leave the
-    /// standing claim intact.
+    /// Expects every other cell unclaimed; panics in debug builds otherwise.
     pub fn reserve_claim(
         &mut self,
         layers: LayerMask,
         origin: CellPos,
         size: CellSize,
+        standing: Option<GridMark>,
     ) -> Vec<CellPos> {
         let mut claimed = Vec::new();
         for cell in CellRect::new(origin, size).cells() {
             if !self.nav_grid.is_claimed_by(layers, cell) {
                 self.nav_grid.set_claimed_by(layers, cell, true);
                 claimed.push(cell);
+                continue;
             }
+            debug_assert!(
+                standing.is_some_and(|mark| match mark.class {
+                    OccupancyClass::Claim => {
+                        mark.footprint.contains(cell) && mark.layers & layers != LayerMask::EMPTY
+                    }
+                    OccupancyClass::Static => false,
+                }),
+                "a reservation finds a cell claimed only under the reserver's own standing claim"
+            );
         }
         claimed
     }
@@ -792,15 +751,6 @@ impl Map {
         def.location
             .filter(|_| def.can_move())
             .map(|location| entity_def::mover_shape(registry, &location))
-    }
-}
-
-/// The ground a footprint of `solidity` needs: one that claims its cells needs
-/// them free, one that shares them needs only ground its shape may stand on.
-fn footing(solidity: Solidity) -> Footing {
-    match solidity {
-        Solidity::Solid => Footing::Free,
-        Solidity::Underfoot | Solidity::Passable => Footing::Shared,
     }
 }
 

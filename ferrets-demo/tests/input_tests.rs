@@ -10,12 +10,15 @@ use ferrets_content::{
     location::Solidity,
     registry::ContentRegistry,
 };
-use ferrets_demo::{input, render::Sighted};
+use ferrets_demo::{
+    input,
+    render::{MadeOutFootprint, Sighted},
+};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
+        attached::AttachedComponent,
         entity_info::EntityInfoComponent,
         location::LocationComponent,
         owner::OwnerComponent,
@@ -26,6 +29,7 @@ use ferrets_simulation::{
     fields::{self, FieldGrid},
     map::Map,
     movement_model::MovementModel,
+    occupancy::OccupancyClass,
     resources::PlayerResources,
     selection::Selection,
     session::GameSession,
@@ -189,7 +193,7 @@ fn ghost_is_blocked_only_by_what_side_makes_out() {
     ] {
         let made_out = input::made_out_footprints(
             registry,
-            [(info, location, &visibility, Some(sighted))].into_iter(),
+            [(info, location, &visibility, Some(sighted), None)].into_iter(),
         );
         assert_eq!(
             view_over(&app, &made_out, |view| view.fits(def, CellPos::new(25, 25))),
@@ -200,8 +204,66 @@ fn ghost_is_blocked_only_by_what_side_makes_out() {
 }
 
 #[test]
+fn ghost_of_body_that_claims_no_cells_is_refused_only_by_standing_footprints() {
+    // A corpse claims no cells: over a seen grunt, a mover, it shares the
+    // grunt's cell and fits; over a seen barracks, a standing footprint, it
+    // does not.
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    let (grunt, _) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(25, 25), Some(1))
+            .expect("the demo content defines a grunt");
+    let (barracks, _) =
+        utils::create_entity(app.world_mut(), "barracks", utils::at_cell(28, 25), Some(1))
+            .expect("the demo content defines a barracks");
+
+    assert!(fits(&app, "corpse", CellPos::new(25, 25), &[grunt]));
+    assert!(!fits(&app, "corpse", CellPos::new(28, 25), &[barracks]));
+}
+
+#[test]
+fn ghost_of_building_is_refused_over_passable_body_another_passable_one_shares() {
+    // A corpse is passable: a seen one at (25, 25) keeps a farm off its cell,
+    // and another corpse shares it.
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    let (corpse, _) = utils::create_entity(app.world_mut(), "corpse", utils::at_cell(25, 25), None)
+        .expect("the demo content defines a corpse");
+
+    assert!(!fits(&app, "farm", CellPos::new(25, 25), &[corpse]));
+    assert!(fits(&app, "corpse", CellPos::new(25, 25), &[corpse]));
+}
+
+#[test]
+fn ghost_of_solid_static_body_is_refused_over_mover_claiming_no_cells() {
+    // A seen mover claiming no cells stands at (25, 25): a farm, a solid
+    // static footprint, is refused over it; a corpse, a passable one, and a
+    // grunt, a mover, are not.
+    let app = utils::demo_map_app(MovementModel::Cell);
+    let registry = app.world().resource::<ContentRegistry>();
+    let def = |name: &str| {
+        registry
+            .entity(name)
+            .expect("the demo content defines the type")
+    };
+    let layers = def("grunt").location.expect("a grunt stands").occupies();
+    let wisp = MadeOutFootprint {
+        layers,
+        rect: CellRect::new(CellPos::new(25, 25), CellSize::ONE),
+        solidity: Solidity::Passable,
+        class: OccupancyClass::Claim,
+    };
+
+    assert!(!view_over(&app, &[wisp], |view| view
+        .fits(def("farm"), CellPos::new(25, 25))));
+    assert!(view_over(&app, &[wisp], |view| view
+        .fits(def("corpse"), CellPos::new(25, 25))));
+    assert!(view_over(&app, &[wisp], |view| view
+        .fits(def("grunt"), CellPos::new(25, 25))));
+}
+
+#[test]
 fn ghost_refuses_building_across_cliff_and_over_ramp() {
-    let app = utils::demo_map_app(MovementModel::Continuous);
+    let mut app = utils::demo_map_app(MovementModel::Continuous);
+    explore_east_plateau_edge(&mut app);
     let registry = app.world().resource::<ContentRegistry>();
     let farm = registry
         .entity("farm")
@@ -219,7 +281,8 @@ fn ghost_refuses_building_across_cliff_and_over_ramp() {
 
 #[test]
 fn ghost_of_mover_stands_across_cliff_only_if_it_crosses_cliffs() {
-    let app = utils::demo_map_app(MovementModel::Continuous);
+    let mut app = utils::demo_map_app(MovementModel::Continuous);
+    explore_east_plateau_edge(&mut app);
     let registry = app.world().resource::<ContentRegistry>();
     let fits = |name: &str| {
         let def = registry
@@ -231,6 +294,99 @@ fn ghost_of_mover_stands_across_cliff_only_if_it_crosses_cliffs() {
     // Anchored at (55, 24), a 2×2 spans low ground and the east plateau.
     assert!(!fits("tank"));
     assert!(fits("stilt_walker"));
+}
+
+#[test]
+fn ghost_reads_no_terrain_side_has_never_explored() {
+    // Nobody of player 0's has been near the east plateau's edge: a farm
+    // across its cliff at (55, 24) is unknown ground, taken as taking it.
+    let app = utils::demo_map_app(MovementModel::Continuous);
+    let farm = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity("farm")
+        .expect("the demo content defines a farm");
+
+    assert!(with_view(&app, &[], |view| view.fits(farm, CellPos::new(55, 24))));
+}
+
+#[test]
+fn ghost_judges_terrain_of_footprints_explored_cells_alone() {
+    // Player 0 has explored the farm's top row at (55, 24) and (56, 24),
+    // across the east plateau's cliff, and nothing below it: what it knows is
+    // already on two levels, so the farm is refused there.
+    let mut app = utils::demo_map_app(MovementModel::Continuous);
+    {
+        let mut fog = app.world_mut().resource_mut::<VisibilityGrid>();
+        fog.reveal(0, 55, 24);
+        fog.reveal(0, 56, 24);
+    }
+    let farm = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity("farm")
+        .expect("the demo content defines a farm");
+
+    assert!(!with_view(&app, &[], |view| view.fits(farm, CellPos::new(55, 24))));
+}
+
+#[test]
+fn ghost_refuses_explored_cells_on_two_levels() {
+    // A 4×4 big rock at (54..57, 24..27) across the east plateau's cliff, and
+    // player 0 has explored only its two top corners: the lowland's (54, 24)
+    // and the plateau's (57, 24) each take a cell of it, but lie on two
+    // levels, so the rock is refused.
+    let mut app = utils::demo_map_app(MovementModel::Continuous);
+    {
+        let mut fog = app.world_mut().resource_mut::<VisibilityGrid>();
+        fog.reveal(0, 54, 24);
+        fog.reveal(0, 57, 24);
+    }
+    let rock = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity("big_rock")
+        .expect("the demo content defines a big rock");
+
+    assert!(!with_view(&app, &[], |view| view.fits(rock, CellPos::new(54, 24))));
+}
+
+#[test]
+fn ghost_running_off_map_never_fits() {
+    // A farm whose east column runs past the map's last column is refused,
+    // however little of it the side has explored.
+    let app = utils::demo_map_app(MovementModel::Continuous);
+    let last = app.world().resource::<Map>().nav_grid().width() - 1;
+    let farm = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity("farm")
+        .expect("the demo content defines a farm");
+
+    assert!(!with_view(&app, &[], |view| view.fits(farm, CellPos::new(last, 10))));
+}
+
+#[test]
+fn builder_gets_out_of_way_when_it_walks_or_leaves_grid() {
+    // A peon attaches to its site, a drone is consumed by it, a peasant and a
+    // probe walk; a command center stays in the open and a tunnel leaves its
+    // site to itself, neither walking; a corpse builds nothing.
+    let app = utils::demo_map_app(MovementModel::Cell);
+    let registry = app.world().resource::<ContentRegistry>();
+    let gets_out = |name: &str| {
+        input::gets_out_of_way(
+            registry
+                .entity(name)
+                .expect("the demo content defines the type"),
+        )
+    };
+
+    for name in ["peon", "drone", "peasant", "probe"] {
+        assert!(gets_out(name), "{name}");
+    }
+    for name in ["command_center", "tunnel", "corpse"] {
+        assert!(!gets_out(name), "{name}");
+    }
 }
 
 //
@@ -541,7 +697,13 @@ fn with_view<R>(app: &App, made_out: &[Entity], judge: impl FnOnce(&input::Ghost
         let location = world
             .get::<LocationComponent>(entity)
             .expect("a placed entity");
-        (info, location, &Visibility::Visible, Some(&seen))
+        (
+            info,
+            location,
+            &Visibility::Visible,
+            Some(&seen),
+            world.get::<AttachedComponent>(entity),
+        )
     });
     let footprints = input::made_out_footprints(registry, entities);
     view_over(app, &footprints, judge)
@@ -551,7 +713,7 @@ fn with_view<R>(app: &App, made_out: &[Entity], judge: impl FnOnce(&input::Ghost
 /// only footprints it makes out.
 fn view_over<R>(
     app: &App,
-    made_out: &[(LayerMask, CellRect, Solidity)],
+    made_out: &[MadeOutFootprint],
     judge: impl FnOnce(&input::GhostView) -> R,
 ) -> R {
     let world = app.world();
@@ -662,4 +824,12 @@ fn click_warp(app: &mut App, leading: SimulationId) -> Vec<PlayerCommand> {
         .run_system_once(input::issue_warp)
         .expect("the warp click runs");
     app.world().resource::<PendingInput>().queued()[before..].to_vec()
+}
+
+/// Has player 0 explore the east plateau's west edge, around (55, 26), by
+/// standing a grunt of its own beside it for a tick.
+fn explore_east_plateau_edge(app: &mut App) {
+    utils::create_entity(app.world_mut(), "grunt", utils::at_cell(52, 26), Some(0))
+        .expect("the demo content defines a grunt");
+    utils::run_ticks(app, 1);
 }

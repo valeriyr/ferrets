@@ -1768,6 +1768,7 @@ fn parse_entity_effect(
                 &required::<Value>(&summon, "count")?,
                 registry,
             )?,
+            placement: content::summon_placement(&required::<String>(&summon, "placement")?)?,
             landing: content::landing(&required::<String>(&summon, "landing")?)?,
             within: match optional::<Vec<Table>>(&summon, "within")? {
                 Some(rules) => parse_field_placement(&rules, registry)?,

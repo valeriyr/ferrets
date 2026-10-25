@@ -11,12 +11,15 @@ use crate::{
 /// When a transition secures the ground its destination form stands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MorphPlacement {
-    /// The destination footprint is claimed when the transition starts: a
-    /// start is refused unless the footprint fits, and completion is then
-    /// guaranteed.
+    /// The destination footprint is judged when the transition starts, a
+    /// start refused unless it fits, and claimed then when the destination
+    /// form claims its cells; at completion the ground is judged again where
+    /// the entity settles — what it held, unless it was moved off it — and
+    /// the transition fizzles if the footprint no longer fits.
     Reserve,
     /// The destination footprint is checked only at completion: the
-    /// transition always starts, and fizzles if the footprint no longer fits.
+    /// transition always starts, and fizzles if the footprint no longer fits
+    /// — anything that stood onto an interim form claiming no cells counted.
     Revalidate,
     /// The destination footprint is set down at completion on the nearest
     /// free cells to where the entity stands: the transition always starts,
@@ -65,7 +68,8 @@ pub enum RevertCarry {
 /// off, flushed, or landing on ground that no longer takes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MorphInterrupted {
-    /// It stays in the origin form, its pools as they are.
+    /// It stays in the origin form, its pools as they are. A bred body goes
+    /// back to a berth of its breeder's, and is destroyed when none is free.
     Reverts,
     /// It dies.
     Dies,
@@ -78,7 +82,11 @@ pub enum MorphInterrupted {
 pub enum ViaInterrupted {
     /// It goes back to the origin form, standing where the change was under
     /// way, each pool named filled as its carry says and every other one
-    /// keeping its value, held under the origin's maximum.
+    /// keeping its value, held under the origin's maximum; where the ground —
+    /// anything that stood onto an interim form claiming no cells counted —
+    /// or the cargo it carries no longer takes the origin form there, it is
+    /// destroyed instead. A bred body goes back to a berth of its breeder's,
+    /// and is destroyed in the form it wears when none is free.
     Reverts(BTreeMap<PoolId, RevertCarry>),
     /// It dies.
     Dies,

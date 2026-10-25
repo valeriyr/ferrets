@@ -19,6 +19,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::{FieldAction, FieldCoverage, FieldDef, FieldPlacement, FieldSide, FieldVision},
     kinds::{Kind, Kinds},
+    landing::Landing,
     location::Solidity,
     morph::{
         MorphCancel, MorphCourse, MorphPlacement, MorphReason, PoolCarry, RevertCarry,
@@ -34,7 +35,8 @@ use ferrets_content::{
     resource::Banking,
     rise::{RisePool, RisePoolInitial},
     skills::{
-        EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, Recipient, SkillCaster, Whom,
+        EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, Recipient, SkillCaster,
+        SummonAt, SummonPlacement, Whom,
     },
     splash::{SplashDef, SplashShape},
     stand::StandingAct,
@@ -2352,6 +2354,44 @@ fn burrow_is_researched_at_hall_and_dug_out_onto_nearest_ground() {
     };
     assert_eq!(surfacing.into_type(), "swarmling");
     assert_eq!(surfacing.placement(), MorphPlacement::Nearby);
+}
+
+#[test]
+fn burrow_is_raised_exactly_where_aimed_anywhere_seen_and_dug_in_anywhere() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    // Raised by the warren, it breaks ground on the aimed cell or not at all,
+    // creep or none, wherever its side sees.
+    let raise = registry
+        .skill("raise_burrow")
+        .and_then(|id| registry.skill_def(id))
+        .expect("raise_burrow is registered");
+    let SkillCaster::Entity {
+        effect:
+            EntityCastEffect::Summon {
+                at,
+                placement,
+                landing,
+                within,
+                ..
+            },
+        ..
+    } = &raise.caster
+    else {
+        panic!("raise_burrow is an entity summon");
+    };
+    // Any cell its side sees, however far from the warren.
+    assert_eq!(
+        *at,
+        SummonAt::Cell {
+            reach: Reach::Wherever
+        }
+    );
+    assert_eq!(*landing, Landing::Sighted);
+    assert_eq!(*placement, SummonPlacement::Exact);
+    assert!(within.is_empty());
+    // Dug in by a burrower, it stands wherever the burrower does.
+    let burrow = registry.entity("burrow").expect("burrow is registered");
+    assert!(burrow.field_placement.is_empty());
 }
 
 //

@@ -1217,46 +1217,42 @@ fn passenger_unloaded_toward_point_steps_out_on_its_side() {
 
 #[test]
 fn unloaded_passenger_stands_only_on_terrain_its_domain_takes() {
-    // A raft in the middle of a pool of water, (9,9)..(11,11), its domain
-    // taking every terrain, carries a marine whose domain takes land alone.
-    // Let out where it floats, the marine stands on the nearest land: of the
-    // ring beyond the pool, the cells straight out lie nearest, and in row
-    // then column order the first is (10,8).
-    let mut app = utils::dry_orders_app(
-        MovementModel::Cell,
-        &utils::water_pool(),
-        |registry, dry| {
-            let soldier = registry
-                .entity("soldier")
-                .expect("the orders content declares a soldier")
-                .clone();
-            let mut marine =
-                utils::in_domain(soldier, dry).with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE);
-            marine.name = "marine".to_string();
-            registry.register(marine);
-            registry.register(
-                EntityTypeDef::new("raft")
-                    .with_location(
-                        utils::GROUND_DOMAIN,
-                        CellSize::ONE,
-                        Solidity::Solid,
-                        utils::GROUND,
-                    )
-                    .with_pool(Pool::health(100))
-                    .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
-                    .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(3))
-                    .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
-                    .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
-                    .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
-                    .with_transporter(
-                        Kinds::types(["marine"]),
-                        Affiliation::Own,
-                        PassengerFate::Eject,
-                        PassengerConduct::Fight,
-                    ),
-            );
-        },
-    );
+    // A raft at the pool's edge, (10,9), lets its marine out within one cell:
+    // of the land in reach, row 8, the cell straight out comes first, (10,8).
+    let mut app = raft_app();
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 9, 0);
+    let (marine, marine_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
+    utils::send_to(&mut app, marine_id, raft_id);
+    utils::run_until_aboard(&mut app, raft, 1, 30);
+
+    utils::unload(&mut app, raft_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::cell_of(app.world(), marine), CellPos::new(10, 8));
+}
+
+#[test]
+fn passenger_with_no_ground_in_unload_range_stays_aboard() {
+    // A raft mid-pool at (10,10) unloads within one cell, all of it water: the
+    // marine has no ground in reach and stays aboard.
+    let mut app = raft_app();
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 10, 0);
+    let (marine, marine_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
+    utils::send_to(&mut app, marine_id, raft_id);
+    utils::run_until_aboard(&mut app, raft, 1, 30);
+
+    utils::unload(&mut app, raft_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert!(entity_def::boarded(app.world(), marine));
+}
+
+#[test]
+fn passenger_unloads_on_ground_its_holder_reaches_across_water() {
+    // A raft mid-pool at (10,10) unloading within three cells: the first ring
+    // is water, and the shore two cells off is in reach — (10,8) straight out
+    // and first by row.
+    let mut app = raft_app_over(&utils::water_pool(), 3);
     let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 10, 0);
     let (marine, marine_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
     utils::send_to(&mut app, marine_id, raft_id);
@@ -1269,21 +1265,117 @@ fn unloaded_passenger_stands_only_on_terrain_its_domain_takes() {
 }
 
 #[test]
+fn unload_range_reaches_past_placement_search_radius() {
+    // A lake over (2..=20, 2..=20); a raft at its middle, (11,11), unloads
+    // within ten cells: the shore at row 1, ten cells up, is in reach though
+    // past the eight rings a release searches.
+    let lake: Vec<(u32, u32)> = (2..=20)
+        .flat_map(|y| (2..=20).map(move |x| (x, y)))
+        .collect();
+    let mut app = raft_app_over(&lake, 10);
+    let (raft, _) = utils::create_owned(&mut app, "raft", 11, 11, 0);
+    let (marine, _) = utils::create_owned(&mut app, "marine", 11, 0, 0);
+    assert_eq!(
+        spawn::board(app.world_mut(), marine, raft),
+        Boarding::Boarded
+    );
+    let raft_id = entity_def::simulation_id(app.world(), raft);
+
+    utils::unload(&mut app, raft_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::cell_of(app.world(), marine), CellPos::new(11, 1));
+}
+
+#[test]
+fn passenger_unloads_only_within_unload_range() {
+    // A raft at the pool's edge, (10,9), unloads within one cell. The land in
+    // reach, (9,8) to (11,8), is held by three soldiers; (10,7) beyond them is
+    // free and on the same land, but two cells off: the marine stays aboard.
+    let mut app = raft_app();
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 9, 0);
+    let (marine, marine_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
+    utils::send_to(&mut app, marine_id, raft_id);
+    utils::run_until_aboard(&mut app, raft, 1, 30);
+    for x in 9..12 {
+        utils::create_owned(&mut app, "soldier", x, 8, 0);
+    }
+
+    utils::unload(&mut app, raft_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert!(entity_def::boarded(app.world(), marine));
+}
+
+#[test]
+fn passenger_ejected_beyond_unload_range_dies() {
+    // A raft at the pool's edge, (10,9), ejects within one cell when it sinks.
+    // The land in reach, (9,8) to (11,8), is held by three soldiers; (10,7)
+    // beyond them is free and on the same land, but two cells off: the marine
+    // is lost with the raft.
+    let mut app = raft_app();
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 9, 0);
+    let (_, marine_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
+    utils::send_to(&mut app, marine_id, raft_id);
+    utils::run_until_aboard(&mut app, raft, 1, 30);
+    for x in 9..12 {
+        utils::create_owned(&mut app, "soldier", x, 8, 0);
+    }
+
+    spawn::destroy_entity(app.world_mut(), raft);
+
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .alive(marine_id)
+            .is_none()
+    );
+}
+
+#[test]
+fn passenger_ejected_with_no_ground_in_unload_range_dies() {
+    // A raft sinking mid-pool at (10,10) ejects within one cell, all of it
+    // water: its marine has no ground in reach and is lost with it. One
+    // sinking at the pool's edge, (10,9), sets its marine on (10,8).
+    let mut app = raft_app();
+    let (afloat, afloat_id) = utils::create_owned(&mut app, "raft", 10, 10, 0);
+    let (_, lost_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
+    utils::send_to(&mut app, lost_id, afloat_id);
+    utils::run_until_aboard(&mut app, afloat, 1, 30);
+    spawn::destroy_entity(app.world_mut(), afloat);
+    assert!(
+        app.world()
+            .resource::<EntityIndex>()
+            .alive(lost_id)
+            .is_none()
+    );
+    utils::run_ticks(&mut app, 4);
+
+    let (ashore, ashore_id) = utils::create_owned(&mut app, "raft", 10, 9, 0);
+    let (saved, saved_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
+    utils::send_to(&mut app, saved_id, ashore_id);
+    utils::run_until_aboard(&mut app, ashore, 1, 30);
+    spawn::destroy_entity(app.world_mut(), ashore);
+
+    assert_eq!(utils::cell_of(app.world(), saved), CellPos::new(10, 8));
+}
+
+#[test]
 fn entity_set_back_beside_stands_only_on_terrain_its_domain_takes() {
-    // A landlubber, its domain taking land alone, set back beside a cell in
-    // the middle of a pool of water, (9,9)..(11,11): it stands on the nearest
-    // land, of the ring beyond the pool the cell straight out first in row
-    // then column order, (10,8).
+    // A landlubber, its domain taking land alone, set back beside a cell of a
+    // pool of water, (9,9)..(11,11): beside (10,10) mid-pool every cell is
+    // water, none it steps onto from there; beside (10,9) at the pool's edge
+    // the land of row 8 lies in reach, (10,8) straight out first.
     let mut app = utils::dry_orders_app(MovementModel::Cell, &utils::water_pool(), |_, _| {});
     let (landlubber, _) = utils::create_owned(&mut app, "landlubber", 4, 4, 0);
     spawn::hide_entity(app.world_mut(), landlubber, Inside::Nothing);
+    let beside = |x, y| Beside::Footprint(CellRect::new(CellPos::new(x, y), CellSize::ONE));
     assert_eq!(
-        spawn::place_back_beside(
-            app.world_mut(),
-            landlubber,
-            Beside::Footprint(CellRect::new(CellPos::new(10, 10), CellSize::ONE)),
-            Lean::Nothing
-        ),
+        spawn::place_back_beside(app.world_mut(), landlubber, beside(10, 10), Lean::Nothing),
+        SetDown::NoCell
+    );
+    assert_eq!(
+        spawn::place_back_beside(app.world_mut(), landlubber, beside(10, 9), Lean::Nothing),
         SetDown::Placed
     );
 
@@ -1874,6 +1966,50 @@ fn turret_only_passenger_sits_ride_out() {
 //
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
+
+/// [`utils::dry_orders_app`] over a pool of water, (9,9)..(11,11), with a
+/// `raft` whose domain takes every terrain, unloading within one cell and
+/// ejecting on its death, and a `marine` it carries whose domain takes land
+/// alone.
+fn raft_app() -> App {
+    raft_app_over(&utils::water_pool(), 1)
+}
+
+/// [`raft_app`] over the given `water`, the raft letting its marines out within
+/// `unload_range` cells.
+fn raft_app_over(water: &[(u32, u32)], unload_range: u32) -> App {
+    utils::dry_orders_app(MovementModel::Cell, water, |registry, dry| {
+        let soldier = registry
+            .entity("soldier")
+            .expect("the orders content declares a soldier")
+            .clone();
+        let mut marine =
+            utils::in_domain(soldier, dry).with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE);
+        marine.name = "marine".to_string();
+        registry.register(marine);
+        registry.register(
+            EntityTypeDef::new("raft")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(100))
+                .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+                .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(3))
+                .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::from_num(unload_range))
+                .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+                .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+                .with_transporter(
+                    Kinds::types(["marine"]),
+                    Affiliation::Own,
+                    PassengerFate::Eject,
+                    PassengerConduct::Fight,
+                ),
+        );
+    })
+}
 
 /// Runs ticks until `entity` is off the map, at most `limit` of them.
 fn run_until_hidden(app: &mut App, entity: Entity, limit: u32) {

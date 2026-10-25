@@ -48,7 +48,7 @@ use ferrets_simulation::{
 
 #[test]
 fn same_layer_growth_lands_under_continuous_model() {
-    // Growing 1x1 -> 3x3 on the same layer recentres the anchor onto ground
+    // Growing 1x1 -> 3x3 on the same layer recenters the anchor onto ground
     // the whelp's own claim covers: the change must lift that claim out of
     // the destination's way — under the continuous model displacing it is a
     // rebuild-owned no-op, so the lift has to take the claim where the
@@ -77,7 +77,7 @@ fn same_layer_growth_lands_under_cell_model() {
 
 #[test]
 fn odd_growth_settles_on_lattice_under_cell_model() {
-    // 1x1 -> 2x2 recentres the anchor by half a cell, to 9.5; the cell model
+    // 1x1 -> 2x2 recenters the anchor by half a cell, to 9.5; the cell model
     // keeps every body on the lattice, so the ogre settles on the nearest
     // point, 10, and holds cells 10..=11 — at rest, free to move on.
     let mut app = utils::morph_app(MovementModel::Cell);
@@ -102,7 +102,7 @@ fn odd_growth_settles_on_lattice_under_cell_model() {
 
 #[test]
 fn odd_growth_keeps_middle_under_continuous_model() {
-    // Continuous bodies rest anywhere: the ogre settles at the recentred
+    // Continuous bodies rest anywhere: the ogre settles at the recentered
     // 9.5, its middle exactly where the whelp's was.
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
@@ -677,7 +677,7 @@ fn change_between_cells_keeps_position_of_form_that_moves() {
     utils::run_ticks(&mut app, 1);
 
     // Ten ticks of changing, and both forms claim a single cell, so nothing
-    // recentres either.
+    // recenters either.
     utils::order_morph(&mut app, whelp, "wisp");
     utils::run_ticks(&mut app, 11);
     assert_eq!(type_name_of(&app, whelp), "wisp", "it changed");
@@ -769,20 +769,76 @@ fn change_into_static_form_is_refused_over_terrain_it_does_not_take() {
 }
 
 #[test]
-fn change_landing_nearby_stands_only_on_terrain_new_form_takes() {
-    // Set down nearby, the settler lands on the nearest land, never on the
-    // water around the wader.
+fn change_landing_nearby_stands_only_where_new_form_steps_from_old() {
+    // Mid-pool at (10,10) every cell beside the wader is water, none a settler
+    // steps onto from there: the change finds no room and the wader keeps its
+    // form. At the pool's edge, (10,9), the land of row 8 lies beside it, and
+    // (10,8) straight out takes the settler.
     let mut app = wading_app();
     let (afloat, _) = utils::create_owned(&mut app, "wader", 10, 10, 0);
+    let (at_edge, _) = utils::create_owned(&mut app, "wader", 10, 9, 0);
 
     utils::order_morph(&mut app, afloat, "settler");
+    utils::order_morph(&mut app, at_edge, "settler");
     utils::run_ticks(&mut app, 6);
 
-    // The first ring around (10,10) is all water; of the second, the cells
-    // straight out — (10,8), (8,10), (12,10), (10,12) — lie nearest, two
-    // cells off, and the tie goes to the lowest row: (10,8).
-    assert_eq!(type_name_of(&app, afloat), "settler");
-    assert_eq!(utils::cell_of(app.world(), afloat), CellPos::new(10, 8));
+    assert_eq!(type_name_of(&app, afloat), "wader");
+    assert_eq!(type_name_of(&app, at_edge), "settler");
+    assert_eq!(utils::cell_of(app.world(), at_edge), CellPos::new(10, 8));
+}
+
+#[test]
+fn worker_seated_inside_its_job_steps_out_of_whole_footprint_to_change() {
+    // A 3×3 core vein at (8..10, 5..7) seats one carrier at its middle cell,
+    // (9, 6), every neighbor of which is the vein's own. A shifter seated
+    // there, told to change, comes out of the vein's whole footprint: it
+    // steps out beside the vein — of the cells two off its berth, (9, 4) is
+    // first by row — and the change begins.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[], |registry, _| {
+        registry.register(utils::core_vein());
+        let sylph = registry
+            .entity("sylph")
+            .expect("the orders content declares a sylph")
+            .clone();
+        let mut shifter = sylph.with_morphs([MorphTransition::new(
+            "sylph",
+            MorphCourse::direct(MorphInterrupted::Reverts),
+            Quantity::Constant(10),
+            MorphPlacement::Revalidate,
+            MorphCancel::Refundable,
+            MorphReason::Change,
+            Vec::new(),
+            Vec::new(),
+            [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+        )]);
+        shifter.name = "shifter".to_string();
+        registry.register(shifter);
+    });
+    let (vein, vein_id) =
+        utils::create_entity(app.world_mut(), "core_vein", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(vein)
+        .unwrap()
+        .amount = 500;
+    let (shifter, shifter_id) = utils::create_owned(&mut app, "shifter", 7, 6, 0);
+    utils::select(&mut app, shifter_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: vein_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(entity_def::attached(app.world(), shifter));
+    assert_eq!(utils::cell_of(app.world(), shifter), CellPos::new(9, 6));
+
+    utils::command_morph(&mut app, shifter_id, "sylph");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert!(!entity_def::attached(app.world(), shifter));
+    assert!(entity_def::changing(app.world(), shifter));
+    assert_eq!(utils::cell_of(app.world(), shifter), CellPos::new(9, 4));
 }
 
 #[test]

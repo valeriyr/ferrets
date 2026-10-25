@@ -10,26 +10,36 @@ use ferrets_content::{
     brood::OrphanFate,
     detection::Detection,
     domain::{DomainDef, DomainId},
+    entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldPlacement, FieldSourceDef,
         FieldVision,
     },
+    gateway::{Doors, Joins},
+    kinds::Kinds,
+    landing::Landing,
     location::Solidity,
     morph::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
         PoolCarry, RevertCarry, ViaInterrupted,
     },
+    network::NetworkDef,
     pool::Pool,
     pool_def::PoolId,
     pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
+    skills::{
+        Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, SkillId, SummonArrival, SummonAt,
+        SummonPlacement,
+    },
     terrains::Terrains,
+    transport::{PassengerConduct, PassengerFate},
     work::{Attachment, BerthStance},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     layer_id::LayerId,
@@ -44,14 +54,14 @@ use ferrets_simulation::{
     },
     entity_def,
     entity_index::EntityIndex,
-    events::DeathCause,
+    events::{DeathCause, SimulationEvent},
     game_loop::orders::{self, Refusal},
     map::Map,
     map_data::MapData,
     movement_model::MovementModel,
     order::Order,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
-    spawn,
+    spawn::{self, Boarding, FieldReach},
 };
 
 //
@@ -337,9 +347,543 @@ fn trained_static_body_is_set_down_on_flat_ground() {
     assert_eq!(cells_of(&app, "cairn"), vec![CellPos::new(5, 8)]);
 }
 
+#[test]
+fn unit_trained_at_cliff_edge_never_lands_below_it() {
+    // A hut at (9, 0) on the plateau's edge, the cliff band west of it and no
+    // ramp: walkers hold every plateau cell within three rings of it, (9, 1)
+    // to (9, 3) and four 2×2 bodies over (10, 0) to (13, 3). The lowland at
+    // (6, 0), three rings out, is free but out of the region the recruit
+    // steps into from the hut; the fourth ring's plateau cells come next,
+    // (9, 4) nearest the hut's middle.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (_, hut_id) = utils::create_owned(&mut app, "hut", 9, 0, 0);
+    for y in 1..4 {
+        utils::create_owned(&mut app, "walker", 9, y, 0);
+    }
+    for (x, y) in [(10, 0), (12, 0), (10, 2), (12, 2)] {
+        utils::create_owned(&mut app, "big_walker", x, y, 0);
+    }
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: hut_id,
+            type_name: "recruit".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(cells_of(&app, "recruit"), vec![CellPos::new(9, 4)]);
+}
+
+#[test]
+fn unit_set_down_from_above_takes_highest_level_first() {
+    // An aerie hovers at (7, 0) over the cliff band, its west column over the
+    // lowland's level 1 and its east one over the plateau's level 2. Its
+    // recruit comes down from the air: the first ring holds (6, 0) below the
+    // cliff and (9, 0) above it, as near the aerie's middle; the highest
+    // level under the aerie, 2, comes first.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (_, aerie_id) = utils::create_owned(&mut app, "aerie", 7, 0, 0);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: aerie_id,
+            type_name: "recruit".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(cells_of(&app, "recruit"), vec![CellPos::new(9, 0)]);
+}
+
+#[test]
+fn passenger_let_out_from_above_takes_highest_level_first() {
+    // An airship hovers at (7, 0) over the cliff band, on the air layer above
+    // the recruit's ground. Let out within one cell, the recruit comes down
+    // from above: (6, 0) below the cliff and (9, 0) above it are as near, and
+    // the plateau's level 2 comes first.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (airship, airship_id) = utils::create_owned(&mut app, "airship", 7, 0, 0);
+    let (recruit, _) = utils::create_owned(&mut app, "recruit", 3, 3, 0);
+    assert_eq!(
+        spawn::board(app.world_mut(), recruit, airship),
+        Boarding::Boarded
+    );
+
+    utils::unload(&mut app, airship_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::cell_of(app.world(), recruit), CellPos::new(9, 0));
+}
+
+#[test]
+fn passenger_let_out_from_above_takes_lower_level_when_highest_is_full() {
+    // The airship as above, with walkers on the plateau's cells within its one
+    // cell of reach, (9, 0) to (9, 2): the highest level has no room, and the
+    // other levels come next — (6, 0) below the cliff, first by row.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (airship, airship_id) = utils::create_owned(&mut app, "airship", 7, 0, 0);
+    for y in 0..3 {
+        utils::create_owned(&mut app, "walker", 9, y, 0);
+    }
+    let (recruit, _) = utils::create_owned(&mut app, "recruit", 3, 3, 0);
+    assert_eq!(
+        spawn::board(app.world_mut(), recruit, airship),
+        Boarding::Boarded
+    );
+
+    utils::unload(&mut app, airship_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::cell_of(app.world(), recruit), CellPos::new(6, 0));
+}
+
+#[test]
+fn unit_trained_underground_gets_no_high_ground_preference() {
+    // A den on the deep layer under the cliff band, (7, 0): its recruit comes
+    // up from below, so no level goes first — (6, 0) below the cliff and
+    // (9, 0) above it are as near, and the row and column order takes (6, 0).
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (_, den_id) = utils::create_owned(&mut app, "den", 7, 0, 0);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: den_id,
+            type_name: "recruit".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(cells_of(&app, "recruit"), vec![CellPos::new(6, 0)]);
+}
+
+#[test]
+fn static_body_trained_at_cliff_edge_never_lands_below_it() {
+    // The hut at (9, 0) on the plateau's edge, its plateau cells within three
+    // rings held as for the recruit above. A cairn never walks, so no region
+    // binds it, but it lands only at a level it steps onto from the hut: the
+    // lowland's (6, 0) three rings out is refused, and the fourth ring's
+    // plateau cell nearest the hut's middle, (9, 4), takes it.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (_, hut_id) = utils::create_owned(&mut app, "hut", 9, 0, 0);
+    for y in 1..4 {
+        utils::create_owned(&mut app, "walker", 9, y, 0);
+    }
+    for (x, y) in [(10, 0), (12, 0), (10, 2), (12, 2)] {
+        utils::create_owned(&mut app, "big_walker", x, y, 0);
+    }
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: hut_id,
+            type_name: "cairn".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(cells_of(&app, "cairn"), vec![CellPos::new(9, 4)]);
+}
+
+#[test]
+fn unit_summoned_at_point_lands_in_its_region() {
+    // A walker is called to (6, 0) on the lowland, whose free cells nearest
+    // it are taken by four 2×2 bodies over (3, 0) to (6, 3). The third ring
+    // reaches the plateau at (9, 0), up the cliff with no ramp: out of the
+    // point's region. The fourth ring's lowland cells come next, (2, 0) and
+    // (6, 4) as near the point, the row first.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    for (x, y) in [(3, 0), (5, 0), (3, 2), (5, 2)] {
+        utils::create_owned(&mut app, "big_walker", x, y, 0);
+    }
+    let (_, invoker) = utils::create_owned(&mut app, "invoker", 1, 12, 0);
+    utils::cast_at(&mut app, invoker, "call_walker", 6, 0);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(
+        utils::owned_of_type(app.world_mut(), "walker", 0)
+            .into_iter()
+            .map(|walker| utils::cell_of(app.world(), walker))
+            .collect::<Vec<_>>(),
+        vec![CellPos::new(2, 0)]
+    );
+}
+
+#[test]
+fn holder_letting_out_at_range_never_unloads_up_cliff() {
+    // A wagon at (6, 0) at the cliff band's foot lets its recruit out within
+    // three cells. Walkers hold every lowland cell in range, (3, 0) to (6, 3)
+    // but the wagon's own; the plateau's (9, 0) to (9, 3) lie three cells off,
+    // in range, but up a cliff the recruit never steps from the wagon's ring:
+    // it stays aboard.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 6, 0, 0);
+    for y in 0..4 {
+        for x in 3..7 {
+            if (x, y) != (6, 0) {
+                utils::create_owned(&mut app, "walker", x, y, 0);
+            }
+        }
+    }
+    let (recruit, _) = utils::create_owned(&mut app, "recruit", 3, 8, 0);
+    assert_eq!(
+        spawn::board(app.world_mut(), recruit, wagon),
+        Boarding::Boarded
+    );
+
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert!(entity_def::boarded(app.world(), recruit));
+}
+
+#[test]
+fn gateway_letting_out_toward_point_up_cliff_lets_out_only_what_steps_from_it() {
+    // A burrow at (6, 0) at the cliff band's foot holds a recruit and lets it
+    // out toward (9, 0) on the plateau, three cells off, in range. Walkers
+    // hold every lowland cell in range; the plateau's lie up a cliff the
+    // recruit never steps from the burrow's ring: it stays inside.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (_, burrow_id) = utils::create_owned(&mut app, "burrow", 6, 0, 0);
+    let (recruit, recruit_id) = utils::create_owned(&mut app, "recruit", 6, 2, 0);
+    utils::send_to(&mut app, recruit_id, burrow_id);
+    utils::run_ticks(&mut app, utils::APPLY + 10);
+    assert!(entity_def::hidden(app.world(), recruit));
+    for y in 0..4 {
+        for x in 3..7 {
+            if (x, y) != (6, 0) {
+                utils::create_owned(&mut app, "walker", x, y, 0);
+            }
+        }
+    }
+
+    utils::unload(&mut app, burrow_id, Some(utils::pos(9, 0)));
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert!(entity_def::hidden(app.world(), recruit));
+}
+
+#[test]
+fn static_body_left_from_above_takes_highest_level_first() {
+    // A sky shrine hovers at (7, 0) over the cliff band and leaves a cairn, a
+    // static body coming down from the air: (6, 0) below the cliff and
+    // (9, 0) above it are as near, and the highest level under the shrine,
+    // the plateau's 2, comes first.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (shrine, _) = utils::create_owned(&mut app, "sky_shrine", 7, 0, 0);
+    spawn::despawn_entity(app.world_mut(), shrine, DeathCause::Decayed);
+    utils::run_ticks(&mut app, 2);
+
+    assert_eq!(cells_of(&app, "cairn"), vec![CellPos::new(9, 0)]);
+}
+
+#[test]
+fn static_body_coming_up_from_below_lands_only_at_level_it_steps_onto() {
+    // A den under the lowland at (5..6, 0..1) trains a cairn. Every ground
+    // cell is held but (9, 0) on the plateau, three rings out, and (2, 5) on
+    // the lowland, four out: coming up from below, the cairn lands only at a
+    // level it steps onto across the den's edge, the lowland's, at (2, 5).
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (_, den_id) = utils::create_owned(&mut app, "den", 5, 0, 0);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::free_cell(&mut app, CellPos::new(9, 0));
+    utils::free_cell(&mut app, CellPos::new(2, 5));
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: den_id,
+            type_name: "cairn".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(cells_of(&app, "cairn"), vec![CellPos::new(2, 5)]);
+}
+
+#[test]
+fn static_body_coming_down_from_above_lands_at_any_level() {
+    // An aerie over the lowland at (4..5, 0..1) trains a cairn. Every ground
+    // cell is held but (9, 0) on the plateau, four rings out: coming down
+    // from the air, the cairn lands at any level, and takes it.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    let (_, aerie_id) = utils::create_owned(&mut app, "aerie", 4, 0, 0);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::free_cell(&mut app, CellPos::new(9, 0));
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: aerie_id,
+            type_name: "cairn".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(cells_of(&app, "cairn"), vec![CellPos::new(9, 0)]);
+}
+
+#[test]
+fn static_body_summoned_at_point_never_lands_below_cliff() {
+    // A cairn is called to (9, 0) on the plateau's edge, held by a hut, its
+    // plateau cells within three rings held as for the training above. A
+    // cairn never walks, but it lands only at a level it steps onto from the
+    // point's cell: the lowland's (6, 0) three rings out is refused, and the
+    // fourth ring's plateau cell nearest the point, (9, 4), takes it.
+    let mut app = hills_app(MovementModel::Cell, Ramps::None, Rise::One);
+    utils::create_owned(&mut app, "hut", 9, 0, 0);
+    for y in 1..4 {
+        utils::create_owned(&mut app, "walker", 9, y, 0);
+    }
+    for (x, y) in [(10, 0), (12, 0), (10, 2), (12, 2)] {
+        utils::create_owned(&mut app, "big_walker", x, y, 0);
+    }
+    let (_, invoker) = utils::create_owned(&mut app, "invoker", 1, 12, 0);
+    utils::cast_at(&mut app, invoker, "call_cairn", 9, 0);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(cells_of(&app, "cairn"), vec![CellPos::new(9, 4)]);
+}
+
 //
 // ─── Changing form ────────────────────────────────────────────────────────────
 //
+
+#[test]
+fn reserving_change_moved_off_its_ground_lands_only_where_ground_takes_it() {
+    // A settler at (3, 3) reserves its cell for a cairn, a static body that
+    // stands only on flat ground. Moved during the change onto the ramp's
+    // (7, 6), it settles there when the change runs out: the ramp refuses the
+    // cairn, and the change ends back in the settler's form. Its twin left
+    // where it reserved lands as a cairn.
+    let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
+    let (moved, _) = utils::create_owned(&mut app, "settler", 3, 3, 0);
+    let (stayed, _) = utils::create_owned(&mut app, "settler", 3, 10, 0);
+    utils::order_morph(&mut app, moved, "cairn");
+    utils::order_morph(&mut app, stayed, "cairn");
+    utils::run_ticks(&mut app, 3);
+
+    app.world_mut()
+        .get_mut::<LocationComponent>(moved)
+        .expect("a settler stands on the map")
+        .position = utils::pos(7, 6);
+    utils::run_ticks(&mut app, 12);
+
+    assert_eq!(entity_def::type_name(app.world(), moved), "settler");
+    assert_eq!(entity_def::type_name(app.world(), stayed), "cairn");
+}
+
+#[test]
+fn reserving_change_into_walkable_form_lands_under_standing_units() {
+    // A weaver at (3, 3) changes into a mat lying underfoot over a 2×2, with
+    // walkers of its own side at (2, 3) and (4, 3), one of which stands on the
+    // mat's ground however it recenters. The mat claims no cells, so it holds
+    // none ahead, shares its ground with them, and lands.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    let (weaver, _) = utils::create_owned(&mut app, "weaver", 3, 3, 0);
+    let (west, _) = utils::create_owned(&mut app, "walker", 2, 3, 0);
+    let (east, _) = utils::create_owned(&mut app, "walker", 4, 3, 0);
+
+    utils::order_morph(&mut app, weaver, "mat");
+    utils::run_ticks(&mut app, 12);
+
+    assert_eq!(entity_def::type_name(app.world(), weaver), "mat");
+    assert_eq!(utils::cell_of(app.world(), weaver), CellPos::new(3, 3));
+    assert_eq!(utils::cell_of(app.world(), west), CellPos::new(2, 3));
+    assert_eq!(utils::cell_of(app.world(), east), CellPos::new(4, 3));
+}
+
+#[test]
+fn reserving_change_into_passable_form_lands_under_standing_units() {
+    // The weaver's change as above, a netter changing into a net, a static
+    // 2×2 passable body: it claims no cells either, holds none ahead, and
+    // lands under the walkers.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    let (netter, _) = utils::create_owned(&mut app, "netter", 3, 3, 0);
+    let (west, _) = utils::create_owned(&mut app, "walker", 2, 3, 0);
+    let (east, _) = utils::create_owned(&mut app, "walker", 4, 3, 0);
+
+    utils::order_morph(&mut app, netter, "net");
+    utils::run_ticks(&mut app, 12);
+
+    assert_eq!(entity_def::type_name(app.world(), netter), "net");
+    assert_eq!(utils::cell_of(app.world(), netter), CellPos::new(3, 3));
+    assert_eq!(utils::cell_of(app.world(), west), CellPos::new(2, 3));
+    assert_eq!(utils::cell_of(app.world(), east), CellPos::new(4, 3));
+}
+
+#[test]
+fn passable_static_body_rises_under_mover_claiming_nothing() {
+    // A net is passable and claims no cells: a wisp walking claiming nothing
+    // at (2, 2) keeps only solid footprints off, so the net's 2×2 is laid
+    // under it, as under a walker that claims its cell.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    utils::create_owned(&mut app, "wisp", 2, 2, 0);
+
+    let net = utils::create_entity(app.world_mut(), "net", utils::pos(2, 2), Some(0));
+
+    assert!(net.is_some());
+}
+
+#[test]
+fn solid_static_footprint_never_rises_over_mover_claiming_nothing() {
+    // A wisp walks claiming no cells; standing at (2, 2), it keeps a cairn, a
+    // solid static body, from being placed over it, so it never stands where its
+    // shape has no region. Beside it, (2, 3) takes the cairn.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    utils::create_owned(&mut app, "wisp", 2, 2, 0);
+
+    let over = spawn::spawn_placed(
+        app.world_mut(),
+        "cairn",
+        utils::pos(2, 2),
+        Some(0),
+        FieldReach::Full,
+        &[],
+    );
+    let beside = spawn::spawn_placed(
+        app.world_mut(),
+        "cairn",
+        utils::pos(2, 3),
+        Some(0),
+        FieldReach::Full,
+        &[],
+    );
+
+    assert!(over.is_none());
+    assert!(beside.is_some());
+}
+
+#[test]
+fn solid_static_footprint_never_rises_over_any_cell_mover_claiming_nothing_stands_across() {
+    // A wisp half-way from (2, 2) to (3, 2) rounds to (3, 2) but stands
+    // across both: a cairn is refused on either, and beside them, on (1, 2),
+    // it stands.
+    let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
+    let (wisp, _) = utils::create_owned(&mut app, "wisp", 2, 2, 0);
+    app.world_mut()
+        .get_mut::<LocationComponent>(wisp)
+        .expect("the wisp stands")
+        .position = FixedUVec2::new(utils::fixed("2.5"), utils::fixed("2"));
+    let place = |app: &mut App, x| {
+        utils::create_entity(app.world_mut(), "cairn", utils::pos(x, 2), Some(0)).is_some()
+    };
+
+    assert!(!place(&mut app, 2));
+    assert!(!place(&mut app, 3));
+    assert!(place(&mut app, 1));
+}
+
+#[test]
+fn change_cut_short_puts_form_back_where_ground_takes_it() {
+    // A kiln changing through a scaffold, cut short, is a kiln again on
+    // (3, 3).
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    let (kiln, _) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
+    utils::order_morph(&mut app, kiln, "furnace");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
+
+    utils::soft_cancel_orders(app.world_mut(), kiln);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
+    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
+}
+
+#[test]
+fn change_cut_short_where_ground_no_longer_takes_its_form_destroys_it() {
+    // The scaffold lies underfoot, so a walker is placed on (3, 3) while the
+    // kiln changes; cut short, the kiln, a solid static body, cannot be put
+    // back over the walker, and is destroyed.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    let (kiln, kiln_id) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
+    utils::order_morph(&mut app, kiln, "furnace");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
+    let (walker, _) = utils::create_owned(&mut app, "walker", 3, 3, 0);
+
+    utils::soft_cancel_orders(app.world_mut(), kiln);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(!utils::alive(&app, kiln_id));
+    assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(3, 3));
+}
+
+#[test]
+fn change_cut_short_is_judged_where_walkers_stand_now_under_continuous_model() {
+    // A walker stands on the scaffold at (3, 3) through a tick, so the claim
+    // plane holds (3, 3) for it; it is then at (5, 3) as the change is cut
+    // short, and the kiln goes back where it stood.
+    let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
+    let (kiln, _) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
+    utils::order_morph(&mut app, kiln, "furnace");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
+    let (walker, _) = utils::create_owned(&mut app, "walker", 3, 3, 0);
+    utils::run_ticks(&mut app, 1);
+    app.world_mut()
+        .get_mut::<LocationComponent>(walker)
+        .expect("a walker stands somewhere")
+        .position = utils::pos(5, 3);
+
+    utils::soft_cancel_orders(app.world_mut(), kiln);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
+    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
+}
+
+#[test]
+fn change_cut_short_with_cargo_its_form_cannot_seat_destroys_it() {
+    // A recruit boards the cellar frame at (3, 3); cut short, the cellar,
+    // which holds nobody, cannot take the recruit back with it, and is
+    // destroyed, its frame letting the recruit out.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    utils::record_announcements(&mut app);
+    let (cellar, cellar_id) = utils::create_owned(&mut app, "cellar", 3, 3, 0);
+    utils::order_morph(&mut app, cellar, "furnace");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(entity_def::type_name(app.world(), cellar), "cellar_frame");
+    let (recruit, _) = utils::create_owned(&mut app, "recruit", 4, 3, 0);
+    assert_eq!(
+        spawn::board(app.world_mut(), recruit, cellar),
+        Boarding::Boarded
+    );
+
+    utils::soft_cancel_orders(app.world_mut(), cellar);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(!utils::alive(&app, cellar_id));
+    assert!(
+        app.world()
+            .resource::<utils::Announced>()
+            .0
+            .iter()
+            .any(|event| matches!(
+                event,
+                SimulationEvent::EntityDied { entity, cause: DeathCause::Canceled, .. }
+                    if *entity == cellar_id
+            ))
+    );
+    assert!(!entity_def::boarded(app.world(), recruit));
+    assert!(entity_def::stands_on_grid(app.world(), recruit));
+}
+
+#[test]
+fn reserving_change_puts_interim_form_on_inside_its_own_reservation() {
+    // A sprig claims no cells; its change through a solid bud into a solid
+    // tree reserves the tree's cell, (3, 3), which the bud then stands on:
+    // the reservation is the change's own, so the bud goes on and the tree
+    // stands after the 10 ticks.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    let (sprig, _) = utils::create_owned(&mut app, "sprig", 3, 3, 0);
+
+    utils::order_morph(&mut app, sprig, "tree");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::type_name(app.world(), sprig), "bud");
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(entity_def::type_name(app.world(), sprig), "tree");
+    assert_eq!(utils::cell_of(app.world(), sprig), CellPos::new(3, 3));
+}
 
 #[test]
 fn walker_on_ramp_never_changes_through_static_form() {
@@ -428,8 +972,8 @@ fn larva_changing_from_berth_on_cliff_steps_out_where_its_own_form_stands() {
 
 #[test]
 fn underfoot_pod_steps_out_onto_its_own_berth() {
-    // The pod holds ground underfoot and cannot move, so its change asks what
-    // stands underfoot; at its own berth, (4, 4) below the nest on low ground,
+    // The pod holds ground underfoot and cannot move, so its change asks the
+    // ground holders; at its own berth, (4, 4) below the nest on low ground,
     // it is the only thing there and must not count against itself.
     let mut app = nest_app();
     utils::create_owned(&mut app, "pod_nest", 4, 1, 0);
@@ -442,6 +986,41 @@ fn underfoot_pod_steps_out_onto_its_own_berth() {
 
     assert!(!entity_def::attached(app.world(), pod));
     assert_eq!(utils::cell_of(app.world(), pod), CellPos::new(4, 4));
+}
+
+#[test]
+fn larva_seated_away_from_its_nest_steps_out_only_from_its_berth() {
+    // A cliff nest on the plateau at (4..6, 9..11) seats its larva below the
+    // cliff, at (4, 6) on low ground. Every cell is held but (3, 9) on the
+    // plateau beside the nest: the larva comes out of its berth, not out of
+    // the nest, and never steps up the cliff from there, so it stays seated
+    // and the change does not start.
+    let mut app = nest_app();
+    utils::create_owned(&mut app, "cliff_nest", 4, 9, 0);
+    utils::run_ticks(&mut app, 1);
+    let larva = brood_of(&app, "larva");
+    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 6));
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    utils::free_cell(&mut app, CellPos::new(3, 9));
+
+    utils::order_morph(&mut app, larva, "drone");
+    utils::run_ticks(&mut app, 1);
+
+    assert!(entity_def::attached(app.world(), larva));
+    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 6));
+}
+
+#[test]
+fn static_footprint_rises_over_body_seated_in_berth() {
+    // The larva sits at its berth, (4, 4) below the nest, and holds no
+    // ground there: a bulb, a static solid body, is raised on its cell.
+    let mut app = nest_app();
+    utils::create_owned(&mut app, "nest", 4, 1, 0);
+    utils::run_ticks(&mut app, 1);
+    let larva = brood_of(&app, "larva");
+    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 4));
+
+    assert!(utils::create_entity(app.world_mut(), "bulb", utils::pos(4, 4), Some(0)).is_some());
 }
 
 #[test]
@@ -535,6 +1114,85 @@ fn larva_changing_through_husk_steps_out_where_husk_stands() {
     assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 7));
 }
 
+#[test]
+fn bred_body_cut_short_goes_back_to_its_berth_whatever_lies_where_it_stood() {
+    // The larva steps out of its berth at (4, 4) as a husk, and a rug, lying
+    // underfoot, is laid under the husk. Cut short, the larva could not be put
+    // back over the rug, but a bred body goes back to a berth, never to the
+    // ground it stood on: it sits in its breeder's berth again.
+    let mut app = nest_app();
+    utils::create_owned(&mut app, "nest", 4, 1, 0);
+    utils::run_ticks(&mut app, 1);
+    let larva = brood_of(&app, "larva");
+    utils::order_morph(&mut app, larva, "glider");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::of(app.world(), larva).name, "husk");
+    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 4));
+    assert!(utils::create_entity(app.world_mut(), "rug", utils::pos(4, 4), Some(0)).is_some());
+
+    utils::soft_cancel_orders(app.world_mut(), larva);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(entity_def::of(app.world(), larva).name, "larva");
+    assert!(entity_def::attached(app.world(), larva));
+}
+
+#[test]
+fn bred_body_cut_short_never_stands_over_what_stood_onto_its_interim_form() {
+    // The nymph steps out of its berth at (4, 4) as a cocoon, which lies
+    // underfoot, and a husk stands onto it. Cut short, the nymph goes back to
+    // its berth without its solid form ever taking (4, 4) from the husk.
+    let mut app = nest_app();
+    utils::create_owned(&mut app, "nymph_nest", 4, 1, 0);
+    utils::run_ticks(&mut app, 1);
+    let nymph = brood_of(&app, "nymph");
+    utils::order_morph(&mut app, nymph, "glider");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::of(app.world(), nymph).name, "cocoon");
+    assert_eq!(utils::cell_of(app.world(), nymph), CellPos::new(4, 4));
+    let (husk, _) = utils::create_owned(&mut app, "husk", 4, 4, 0);
+
+    utils::soft_cancel_orders(app.world_mut(), nymph);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(entity_def::of(app.world(), nymph).name, "nymph");
+    assert!(entity_def::attached(app.world(), nymph));
+    assert_eq!(utils::cell_of(app.world(), husk), CellPos::new(4, 4));
+    let layers = entity_def::of(app.world(), husk)
+        .location
+        .expect("a husk stands")
+        .occupies();
+    assert!(
+        app.world()
+            .resource::<Map>()
+            .nav_grid()
+            .is_claimed_by(layers, CellPos::new(4, 4))
+    );
+}
+
+#[test]
+fn bred_body_cut_short_sits_on_its_berth_point_again() {
+    // The offset nest at (4, 1) seats its nymph with its middle on (5.0, 4.5),
+    // its anchor (4.5, 4.0) between cells; cut short as a cocoon, the nymph
+    // sits there again, not on the cell its anchor rounds to.
+    let mut app = nest_app();
+    utils::create_owned(&mut app, "offset_nymph_nest", 4, 1, 0);
+    utils::run_ticks(&mut app, 1);
+    let nymph = brood_of(&app, "nymph");
+    let seated = FixedUVec2::new(utils::fixed("4.5"), utils::fixed("4.0"));
+    assert_eq!(entity_def::position(app.world(), nymph), seated);
+    utils::order_morph(&mut app, nymph, "glider");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(entity_def::of(app.world(), nymph).name, "cocoon");
+
+    utils::soft_cancel_orders(app.world_mut(), nymph);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(entity_def::of(app.world(), nymph).name, "nymph");
+    assert!(entity_def::attached(app.world(), nymph));
+    assert_eq!(entity_def::position(app.world(), nymph), seated);
+}
+
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
@@ -569,13 +1227,33 @@ enum Rise {
 ///   `big_walker` and `big_strider` are 2×2 movers of the same domains;
 /// - `post` is an unarmed 1×1 target of 100 health that strides cliffs,
 ///   `depot` a 2×2 building;
-/// - `cairn_bearer` is a walker that leaves a `cairn`, a static 1×1 body a
+/// - `cairn_bearer` is a walker that leaves a `cairn`, a solid static 1×1 body a
 ///   static 1×1 `hut` also trains and a `settler` walker changes into,
 ///   reserving its ground;
 /// - `grower` is a walker changing through a static `chrysalis` into a
 ///   `cairn`, and `seedling` one changing through a static `seed_pod` into a
 ///   static 2×2 `grove`, reserving its ground;
-/// - `beacon` is a static 1×1 body on the air layer, flat at 4.
+/// - `kiln` is a static solid body changing through an underfoot `scaffold`
+///   into a `furnace`, reverting when cut short, and `cellar` one changing
+///   likewise through a `cellar_frame`, a hold of one `recruit`; `sprig` a
+///   static passable body changing through a solid static `bud` into a solid
+///   static `tree`, reserving its ground;
+/// - `beacon` is a static 1×1 body on the air layer, flat at 4, `aerie` a
+///   static 2×2 one training `recruit`s and `cairn`s, `airship` a static 2×2
+///   one carrying four, letting them out within one cell, and `sky_shrine` a
+///   static 2×2 one that leaves a `cairn`;
+/// - `wagon` is a static 1×1 ground body carrying four `recruit`s, letting
+///   them out within three cells, and `burrow` a static 1×1 gateway of a
+///   `warren` holding four, letting them out within three cells too;
+/// - `recruit` is a walker the `hut` trains too;
+/// - `invoker` casts `call_walker`, summoning a `walker` nearest any cell,
+///   and `call_cairn`, summoning a `cairn` likewise;
+/// - `weaver` is a walker changing, reserving its ground, into a `mat`, a
+///   static 2×2 body that lies underfoot, and `netter` one changing likewise
+///   into a `net`, a static 2×2 passable body;
+/// - `wisp` is a walker that claims no cells;
+/// - `den` is a static 2×2 body on a `deep` layer, flat at 0 under the
+///   ground, training `recruit`s and `cairn`s.
 fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
@@ -586,6 +1264,8 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     let air = registry.register_layer("air", LayerLevel::At(4));
     registry.register_terrain("land");
     let aloft = registry.register_domain("aloft", DomainDef::new(air, Terrains::Any, None));
+    let deep = registry.register_layer("deep", LayerLevel::At(0));
+    let delving = registry.register_domain("delving", DomainDef::new(deep, Terrains::Any, None));
     let walking = registry.register_domain(
         "walking",
         DomainDef::new(ground, Terrains::Any, Some(CliffCrossing::Ramp)),
@@ -615,6 +1295,29 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
             .with_pool(Pool::health(100))
             .with_dying(1, []),
     );
+    registry.register(
+        mover("recruit", walking, ground, 1)
+            .with_train_time(2)
+            .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+    );
+    registry.register(
+        mover("weaver", walking, ground, 1).with_morphs([change("mat", MorphPlacement::Reserve)]),
+    );
+    let wisp = mover("wisp", walking, ground, 1);
+    registry.register(wisp.with_location(walking, CellSize::ONE, Solidity::Passable, ground));
+    registry.register(
+        EntityTypeDef::new("mat")
+            .with_location(walking, CellSize::new(2, 2), Solidity::Underfoot, ground)
+            .with_pool(Pool::health(50)),
+    );
+    registry.register(
+        mover("netter", walking, ground, 1).with_morphs([change("net", MorphPlacement::Reserve)]),
+    );
+    registry.register(
+        EntityTypeDef::new("net")
+            .with_location(walking, CellSize::new(2, 2), Solidity::Passable, ground)
+            .with_pool(Pool::health(50)),
+    );
     registry
         .register(mover("cairn_bearer", walking, ground, 1).with_dying(1, utils::leaves("cairn")));
     registry.register(
@@ -635,6 +1338,26 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
         )]),
     );
     registry.register(
+        EntityTypeDef::new("kiln")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(50))
+            .with_morphs([change_through(
+                "scaffold",
+                "furnace",
+                MorphPlacement::Revalidate,
+            )]),
+    );
+    registry.register(
+        EntityTypeDef::new("scaffold")
+            .with_location(walking, CellSize::ONE, Solidity::Underfoot, ground)
+            .with_pool(Pool::health(50)),
+    );
+    registry.register(
+        EntityTypeDef::new("furnace")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(50)),
+    );
+    registry.register(
         mover("seedling", walking, ground, 1).with_morphs([change_through(
             "seed_pod",
             "grove",
@@ -653,7 +1376,123 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
         EntityTypeDef::new("hut")
             .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
             .with_pool(Pool::health(50))
-            .with_trainer(["cairn"]),
+            .with_trainer(["cairn", "recruit"]),
+    );
+    registry.register(
+        EntityTypeDef::new("aerie")
+            .with_location(aloft, CellSize::new(2, 2), Solidity::Solid, air)
+            .with_pool(Pool::health(50))
+            .with_trainer(["recruit", "cairn"]),
+    );
+    registry.register(
+        EntityTypeDef::new("den")
+            .with_location(delving, CellSize::new(2, 2), Solidity::Solid, deep)
+            .with_pool(Pool::health(50))
+            .with_trainer(["recruit", "cairn"]),
+    );
+    registry.register(
+        EntityTypeDef::new("airship")
+            .with_location(aloft, CellSize::new(2, 2), Solidity::Solid, air)
+            .with_pool(Pool::health(50))
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_transporter(
+                Kinds::types(["recruit"]),
+                Affiliation::Own,
+                PassengerFate::Eject,
+                PassengerConduct::Fight,
+            ),
+    );
+    registry.register(
+        EntityTypeDef::new("sky_shrine")
+            .with_location(aloft, CellSize::new(2, 2), Solidity::Solid, air)
+            .with_pool(Pool::health(50))
+            .with_dying(1, utils::leaves("cairn")),
+    );
+    registry.register(
+        EntityTypeDef::new("cellar")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(50))
+            .with_morphs([change_through(
+                "cellar_frame",
+                "furnace",
+                MorphPlacement::Revalidate,
+            )]),
+    );
+    registry.register(
+        EntityTypeDef::new("cellar_frame")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(50))
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_transporter(
+                Kinds::types(["recruit"]),
+                Affiliation::Own,
+                PassengerFate::Eject,
+                PassengerConduct::Shelter,
+            ),
+    );
+    registry.register(
+        EntityTypeDef::new("sprig")
+            .with_location(walking, CellSize::ONE, Solidity::Passable, ground)
+            .with_pool(Pool::health(50))
+            .with_morphs([change_through("bud", "tree", MorphPlacement::Reserve)]),
+    );
+    for name in ["bud", "tree"] {
+        registry.register(
+            EntityTypeDef::new(name)
+                .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+                .with_pool(Pool::health(50)),
+        );
+    }
+    registry.register(
+        EntityTypeDef::new("wagon")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(50))
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::from_num(3))
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_transporter(
+                Kinds::types(["recruit"]),
+                Affiliation::Own,
+                PassengerFate::Eject,
+                PassengerConduct::Fight,
+            ),
+    );
+    let warren = registry.register_network(
+        "warren",
+        NetworkDef::new(
+            Kinds::types(["recruit"]),
+            Affiliation::Own,
+            4,
+            PassengerFate::Destroy,
+        ),
+    );
+    registry.register(
+        EntityTypeDef::new("burrow")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(50))
+            .with_gateway(Joins::Network(warren), Doors::Both)
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::from_num(3))
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO),
+    );
+    let call_walker = summon_nearby(&mut registry, "call_walker", "walker");
+    let call_cairn = summon_nearby(&mut registry, "call_cairn", "cairn");
+    registry.register(
+        EntityTypeDef::new("invoker")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(50))
+            .with_skills([call_walker, call_cairn]),
     );
     registry.register(
         EntityTypeDef::new("beacon")
@@ -702,6 +1541,33 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     app
 }
 
+/// Registers `name`, a skill summoning one `summoned` nearest any cell.
+fn summon_nearby(registry: &mut ContentRegistry, name: &str, summoned: &str) -> SkillId {
+    let entity_type = registry.type_id(summoned).expect("registered first");
+    registry.register_skill(
+        name,
+        SkillDef {
+            cooldown: 10,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Summon {
+                    at: SummonAt::Cell {
+                        reach: Reach::Wherever,
+                    },
+                    entity_type,
+                    count: Quantity::Constant(1),
+                    placement: SummonPlacement::Nearby,
+                    landing: Landing::Anywhere,
+                    within: Vec::new(),
+                    arrives: SummonArrival::Standing,
+                },
+            },
+            requires: Vec::new(),
+        },
+    )
+}
+
 /// A `size`-square mover of `domain` on `ground`, its melee hitting for 10
 /// every 2 ticks.
 fn mover(name: &str, domain: DomainId, ground: LayerId, size: u32) -> EntityTypeDef {
@@ -726,10 +1592,15 @@ fn mover(name: &str, domain: DomainId, ground: LayerId, size: u32) -> EntityType
 ///
 /// - `nest` is a 3×3 building with one berth in the middle of the cell below
 ///   its west column, opening with one `larva` there; `pod_nest` the same,
-///   opening with one `pod`;
+///   opening with one `pod`; `nymph_nest` the same, opening with one
+///   `nymph`, and `offset_nymph_nest` one whose berth lies on the edge between
+///   the cells below its west and middle columns; `cliff_nest` one whose berth lies in the middle of the third
+///   cell above its west column;
 /// - `larva` is a passable walker that keeps its berth and changes straight
 ///   into a `drone`, a flier, or through a `husk`, a mover that strides
 ///   cliffs, into a `glider`, another flier;
+/// - `nymph` is a solid walker that changes through a `cocoon`, a static
+///   underfoot body, into a `glider`;
 /// - `pod` is an underfoot walker with no movement that changes straight into
 ///   a solid `bulb`, into a `sealed_bulb` reserving its ground, or into a
 ///   `sprout` reserving ground it may hold only on `mulch`;
@@ -779,6 +1650,51 @@ fn nest_app() -> App {
                 change("drone", MorphPlacement::Nearby),
                 change_through("husk", "glider", MorphPlacement::Nearby),
             ]),
+    );
+    registry.register(
+        EntityTypeDef::new("nymph_nest")
+            .with_location(walking, CellSize::new(3, 3), Solidity::Solid, ground)
+            .with_pool(Pool::health(300))
+            .with_dying(2, [])
+            .with_tags(["building"])
+            .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "3.5")], 1))])
+            .with_breeder("nymph", Quantity::Constant(10), 1, 1, OrphanFate::Perish),
+    );
+    registry.register(
+        EntityTypeDef::new("offset_nymph_nest")
+            .with_location(walking, CellSize::new(3, 3), Solidity::Solid, ground)
+            .with_pool(Pool::health(300))
+            .with_dying(2, [])
+            .with_tags(["building"])
+            .with_berths([("brood", BerthGroup::new([utils::berth("1.0", "3.5")], 1))])
+            .with_breeder("nymph", Quantity::Constant(10), 1, 1, OrphanFate::Perish),
+    );
+    registry.register(
+        EntityTypeDef::new("nymph")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(25))
+            .with_dying(1, [])
+            .with_broodling(Attachment::new("brood", BerthStance::Still))
+            .with_morphs([change_through(
+                "cocoon",
+                "glider",
+                MorphPlacement::Revalidate,
+            )]),
+    );
+    registry.register(
+        EntityTypeDef::new("cocoon")
+            .with_location(walking, CellSize::ONE, Solidity::Underfoot, ground)
+            .with_pool(Pool::health(25))
+            .with_dying(1, []),
+    );
+    registry.register(
+        EntityTypeDef::new("cliff_nest")
+            .with_location(walking, CellSize::new(3, 3), Solidity::Solid, ground)
+            .with_pool(Pool::health(300))
+            .with_dying(2, [])
+            .with_tags(["building"])
+            .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "-2.5")], 1))])
+            .with_breeder("larva", Quantity::Constant(10), 1, 1, OrphanFate::Perish),
     );
     registry.register(
         EntityTypeDef::new("pod_nest")
