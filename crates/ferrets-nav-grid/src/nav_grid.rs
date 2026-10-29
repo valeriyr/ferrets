@@ -294,16 +294,16 @@ impl NavGrid {
         })
     }
 
-    /// Sets whether a standing footprint occupies a position on all layers
+    /// Sets whether a standing footprint occupies a cell on all layers
     /// matched by `mask`; terrain is untouched either way.
     ///
-    /// Out-of-bounds positions are silently ignored.
+    /// Panics for a cell off the grid or an empty mask.
     pub fn set_occupied_by(&mut self, mask: impl Into<LayerMask>, pos: CellPos, occupied: bool) {
         let mask = mask.into();
 
         self.assert_registered(mask);
-
-        let Some(i) = self.index(pos) else { return };
+        assert!(mask != LayerMask::EMPTY, "a footprint occupies some layer");
+        let i = self.index(pos).expect("a footprint stands on the grid");
 
         if occupied {
             self.occupancy[i] |= mask;
@@ -312,16 +312,15 @@ impl NavGrid {
         }
     }
 
-    /// Sets whether a unit holds the position on all layers matched by
-    /// `mask`.
+    /// Sets whether a unit holds a cell on all layers matched by `mask`.
     ///
-    /// Out-of-bounds positions are silently ignored.
+    /// Panics for a cell off the grid or an empty mask.
     pub fn set_claimed_by(&mut self, mask: impl Into<LayerMask>, pos: CellPos, claimed: bool) {
         let mask = mask.into();
 
         self.assert_registered(mask);
-
-        let Some(i) = self.index(pos) else { return };
+        assert!(mask != LayerMask::EMPTY, "a claim holds some layer");
+        let i = self.index(pos).expect("a claim stands on the grid");
 
         if claimed {
             self.claims[i] |= mask;

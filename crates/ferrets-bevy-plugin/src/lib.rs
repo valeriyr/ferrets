@@ -63,6 +63,9 @@
 //!                      settle the pools of each entity risen since the last fold
 //! recompute_player_stats — exclusive system; refold player stats from applied
 //!                      modifiers and what the player's active buffs grant
+//! refresh_nav_hierarchy — fold the static footprint changes
+//!                      reported since the last fold into the navigation
+//!                      hierarchy
 //! flee               — exclusive system; fleeing-stance entities run from fresh hits
 //! auto_engage        — exclusive system; stance-driven target acquisition for idle
 //!                      entities
@@ -500,6 +503,13 @@ impl Plugin for SimulationPlugin {
                     // from them; a tick of work moves the line as it is put in.
                     (systems::recompute_entity_stats, systems::follow_work).chain(),
                     systems::recompute_player_stats,
+                    // Static footprint changes reported since the last fold —
+                    // by the commands and the deaths above, or by last tick's
+                    // passes after it — are folded into the navigation
+                    // hierarchy before initiative and the orders read its
+                    // regions; set-downs in the commands and the deaths read
+                    // the last fold.
+                    systems::refresh_nav_hierarchy,
                     // Stance-driven initiative first, so a fresh engagement or
                     // flee response executes on the same tick it was decided.
                     systems::flee,
@@ -509,10 +519,6 @@ impl Plugin for SimulationPlugin {
                     // one given now makes its entity busy even if it ends
                     // this tick.
                     systems::note_idleness,
-                    // The hierarchy's one mutation point: fold in footprint
-                    // changes before orders path against it, never lazily at
-                    // query time.
-                    systems::refresh_nav_hierarchy,
                     // A rise bound to field rules whose field left it this
                     // tick ends before its tick of rise goes in. Unattended
                     // rising entities put in their tick right after the crews

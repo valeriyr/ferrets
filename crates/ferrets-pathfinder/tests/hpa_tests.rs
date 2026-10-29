@@ -14,7 +14,7 @@ use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
 use ferrets_pathfinder::{
     astar,
     hierarchy::NavHierarchy,
-    hpa::{self, PlanTarget},
+    hpa::{self, HierarchicalPath, PlanTarget},
 };
 
 //
@@ -284,6 +284,22 @@ fn smoothed_route_never_pulls_straight_up_cliff() {
     );
 }
 
+#[test]
+fn walker_crosses_gap_on_lower_level_of_border_spanning_cliff() {
+    // The gap down x=7 spans a cliff inside the clusters of 8; the walker on
+    // the lower level crosses it by the lower level's own entrance, and its
+    // corridor runs on to the lower level's entrance on the 15|16 border.
+    let grid = utils::terraced_gap_grid();
+    let hierarchy = utils::build_for(&grid, 8, &[utils::walker()]);
+
+    let path = plan_across_top(&grid, &hierarchy, utils::walker());
+
+    assert_eq!(
+        crossings(&path),
+        vec![(utils::nav(15, 2), utils::nav(16, 2))]
+    );
+}
+
 //
 // ─── Detour ───────────────────────────────────────────────────────────────────
 //
@@ -511,7 +527,7 @@ fn refine_fails_when_crossing_gets_walled() {
     // Wall the far side of the next crossing after the plan was made.
     let next = *path.corridor.last().unwrap();
     grid.set_occupied_by(utils::GROUND, next.to, true);
-    hierarchy.mark_dirty(next.to);
+    hierarchy.mark_dirty(next.to, utils::GROUND);
     hierarchy.refresh(&grid);
 
     let from = *path.segment.last().unwrap();
@@ -529,6 +545,127 @@ fn refine_fails_when_crossing_gets_walled() {
 }
 
 #[test]
+fn replanning_after_refresh_pays_for_detour_inside_cluster() {
+    // 24×8, clusters of 8: the first plan warms the middle cluster's costs
+    // and crosses at (15, 0)→(16, 0). A wall down x=12 with a gap at y=7
+    // lengthens the middle cluster's crossing without splitting it; its
+    // cached costs are cleared, and the warm hierarchy plans what a cold one
+    // does, through the gap's row.
+    let mut grid = utils::grid(24, 8);
+    let mut hierarchy = utils::build_ground(&grid, 8);
+    assert_eq!(
+        crossings(&plan_across_top(&grid, &hierarchy, utils::on_ground()))
+            .last()
+            .copied(),
+        Some((utils::nav(15, 0), utils::nav(16, 0)))
+    );
+
+    for y in 0..7 {
+        grid.set_occupied_by(utils::GROUND, utils::nav(12, y), true);
+        hierarchy.mark_dirty(utils::nav(12, y), utils::GROUND);
+    }
+    hierarchy.refresh(&grid);
+
+    let warm = plan_across_top(&grid, &hierarchy, utils::on_ground());
+    assert_eq!(
+        crossings(&warm).last().copied(),
+        Some((utils::nav(15, 7), utils::nav(16, 7)))
+    );
+    assert_eq!(
+        warm,
+        plan_across_top(&grid, &utils::build_ground(&grid, 8), utils::on_ground())
+    );
+}
+
+#[test]
+fn cell_walled_inside_warm_cluster_is_avoided_before_refresh() {
+    // 24×16, clusters of 8, the top middle cluster open: a first plan warms
+    // its costs. A wall down x=12 then cuts it, marked but not yet folded
+    // in: the marked cluster's costs are cleared, so a second plan detours
+    // through the cluster below rather than trusting a cost across the cut.
+    let mut grid = utils::grid(24, 16);
+    let mut hierarchy = utils::build_ground(&grid, 8);
+    plan_across_top(&grid, &hierarchy, utils::on_ground());
+
+    for y in 0..8 {
+        grid.set_occupied_by(utils::GROUND, utils::nav(12, y), true);
+        hierarchy.mark_dirty(utils::nav(12, y), utils::GROUND);
+    }
+    let before = plan_across_top(&grid, &hierarchy, utils::on_ground());
+
+    assert_eq!(
+        crossings(&before),
+        vec![
+            (utils::nav(15, 7), utils::nav(16, 7)),
+            (utils::nav(15, 8), utils::nav(15, 7)),
+            (utils::nav(8, 7), utils::nav(8, 8))
+        ]
+    );
+}
+
+#[test]
+fn wide_shape_warm_costs_reached_across_border_are_cleared_on_mark() {
+    // 24×8, clusters of 8, a 2×2 shape: a first plan warms the left
+    // cluster's costs to its border sides at x=7. Cells (8, 0) to (8, 3) are
+    // then blocked and marked, not folded in: they lie in the middle cluster,
+    // but 2×2 anchors at x=7 reach them, so the left cluster's costs are
+    // cleared too, and the second plan no longer counts on a side the wide
+    // footprint no longer fits.
+    let mut grid = utils::grid(24, 8);
+    let wide = utils::square_on_ground(2);
+    let mut hierarchy = utils::build_for(&grid, 8, &[wide]);
+    assert_eq!(
+        crossings(&plan_across_top(&grid, &hierarchy, wide)),
+        vec![(utils::nav(15, 0), utils::nav(16, 0))]
+    );
+
+    for y in 0..4 {
+        grid.set_occupied_by(utils::GROUND, utils::nav(8, y), true);
+        hierarchy.mark_dirty(utils::nav(8, y), utils::GROUND);
+    }
+
+    // A 2×2 anchor fits rows 0 to 6 of the 8-row grid: 7 rows of the 7|8
+    // border, at least `WIDE_ENTRANCE` (6), so its entrance has a transition
+    // at each end, rows 0 and 6, as built. Row 0's side no longer fits once
+    // (8, 0) to (8, 3) are blocked; row 6's does: the first leg ends across
+    // the border at (8, 6), the corridor beyond unchanged.
+    let after = plan_across_top(&grid, &hierarchy, wide);
+    assert_eq!(after.segment.last(), Some(&utils::nav(8, 6)));
+    assert_eq!(
+        crossings(&after),
+        vec![(utils::nav(15, 0), utils::nav(16, 0))]
+    );
+}
+
+#[test]
+fn cell_freed_inside_cluster_is_crossed_before_refresh() {
+    // 24×16, clusters of 8: a wall down x=12 splits the top middle cluster,
+    // its halves joined only through the cluster below. A wall cell freed
+    // and marked but not yet folded in already joins the halves for a plan:
+    // the cluster's searches run on the grid as it stands, so the plan is
+    // the one the refreshed hierarchy makes.
+    let mut grid = utils::grid(24, 16);
+    for y in 0..8 {
+        grid.set_occupied_by(utils::GROUND, utils::nav(12, y), true);
+    }
+    let mut hierarchy = utils::build_ground(&grid, 8);
+
+    grid.set_occupied_by(utils::GROUND, utils::nav(12, 3), false);
+    hierarchy.mark_dirty(utils::nav(12, 3), utils::GROUND);
+    let before = plan_across_top(&grid, &hierarchy, utils::on_ground());
+    hierarchy.refresh(&grid);
+
+    assert_eq!(
+        crossings(&before),
+        vec![(utils::nav(15, 0), utils::nav(16, 0))]
+    );
+    assert_eq!(
+        before,
+        plan_across_top(&grid, &hierarchy, utils::on_ground())
+    );
+}
+
+#[test]
 fn replanning_after_refresh_avoids_new_wall() {
     let mut grid = utils::grid(16, 8);
     let mut hierarchy = utils::build_ground(&grid, 4);
@@ -543,16 +680,15 @@ fn replanning_after_refresh_avoids_new_wall() {
     )
     .unwrap();
 
-    // A wall with one gap at the bottom lands mid-game; the warm cost cache
-    // must not leak the old open routes.
+    // A wall with one gap at the bottom lands mid-game.
     for y in 0..7 {
         grid.set_occupied_by(utils::GROUND, utils::nav(8, y), true);
-        hierarchy.mark_dirty(utils::nav(8, y));
+        hierarchy.mark_dirty(utils::nav(8, y), utils::GROUND);
     }
     hierarchy.refresh(&grid);
 
-    // The refreshed warm hierarchy must plan exactly what a cold one built
-    // on the mutated grid plans — eviction may not leak the old routes.
+    // The refreshed hierarchy plans exactly what a cold one built on the
+    // mutated grid plans.
     let plan = |hierarchy: &NavHierarchy| {
         hpa::find_path(
             &grid,
@@ -793,7 +929,7 @@ fn refine_fails_when_crossing_no_longer_fits_wide_shape() {
     let blocked = utils::nav(next.to.x + 1, next.to.y);
     grid.set_occupied_by(utils::GROUND, blocked, true);
     assert!(!grid.is_statically_occupied_by(utils::GROUND, next.to));
-    hierarchy.mark_dirty(blocked);
+    hierarchy.mark_dirty(blocked, utils::GROUND);
     hierarchy.refresh(&grid);
 
     let from = *path.segment.last().unwrap();
@@ -947,4 +1083,35 @@ fn validate_route(grid: &NavGrid, shape: MoverShape, start: CellPos, cells: &[Ce
         );
         previous = cell;
     }
+}
+
+/// A plan for `shape` from (0, 0) to (23, 0), in cell steps.
+fn plan_across_top(
+    grid: &NavGrid,
+    hierarchy: &NavHierarchy,
+    shape: MoverShape,
+) -> HierarchicalPath {
+    hpa::find_path(
+        grid,
+        hierarchy,
+        PROJECTION,
+        utils::nav(0, 0),
+        shape,
+        PlanTarget {
+            cell: utils::nav(23, 0),
+            size: CellSize::new(1, 1),
+            stop: 0,
+        },
+        hpa::PathShape::CellSteps,
+    )
+    .unwrap()
+}
+
+/// `path`'s corridor, each crossing as the cell it leaves and the cell it
+/// enters.
+fn crossings(path: &HierarchicalPath) -> Vec<(CellPos, CellPos)> {
+    path.corridor
+        .iter()
+        .map(|crossing| (crossing.from, crossing.to))
+        .collect()
 }

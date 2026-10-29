@@ -138,6 +138,22 @@ pub fn hill_grid() -> NavGrid {
     grid
 }
 
+/// A 24×8 land grid whose GROUND rises from level 1 on rows 0 to 3 to level
+/// 2 on rows 4 to 7 with no ramp, walled down column 7 but for a gap on rows
+/// 2 to 5: the gap's lower two rows and its upper two lie on either side of
+/// the cliff.
+pub fn terraced_gap_grid() -> NavGrid {
+    let mut grid = NavGrid::new(24, 8, |_| LAND);
+    grid.add_ranged_layer(GROUND, 1, 2, |cell| Relief {
+        level: if cell.y < 4 { 1 } else { 2 },
+        slope: None,
+    });
+    for y in [0, 1, 6, 7] {
+        grid.set_occupied_by(GROUND, nav(7, y), true);
+    }
+    grid
+}
+
 /// A single-cell land shape on GROUND that a cliff stops.
 pub fn walker() -> MoverShape {
     MoverShape::point(land(), GROUND, Some(CliffCrossing::Ramp))

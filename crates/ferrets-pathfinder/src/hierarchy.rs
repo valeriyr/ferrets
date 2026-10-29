@@ -2,7 +2,7 @@
 //! and connectivity regions.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     sync::Mutex,
 };
 
@@ -13,7 +13,7 @@ use crate::{
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
-use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
+use ferrets_nav_grid::{layer_mask::LayerMask, mover_shape::MoverShape, nav_grid::NavGrid};
 
 /// Cells per cluster side used by the live game grid.
 pub const DEFAULT_CLUSTER_SIZE: u32 = 16;
@@ -22,7 +22,7 @@ pub const DEFAULT_CLUSTER_SIZE: u32 = 16;
 /// instead of a single one in the middle.
 const WIDE_ENTRANCE: u32 = 6;
 
-/// Region value marking an impassable cell.
+/// Local region value marking a cell the shape does not fit.
 const NO_REGION: u32 = u32::MAX;
 
 /// A cluster's coordinates in the cluster grid laid over the navigation grid.
@@ -63,19 +63,9 @@ enum Side {
 /// One cluster border: the key every stored entrance hangs off.
 type BorderKey = (ClusterPos, Side);
 
-/// One cached intra-cluster cost's identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct IntraKey {
-    /// The mover shape the cost was searched for.
-    shape: MoverShape,
-    /// The cluster the search was confined to.
-    cluster: ClusterPos,
-    /// The lesser cell of the pair — costs are symmetric, so the pair is
-    /// stored in ascending order.
-    low: CellPos,
-    /// The greater cell of the pair.
-    high: CellPos,
-}
+/// One cluster's cached intra-cluster costs for one shape, keyed by the pair
+/// of cells in ascending order.
+type ClusterCosts = HashMap<(CellPos, CellPos), Option<u32>>;
 
 /// The abstraction of one mover shape over the grid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,15 +73,27 @@ struct ShapeHierarchy {
     /// The mover shape this abstraction serves; a cell counts as passable when
     /// the shape's whole footprint anchored there is statically clear for it.
     shape: MoverShape,
-    /// Each border's transitions, keyed per border so one border re-derives
-    /// without touching the rest. Borders without entrances hold no entry.
+    /// Each border's transitions, keyed per border: one entrance per run of
+    /// crossable pairs joining the same two local regions. Borders without
+    /// entrances hold no entry.
     transitions: BTreeMap<BorderKey, Vec<Transition>>,
-    /// `regions[y * width + x]` — the connectivity region of that cell, or
-    /// [`NO_REGION`] where impassable. Two cells connect if and only if their
-    /// regions are equal.
-    regions: Vec<u32>,
-    /// How many regions the flood fill discovered.
+    /// `locals[y * width + x]` — the region of that cell within its cluster,
+    /// or [`NO_REGION`] where the shape does not fit.
+    locals: Vec<u32>,
+    /// Each cluster's count of local regions, clusters in row-major order.
+    local_counts: Vec<usize>,
+    /// Each border's links: the pairs of local regions — the keyed
+    /// cluster's first — that a cardinal step across the border joins,
+    /// sorted. Borders without links hold no entry.
+    links: BTreeMap<BorderKey, Vec<(usize, usize)>>,
+    /// Each cluster's connectivity region per local region, clusters in
+    /// row-major order. Two cells connect if and only if their regions are
+    /// equal.
+    labels: Vec<Vec<u32>>,
+    /// How many connectivity regions the shape has.
     region_count: u32,
+    /// Clusters whose cells' fit may have changed since the last refresh.
+    dirty_clusters: BTreeSet<ClusterPos>,
 }
 
 /// The hierarchical abstraction of a [`NavGrid`], built per mover shape:
@@ -103,8 +105,8 @@ struct ShapeHierarchy {
 /// occupancy report their cells through [`mark_dirty`](Self::mark_dirty), and
 /// one [`refresh`](Self::refresh) call at a fixed point of the game tick
 /// folds the changes in. Queries never mutate the hierarchy's observable
-/// state; the intra-cluster cost cache behind them memoizes pure functions of
-/// the grid, so its fill timing cannot diverge between peers.
+/// state; the intra-cluster cost cache behind them holds costs computed on
+/// the grid as it stands.
 #[derive(Debug)]
 pub struct NavHierarchy {
     /// Cells per cluster side. Clusters on the far edges of a grid whose
@@ -116,22 +118,16 @@ pub struct NavHierarchy {
     height: u32,
     /// One abstraction per mover shape, in the order the shapes were given.
     abstractions: Vec<ShapeHierarchy>,
-    /// Borders whose entrances must be re-derived at the next refresh.
-    dirty_borders: BTreeSet<BorderKey>,
-    /// Clusters whose interior pathability changed since the last refresh;
-    /// their cached intra-cluster costs are evicted on refresh.
-    dirty_clusters: BTreeSet<ClusterPos>,
-    /// Whether any static pathability changed since the last refresh.
-    dirty: bool,
     /// Lazily computed shortest-path costs between two cells inside one
-    /// cluster, `None` for pairs the cluster does not connect. Filled the
-    /// first time a search needs an entry, evicted when the cluster dirties.
+    /// cluster, per shape in the abstractions' order, then per cluster in
+    /// row-major order, keyed by the pair in ascending order; `None` for
+    /// pairs the cluster does not connect. Filled the first time a search
+    /// needs an entry; a shape's entries for a cluster are cleared when a
+    /// change marks the cluster for it.
     ///
-    /// The `Mutex` is interior mutability, not concurrency: searches memoize
-    /// through a shared borrow, and the host resource must stay `Sync`
-    /// (which rules `RefCell` out). Accesses are single-threaded, so the
-    /// lock is never contended.
-    intra_costs: Mutex<BTreeMap<IntraKey, Option<u32>>>,
+    /// Behind a `Mutex` for interior mutability; accesses are
+    /// single-threaded, so it is never contended.
+    intra_costs: Mutex<Vec<Vec<ClusterCosts>>>,
 }
 
 /// Equality covers the derived structure; the cost cache is a memo of pure
@@ -142,9 +138,6 @@ impl PartialEq for NavHierarchy {
             && self.width == other.width
             && self.height == other.height
             && self.abstractions == other.abstractions
-            && self.dirty_borders == other.dirty_borders
-            && self.dirty_clusters == other.dirty_clusters
-            && self.dirty == other.dirty
     }
 }
 
@@ -157,9 +150,6 @@ impl Clone for NavHierarchy {
             width: self.width,
             height: self.height,
             abstractions: self.abstractions.clone(),
-            dirty_borders: self.dirty_borders.clone(),
-            dirty_clusters: self.dirty_clusters.clone(),
-            dirty: self.dirty,
             intra_costs: Mutex::new(self.intra_costs.lock().unwrap().clone()),
         }
     }
@@ -177,118 +167,80 @@ impl NavHierarchy {
             .iter()
             .map(|&shape| ShapeHierarchy::build(grid, cluster_size, shape))
             .collect();
+        let cluster_count = cluster_count(grid, cluster_size);
 
         Self {
             cluster_size,
             width: grid.width(),
             height: grid.height(),
             abstractions,
-            dirty_borders: BTreeSet::new(),
-            dirty_clusters: BTreeSet::new(),
-            dirty: false,
-            intra_costs: Mutex::new(BTreeMap::new()),
+            intra_costs: Mutex::new(vec![vec![HashMap::new(); cluster_count]; shapes.len()]),
         }
     }
 
-    /// Records that the static pathability of `cell` changed, queueing its
-    /// cluster borders for the next [`refresh`](Self::refresh).
+    /// Records that the static occupancy of `cell` changed on `layers`,
+    /// queueing for the next [`refresh`](Self::refresh) the clusters of every
+    /// shape whose fit it may change — each shape that must be free on one of
+    /// `layers`, for every anchor its footprint reaches the cell from — and
+    /// clearing that shape's cached intra-cluster costs in them.
     ///
-    /// Out-of-bounds cells are silently ignored.
-    pub fn mark_dirty(&mut self, cell: CellPos) {
-        if cell.x >= self.width || cell.y >= self.height {
-            return;
-        }
-        self.dirty = true;
-
-        // A changed cell also changes whether footprints *anchored before it*
-        // fit, as far back as the widest served shape reaches — so every anchor
-        // whose footprint covers the cell dirties its own borders and cluster,
-        // or a wide shape's transitions would go stale from changes landing
-        // just past a border.
-        let (reach_x, reach_y) = self
-            .abstractions
-            .iter()
-            .fold((0, 0), |(x, y), abstraction| {
-                (
-                    x.max(abstraction.shape.size.width - 1),
-                    y.max(abstraction.shape.size.height - 1),
-                )
-            });
-        for dy in 0..=reach_y {
-            for dx in 0..=reach_x {
-                if let (Some(x), Some(y)) = (cell.x.checked_sub(dx), cell.y.checked_sub(dy)) {
-                    self.mark_anchor_dirty(CellPos::new(x, y));
+    /// Panics for a cell off the grid or an empty mask.
+    pub fn mark_dirty(&mut self, cell: CellPos, layers: impl Into<LayerMask>) {
+        assert!(
+            cell.x < self.width && cell.y < self.height,
+            "a static change lies on the grid"
+        );
+        let layers = layers.into();
+        assert!(
+            layers != LayerMask::EMPTY,
+            "a static change lies on some layer"
+        );
+        let clusters_wide = self.width.div_ceil(self.cluster_size);
+        let costs = self.intra_costs.get_mut().unwrap();
+        for (abstraction, costs) in self.abstractions.iter_mut().zip(costs.iter_mut()) {
+            if abstraction.shape.layers & layers == LayerMask::EMPTY {
+                continue;
+            }
+            let size = abstraction.shape.size;
+            for dy in 0..size.height {
+                for dx in 0..size.width {
+                    if let (Some(x), Some(y)) = (cell.x.checked_sub(dx), cell.y.checked_sub(dy)) {
+                        let cluster = ClusterPos {
+                            x: x / self.cluster_size,
+                            y: y / self.cluster_size,
+                        };
+                        abstraction.dirty_clusters.insert(cluster);
+                        costs[cluster_index(cluster, clusters_wide)].clear();
+                    }
                 }
             }
         }
     }
 
-    /// Queues the borders and cluster one anchor cell touches.
-    fn mark_anchor_dirty(&mut self, cell: CellPos) {
-        let size = self.cluster_size;
-        let cluster = self.cluster_of(cell);
-        self.dirty_clusters.insert(cluster);
-        if cell.x % size == size - 1 && cell.x + 1 < self.width {
-            self.dirty_borders.insert((cluster, Side::Right));
-        }
-        if cell.x.is_multiple_of(size) && cluster.x > 0 {
-            let left = ClusterPos {
-                x: cluster.x - 1,
-                y: cluster.y,
-            };
-            self.dirty_borders.insert((left, Side::Right));
-        }
-        if cell.y % size == size - 1 && cell.y + 1 < self.height {
-            self.dirty_borders.insert((cluster, Side::Down));
-        }
-        if cell.y.is_multiple_of(size) && cluster.y > 0 {
-            let above = ClusterPos {
-                x: cluster.x,
-                y: cluster.y - 1,
-            };
-            self.dirty_borders.insert((above, Side::Down));
-        }
-    }
-
-    /// Folds every change reported since the last refresh into the hierarchy:
-    /// dirty borders re-derive their entrances, and regions reflood. A no-op
-    /// when nothing was reported.
-    ///
-    /// This is the hierarchy's only mutation point after the build.
+    /// Folds every change reported since the last refresh into the hierarchy,
+    /// shape by shape: the dirty clusters reflood their local regions, every
+    /// border they touch re-derives its entrances and links, and the shape's
+    /// regions are relabeled. A shape with nothing reported is left as it is.
     pub fn refresh(&mut self, grid: &NavGrid) {
-        if !self.dirty {
-            return;
-        }
-
         for abstraction in &mut self.abstractions {
-            for &border in &self.dirty_borders {
-                let entrance =
-                    border_transitions(grid, abstraction.shape, self.cluster_size, border);
-                if entrance.is_empty() {
-                    abstraction.transitions.remove(&border);
-                } else {
-                    abstraction.transitions.insert(border, entrance);
-                }
-            }
-            let (regions, region_count) = flood_regions(grid, abstraction.shape);
-            abstraction.regions = regions;
-            abstraction.region_count = region_count;
+            abstraction.refresh(grid, self.cluster_size);
         }
-
-        self.intra_costs
-            .lock()
-            .unwrap()
-            .retain(|key, _| !self.dirty_clusters.contains(&key.cluster));
-
-        self.dirty_borders.clear();
-        self.dirty_clusters.clear();
-        self.dirty = false;
     }
 
-    /// Whether a change was reported since the last
+    /// Whether a change was reported for any shape since the last
     /// [`refresh`](Self::refresh), so regions may not reflect the grid.
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.abstractions
+            .iter()
+            .any(|abstraction| abstraction.is_dirty())
+    }
+
+    /// Whether a change was reported for `shape` since the last
+    /// [`refresh`](Self::refresh), so its regions may not reflect the grid.
+    ///
+    /// Panics if no hierarchy was built for the shape.
+    pub fn is_dirty_for(&self, shape: MoverShape) -> bool {
+        self.abstraction(shape).is_dirty()
     }
 
     /// Returns the cells per cluster side.
@@ -307,10 +259,7 @@ impl NavHierarchy {
     /// Returns the cells `cluster` covers; far-edge clusters are cut short
     /// by the grid bounds.
     pub fn cluster_rect(&self, cluster: ClusterPos) -> CellRect {
-        let origin = CellPos::new(cluster.x * self.cluster_size, cluster.y * self.cluster_size);
-        let width = self.cluster_size.min(self.width - origin.x);
-        let height = self.cluster_size.min(self.height - origin.y);
-        CellRect::new(origin, CellSize::new(width, height))
+        cluster_rect(self.cluster_size, self.width, self.height, cluster)
     }
 
     /// Returns each transition touching `cluster`, paired with the side cell
@@ -358,8 +307,8 @@ impl NavHierarchy {
 
     /// Returns the cost of the cheapest path between `a` and `b` that stays
     /// inside `cluster` on the static plane, or `None` when the cluster does
-    /// not connect them. Computed on first use and cached until the cluster
-    /// dirties.
+    /// not connect them. Computed on first use and cached until a change marks
+    /// the cluster for the shape.
     pub(crate) fn intra_cost(
         &self,
         grid: &NavGrid,
@@ -369,15 +318,25 @@ impl NavHierarchy {
         a: CellPos,
         b: CellPos,
     ) -> Option<u32> {
+        let index = self.abstraction_index(shape);
+        let abstraction = &self.abstractions[index];
+        // On a cluster refreshed for the shape, the bounded search confined
+        // to it connects exactly the cells of one local region.
+        if !abstraction.dirty_clusters.contains(&cluster) {
+            match (
+                abstraction.local_of(a, self.width),
+                abstraction.local_of(b, self.width),
+            ) {
+                (Some(local_a), Some(local_b)) if local_a == local_b => {}
+                (Some(_) | None, Some(_) | None) => return None,
+            }
+        }
         let (low, high) = if a <= b { (a, b) } else { (b, a) };
-        let key = IntraKey {
-            shape,
-            cluster,
-            low,
-            high,
-        };
+        let cluster_index = cluster_index(cluster, self.width.div_ceil(self.cluster_size));
 
-        if let Some(&cost) = self.intra_costs.lock().unwrap().get(&key) {
+        if let Some(&cost) =
+            self.intra_costs.lock().unwrap()[index][cluster_index].get(&(low, high))
+        {
             return cost;
         }
 
@@ -390,7 +349,7 @@ impl NavHierarchy {
             MoverProfile::new(shape, Blockers::Static),
             high,
         );
-        self.intra_costs.lock().unwrap().insert(key, cost);
+        self.intra_costs.lock().unwrap()[index][cluster_index].insert((low, high), cost);
         cost
     }
 
@@ -407,15 +366,19 @@ impl NavHierarchy {
     }
 
     /// Returns the connectivity region of `cell` for the given mover shape, or
-    /// `None` when the cell is impassable or out of bounds.
+    /// `None` when the cell is impassable or out of bounds. A region id holds
+    /// until the next [`refresh`](Self::refresh), which may renumber it.
     ///
     /// Panics if no hierarchy was built for the shape.
     pub fn region_of(&self, cell: CellPos, shape: MoverShape) -> Option<u32> {
         if cell.x >= self.width || cell.y >= self.height {
             return None;
         }
-        let region = self.abstraction(shape).regions[(cell.y * self.width + cell.x) as usize];
-        (region != NO_REGION).then_some(region)
+        let abstraction = self.abstraction(shape);
+        let local = abstraction.local_of(cell, self.width)?;
+        let cluster = self.cluster_of(cell);
+        let clusters_wide = self.width.div_ceil(self.cluster_size);
+        Some(abstraction.labels[cluster_index(cluster, clusters_wide)][local])
     }
 
     /// Returns `true` when `a` and `b` are connected for the given mover shape:
@@ -452,9 +415,14 @@ impl NavHierarchy {
 
     /// The abstraction serving `shape`.
     fn abstraction(&self, shape: MoverShape) -> &ShapeHierarchy {
+        &self.abstractions[self.abstraction_index(shape)]
+    }
+
+    /// The index of the abstraction serving `shape`.
+    fn abstraction_index(&self, shape: MoverShape) -> usize {
         self.abstractions
             .iter()
-            .find(|abstraction| abstraction.shape == shape)
+            .position(|abstraction| abstraction.shape == shape)
             .unwrap_or_else(|| {
                 panic!(
                     "no hierarchy built for shape on terrains {} and layers {} at {}x{}, cliff crossing {:?}",
@@ -466,36 +434,268 @@ impl NavHierarchy {
 
 impl ShapeHierarchy {
     /// Builds one shape's abstraction from the grid's current static
-    /// occupancy.
+    /// occupancy: every cluster dirty, then refreshed.
     fn build(grid: &NavGrid, cluster_size: u32, shape: MoverShape) -> Self {
-        let mut transitions = BTreeMap::new();
-        let clusters_w = grid.width().div_ceil(cluster_size);
-        let clusters_h = grid.height().div_ceil(cluster_size);
+        let clusters_wide = grid.width().div_ceil(cluster_size);
+        let clusters_high = grid.height().div_ceil(cluster_size);
+        let mut abstraction = Self {
+            shape,
+            transitions: BTreeMap::new(),
+            locals: vec![NO_REGION; cell_index(CellPos::new(0, grid.height()), grid.width())],
+            local_counts: vec![0; cluster_count(grid, cluster_size)],
+            links: BTreeMap::new(),
+            labels: vec![Vec::new(); cluster_count(grid, cluster_size)],
+            region_count: 0,
+            dirty_clusters: (0..clusters_high)
+                .flat_map(|y| (0..clusters_wide).map(move |x| ClusterPos { x, y }))
+                .collect(),
+        };
+        abstraction.refresh(grid, cluster_size);
+        abstraction
+    }
 
-        for cy in 0..clusters_h {
-            for cx in 0..clusters_w {
-                let cluster = ClusterPos { x: cx, y: cy };
-                for side in [Side::Right, Side::Down] {
-                    let border = (cluster, side);
-                    if !border_exists(grid, cluster_size, border) {
-                        continue;
-                    }
-                    let entrance = border_transitions(grid, shape, cluster_size, border);
-                    if !entrance.is_empty() {
-                        transitions.insert(border, entrance);
+    /// Whether a change was reported for this shape since its last refresh.
+    fn is_dirty(&self) -> bool {
+        !self.dirty_clusters.is_empty()
+    }
+
+    /// Folds this shape's reported changes in: the dirty clusters reflood,
+    /// every border they touch re-derives its entrances and links, and the
+    /// regions are relabeled over the whole graph. Nothing when no change was
+    /// reported.
+    fn refresh(&mut self, grid: &NavGrid, cluster_size: u32) {
+        if !self.is_dirty() {
+            return;
+        }
+        let dirty_clusters = std::mem::take(&mut self.dirty_clusters);
+        for &cluster in &dirty_clusters {
+            self.flood_cluster(grid, cluster_size, cluster);
+        }
+        let touched: BTreeSet<BorderKey> = dirty_clusters
+            .iter()
+            .flat_map(|&cluster| borders_of(cluster))
+            .filter(|&border| border_exists(grid, cluster_size, border))
+            .collect();
+        for border in touched {
+            let entrance = self.border_transitions(grid, cluster_size, border);
+            if entrance.is_empty() {
+                self.transitions.remove(&border);
+            } else {
+                self.transitions.insert(border, entrance);
+            }
+            let links = self.border_links(grid, cluster_size, border);
+            if links.is_empty() {
+                self.links.remove(&border);
+            } else {
+                self.links.insert(border, links);
+            }
+        }
+        self.relabel(grid.width().div_ceil(cluster_size));
+    }
+
+    /// Refloods `cluster`'s local regions with the search's own neighbor
+    /// rule, confined to the cluster. Cells are seeded in row-major order and
+    /// each fill is a breadth-first walk in fixed direction order.
+    fn flood_cluster(&mut self, grid: &NavGrid, cluster_size: u32, cluster: ClusterPos) {
+        let width = grid.width();
+        let index = |pos: CellPos| cell_index(pos, width);
+        let rect = cluster_rect(cluster_size, width, grid.height(), cluster);
+        for cell in rect.cells() {
+            self.locals[index(cell)] = NO_REGION;
+        }
+
+        let profile = MoverProfile::new(self.shape, Blockers::Static);
+        let mut count = 0;
+        for seed in rect.cells() {
+            if self.locals[index(seed)] != NO_REGION || !grid.fits_statically(seed, self.shape) {
+                continue;
+            }
+            self.locals[index(seed)] = count;
+            let mut queue = VecDeque::from([seed]);
+            while let Some(pos) = queue.pop_front() {
+                for (neighbor, _) in astar::passable_neighbors(grid, pos, profile) {
+                    if rect.contains(neighbor) && self.locals[index(neighbor)] == NO_REGION {
+                        self.locals[index(neighbor)] = count;
+                        queue.push_back(neighbor);
                     }
                 }
             }
+            count += 1;
+        }
+        self.local_counts[cluster_index(cluster, width.div_ceil(cluster_size))] = count as usize;
+    }
+
+    /// Derives one border's transitions: a maximal run of border pairs
+    /// joining the same two local regions yields one transition in its
+    /// middle, or one at each end when at least [`WIDE_ENTRANCE`] cells wide.
+    fn border_transitions(
+        &self,
+        grid: &NavGrid,
+        cluster_size: u32,
+        border: BorderKey,
+    ) -> Vec<Transition> {
+        let mut transitions = Vec::new();
+        let mut run: Vec<Transition> = Vec::new();
+        let mut joined: Option<(usize, usize)> = None;
+        for pair in border_pairs(grid, cluster_size, border) {
+            let crossing = self.crossing(grid, pair);
+            if crossing != joined {
+                emit_entrance(&run, &mut transitions);
+                run.clear();
+                joined = crossing;
+            }
+            if crossing.is_some() {
+                run.push(pair);
+            }
+        }
+        emit_entrance(&run, &mut transitions);
+        transitions
+    }
+
+    /// Derives one border's links: the pairs of local regions a cardinal
+    /// step across joins.
+    fn border_links(
+        &self,
+        grid: &NavGrid,
+        cluster_size: u32,
+        border: BorderKey,
+    ) -> Vec<(usize, usize)> {
+        let mut links: Vec<(usize, usize)> = border_pairs(grid, cluster_size, border)
+            .into_iter()
+            .filter_map(|pair| self.crossing(grid, pair))
+            .collect();
+        links.sort_unstable();
+        links.dedup();
+        links
+    }
+
+    /// Labels the connectivity regions: the components of the graph of
+    /// (cluster, local region) nodes joined by the border links, numbered in
+    /// cluster order, then local order.
+    fn relabel(&mut self, clusters_wide: u32) {
+        let mut offsets = Vec::with_capacity(self.local_counts.len());
+        let mut total = 0;
+        for &count in &self.local_counts {
+            offsets.push(total);
+            total += count;
+        }
+        let node = |cluster: ClusterPos, local: usize| {
+            offsets[cluster_index(cluster, clusters_wide)] + local
+        };
+
+        let mut parent: Vec<usize> = (0..total).collect();
+        for (&(cluster, side), links) in &self.links {
+            let other = match side {
+                Side::Right => ClusterPos {
+                    x: cluster.x + 1,
+                    y: cluster.y,
+                },
+                Side::Down => ClusterPos {
+                    x: cluster.x,
+                    y: cluster.y + 1,
+                },
+            };
+            for &(a, b) in links {
+                let (root_a, root_b) = (
+                    find_root(&mut parent, node(cluster, a)),
+                    find_root(&mut parent, node(other, b)),
+                );
+                parent[root_a.max(root_b)] = root_a.min(root_b);
+            }
         }
 
-        let (regions, region_count) = flood_regions(grid, shape);
-        Self {
-            shape,
-            transitions,
-            regions,
-            region_count,
+        let mut label_of_root: Vec<Option<u32>> = vec![None; total];
+        let mut region_count = 0;
+        for (cluster_index, &count) in self.local_counts.iter().enumerate() {
+            let offset = offsets[cluster_index];
+            self.labels[cluster_index] = (0..count)
+                .map(|local| {
+                    let root = find_root(&mut parent, offset + local);
+                    match label_of_root[root] {
+                        Some(label) => label,
+                        None => {
+                            label_of_root[root] = Some(region_count);
+                            region_count += 1;
+                            region_count - 1
+                        }
+                    }
+                })
+                .collect();
         }
+        self.region_count = region_count;
     }
+
+    /// The two local regions a cardinal step across `pair` joins, the keyed
+    /// cluster's first, or `None` where the shape cannot step across.
+    fn crossing(&self, grid: &NavGrid, pair: Transition) -> Option<(usize, usize)> {
+        let width = grid.width();
+        let a = self.local_of(pair.a, width)?;
+        let b = self.local_of(pair.b, width)?;
+        grid.can_step(pair.a, pair.b, self.shape).then_some((a, b))
+    }
+
+    /// The region of `cell` within its cluster, or `None` where the shape
+    /// does not fit.
+    fn local_of(&self, cell: CellPos, width: u32) -> Option<usize> {
+        let local = self.locals[cell_index(cell, width)];
+        (local != NO_REGION).then_some(local as usize)
+    }
+}
+
+/// The index of `cell` in a row-major array over a grid `width` cells wide.
+fn cell_index(cell: CellPos, width: u32) -> usize {
+    cell.y as usize * width as usize + cell.x as usize
+}
+
+/// The index of `cluster` in a row-major array over a cluster grid
+/// `clusters_wide` clusters wide.
+fn cluster_index(cluster: ClusterPos, clusters_wide: u32) -> usize {
+    cluster.y as usize * clusters_wide as usize + cluster.x as usize
+}
+
+/// How many clusters of `cluster_size` cover `grid`, far-edge ones cut short.
+fn cluster_count(grid: &NavGrid, cluster_size: u32) -> usize {
+    grid.width().div_ceil(cluster_size) as usize * grid.height().div_ceil(cluster_size) as usize
+}
+
+/// The root of `node`'s set in a union-find forest, halving the path on the
+/// way.
+fn find_root(parent: &mut [usize], mut node: usize) -> usize {
+    while parent[node] != node {
+        parent[node] = parent[parent[node]];
+        node = parent[node];
+    }
+    node
+}
+
+/// The cells `cluster` covers on a `width` × `height` grid; far-edge
+/// clusters are cut short by the grid bounds.
+fn cluster_rect(cluster_size: u32, width: u32, height: u32, cluster: ClusterPos) -> CellRect {
+    let origin = CellPos::new(cluster.x * cluster_size, cluster.y * cluster_size);
+    let cut_width = cluster_size.min(width - origin.x);
+    let cut_height = cluster_size.min(height - origin.y);
+    CellRect::new(origin, CellSize::new(cut_width, cut_height))
+}
+
+/// Every border `cluster` lies on: its own right and down borders and its
+/// left and upper neighbors', those past the grid's edge included.
+fn borders_of(cluster: ClusterPos) -> Vec<BorderKey> {
+    let mut borders = vec![(cluster, Side::Right), (cluster, Side::Down)];
+    if cluster.x > 0 {
+        let left = ClusterPos {
+            x: cluster.x - 1,
+            y: cluster.y,
+        };
+        borders.push((left, Side::Right));
+    }
+    if cluster.y > 0 {
+        let above = ClusterPos {
+            x: cluster.x,
+            y: cluster.y - 1,
+        };
+        borders.push((above, Side::Down));
+    }
+    borders
 }
 
 /// Whether the border lies inside the grid — far-edge clusters have no right
@@ -507,19 +707,9 @@ fn border_exists(grid: &NavGrid, cluster_size: u32, (cluster, side): BorderKey) 
     }
 }
 
-/// Derives one border's transitions from the grid: a maximal run of border
-/// cell pairs statically passable on both sides yields one transition in its
-/// middle, or one at each end when at least [`WIDE_ENTRANCE`] cells wide.
-fn border_transitions(
-    grid: &NavGrid,
-    shape: MoverShape,
-    cluster_size: u32,
-    (cluster, side): BorderKey,
-) -> Vec<Transition> {
-    let mut transitions = Vec::new();
-    let mut run: Vec<Transition> = Vec::new();
-
-    let pairs: Vec<Transition> = match side {
+/// The cell pairs facing each other across one border, along it.
+fn border_pairs(grid: &NavGrid, cluster_size: u32, (cluster, side): BorderKey) -> Vec<Transition> {
+    match side {
         Side::Right => {
             let border_x = (cluster.x + 1) * cluster_size;
             let y_end = ((cluster.y + 1) * cluster_size).min(grid.height());
@@ -540,22 +730,7 @@ fn border_transitions(
                 })
                 .collect()
         }
-    };
-
-    for pair in pairs {
-        if grid.fits_statically(pair.a, shape)
-            && grid.fits_statically(pair.b, shape)
-            && grid.can_step(pair.a, pair.b, shape)
-        {
-            run.push(pair);
-        } else {
-            emit_entrance(&run, &mut transitions);
-            run.clear();
-        }
     }
-    emit_entrance(&run, &mut transitions);
-
-    transitions
 }
 
 /// Appends one entrance's transitions: the middle pair of a narrow run, the
@@ -569,43 +744,4 @@ fn emit_entrance(run: &[Transition], transitions: &mut Vec<Transition>) {
             transitions.push(run[len - 1]);
         }
     }
-}
-
-/// Flood-fills connectivity regions over every cell of the static plane,
-/// using the same neighbor rule as the search, and returns them with their
-/// count.
-///
-/// Cells are seeded in row-major order and each fill is a breadth-first walk
-/// in fixed direction order, so region numbering is deterministic.
-fn flood_regions(grid: &NavGrid, shape: MoverShape) -> (Vec<u32>, u32) {
-    let width = grid.width();
-    let index = |pos: CellPos| (pos.y * width + pos.x) as usize;
-
-    let mut regions = vec![NO_REGION; width as usize * grid.height() as usize];
-    let mut count = 0;
-
-    for y in 0..grid.height() {
-        for x in 0..width {
-            let seed = CellPos::new(x, y);
-            if regions[index(seed)] != NO_REGION || !grid.fits_statically(seed, shape) {
-                continue;
-            }
-
-            regions[index(seed)] = count;
-            let mut queue = VecDeque::from([seed]);
-            while let Some(pos) = queue.pop_front() {
-                for (neighbor, _) in
-                    astar::passable_neighbors(grid, pos, MoverProfile::new(shape, Blockers::Static))
-                {
-                    if regions[index(neighbor)] == NO_REGION {
-                        regions[index(neighbor)] = count;
-                        queue.push_back(neighbor);
-                    }
-                }
-            }
-            count += 1;
-        }
-    }
-
-    (regions, count)
 }

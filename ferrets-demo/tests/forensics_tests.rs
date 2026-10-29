@@ -16,8 +16,16 @@
 //! entity bears changes, with its pools, within the same range.
 //! `COMMANDS=<substring>` prints every recorded command whose text holds the
 //! substring, with the tick and the player it came from.
+//! `REFRESH_TIMES=1` times every hierarchy refresh the game runs — on a copy,
+//! after each tick that left the hierarchy dirty — and prints each with its
+//! tick, then the count, total, mean and longest.
 
-use std::{collections::BTreeMap, fs::File, io::BufReader};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io::BufReader,
+    time::{Duration, Instant},
+};
 
 use bevy::prelude::*;
 use ferrets_content::{pool_def::PoolId, registry::ContentRegistry};
@@ -106,6 +114,8 @@ fn replay_forensics() {
     });
     let mut was_concealed: BTreeMap<SimulationId, bool> = BTreeMap::new();
     let passives: Option<String> = std::env::var("PASSIVES").ok();
+    let mut refreshes: Option<Vec<(u32, Duration)>> =
+        std::env::var("REFRESH_TIMES").ok().map(|_| Vec::new());
     let mut bore: BTreeMap<SimulationId, Vec<String>> = BTreeMap::new();
 
     let mut tracks: BTreeMap<SimulationId, (String, Vec<Sample>)> = BTreeMap::new();
@@ -113,6 +123,17 @@ fn replay_forensics() {
         ferrets_bevy_plugin::run_tick(app.world_mut());
         let world = app.world_mut();
         let tick = world.resource::<GameSession>().tick();
+        if let Some(refreshes) = &mut refreshes {
+            let map = world.resource::<Map>();
+            if map.hierarchy().is_dirty() {
+                let mut hierarchy = map.hierarchy().clone();
+                let started = Instant::now();
+                hierarchy.refresh(map.nav_grid());
+                let took = started.elapsed();
+                println!("t{tick} refresh {took:?}");
+                refreshes.push((tick, took));
+            }
+        }
         if let Some(wanted) = &conceal
             && (focus_from..=focus_to).contains(&tick)
         {
@@ -339,6 +360,19 @@ fn replay_forensics() {
         playback.is_done(),
         playback.mismatch()
     );
+
+    if let Some(refreshes) = &refreshes {
+        let total: Duration = refreshes.iter().map(|&(_, took)| took).sum();
+        let longest = refreshes.iter().max_by_key(|&&(_, took)| took);
+        let mean = match u32::try_from(refreshes.len()) {
+            Ok(count) if count > 0 => Some(total / count),
+            Ok(_) | Err(_) => None,
+        };
+        println!(
+            "refreshes: {}, total {total:?}, mean {mean:?}, longest {longest:?}",
+            refreshes.len()
+        );
+    }
 
     // TYPE=<substring> prints every 10th sample of matching entities' tracks.
     if let Ok(wanted) = std::env::var("TYPE") {

@@ -8,12 +8,20 @@
 
 mod utils;
 
+use bevy::prelude::App;
+use ferrets_content::{
+    entity_type_def::EntityTypeDef, location::Solidity, pool::Pool, registry::ContentRegistry,
+};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
 use ferrets_physics::body;
 use ferrets_simulation::{
-    command::PlayerCommand, components::location::LocationComponent, map::Map,
-    movement_model::MovementModel, order::AttackTarget,
+    command::PlayerCommand,
+    components::location::LocationComponent,
+    map::Map,
+    movement_model::MovementModel,
+    order::AttackTarget,
+    session::{player_slot::PlayerSlot, player_type::PlayerType},
 };
 
 #[test]
@@ -508,6 +516,30 @@ fn wide_body_claims_whole_footprint() {
 }
 
 #[test]
+fn push_never_sets_footprint_past_map_edge() {
+    // A slim wagon — 2×2, its circle of radius 0.4 well inside its footprint
+    // — rests against the east edge of the 32-cell map, anchored at (30, 5).
+    // A soldier set inside its west half pushes it east, where its circle
+    // would still sit on the map but its rounded footprint would reach past
+    // the edge: that push is refused, and the wagon keeps its anchor.
+    let mut app = slim_wagon_app();
+    let (wagon, _) = utils::create_owned(&mut app, "slim_wagon", 30, 5, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
+    app.world_mut()
+        .entity_mut(soldier)
+        .get_mut::<LocationComponent>()
+        .unwrap()
+        .position = utils::pos(30, 5);
+
+    utils::run_ticks(&mut app, 300);
+
+    assert_eq!(
+        body::anchor(utils::position_of(app.world_mut(), wagon)),
+        CellPos::new(30, 5)
+    );
+}
+
+#[test]
 fn mixed_size_bodies_push_apart() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
@@ -674,4 +706,39 @@ fn attacker_takes_free_cell_beside_body_holding_its_goal() {
         utils::position_of(app.world_mut(), soldier),
         utils::part_way("10", "8.5")
     );
+}
+
+//
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+//
+
+/// The orders roster on a continuous-model map, with a `slim_wagon`: a 2×2
+/// mover whose circle has radius 0.4.
+fn slim_wagon_app() -> App {
+    let mut app = utils::make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    app.world_mut().resource_mut::<ContentRegistry>().register(
+        EntityTypeDef::new("slim_wagon")
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::new(2, 2),
+                Solidity::Solid,
+                utils::GROUND,
+            )
+            .with_movement(
+                FixedU64::from_num(0.5),
+                utils::fixed("0.4"),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            )
+            .with_pool(Pool::health(60))
+            .with_dying(2, []),
+    );
+    utils::register_orders_content(&mut app);
+    utils::start_game(&mut app);
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    app
 }

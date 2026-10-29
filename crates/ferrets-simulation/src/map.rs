@@ -473,6 +473,8 @@ impl Map {
     /// blocking the same cell would silently merge and the first to free it
     /// would free it for both. A caller that has not read the cell checks it
     /// first.
+    ///
+    /// Panics for a cell off the grid or an empty mask.
     pub fn set_static_occupied(
         &mut self,
         layers: impl Into<LayerMask>,
@@ -480,6 +482,11 @@ impl Map {
         occupied: bool,
     ) {
         let layers = layers.into();
+        assert!(
+            layers != LayerMask::EMPTY,
+            "a footprint occupies some layer"
+        );
+        assert!(self.contains(pos), "a footprint stands on the grid");
         // Asserted against the static plane alone: this writes only static
         // bits, and a mover's claim over the cell says nothing about them.
         debug_assert!(
@@ -488,7 +495,7 @@ impl Map {
              freeing needs it blocked"
         );
         self.nav_grid.set_occupied_by(layers, pos, occupied);
-        self.hierarchy.mark_dirty(pos);
+        self.hierarchy.mark_dirty(pos, layers);
     }
 
     /// Rebuilds the claim plane as the continuous model's once-per-tick

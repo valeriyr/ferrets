@@ -12,12 +12,14 @@ use ferrets_simulation::{
     components::{
         last_hit,
         order_queue::OrderQueueComponent,
+        rise::RiseAttendance,
         stance::{Stance, StanceComponent},
     },
     entity_def,
     map::Map,
     order::Order,
     session::GameSession,
+    simulation_id::SimulationId,
 };
 
 //
@@ -293,6 +295,39 @@ fn attack_moving_unit_engages_only_targets_it_can_reach() {
         utils::cell_of(app.world_mut(), sentry),
         CellPos::new(10, 13)
     );
+}
+
+#[test]
+fn wall_freed_at_tick_head_opens_reach_to_that_tick_scan() {
+    // The ox at (13, 10) is walled in on every side, its west side by a
+    // rising rampart of the sentry's owner at (12, 10). The sentry, id 3,
+    // scans on the ticks where tick + 3 is a multiple of eight: 5, 13, ...
+    let mut app = utils::orders_app();
+    let (ox, _) = utils::create_owned(&mut app, "ox", 13, 10, 1);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for x in 12..=14 {
+            for y in 9..=11 {
+                if (x, y) != (13, 10) && (x, y) != (12, 10) {
+                    map.set_static_occupied(utils::GROUND, CellPos::new(x, y), true);
+                }
+            }
+        }
+    }
+    let (_, rampart_id) =
+        utils::create_rising(&mut app, "rampart", 12, 10, 0, RiseAttendance::Halted);
+    let (_, sentry_id) = utils::create_owned(&mut app, "sentry", 10, 10, 0);
+    assert_eq!(sentry_id, SimulationId(3));
+
+    utils::run_ticks(&mut app, 1);
+    utils::push_command(&mut app, PlayerCommand::CancelBuild { site: rampart_id });
+    // The cancel lands on tick 3; the rampart dies over its two-tick dying
+    // phase, freeing its cell at the head of tick 5, whose scan reaches the
+    // ox through it: the sentry's first blow lands on tick 11, 60 - 10.
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(utils::health(&app, ox), utils::fixed("60"));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::health(&app, ox), utils::fixed("50"));
 }
 
 #[test]

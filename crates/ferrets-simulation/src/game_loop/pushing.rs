@@ -56,7 +56,9 @@ pub fn resolve(world: &mut World) {
 
     // Commit through terrain: a push may never overlap a body onto a
     // statically blocked cell — the blocked axis is dropped, sliding along
-    // the other.
+    // the other — nor leave the footprint its position rounds to anywhere
+    // its shape does not fit: past the map's edge, or over standing ground a
+    // circle smaller than its footprint can skirt.
     let pushes = contact::separations(&bodies);
     for ((&(entity, shape), body), push) in claimants.iter().zip(&bodies).zip(pushes) {
         // A mover still rising pushes the others but stands where it was set
@@ -65,18 +67,18 @@ pub fn resolve(world: &mut World) {
             continue;
         }
         let desired = terrain::displaced(body.position, push.x, push.y);
-        let committed = terrain::slide_toward(
-            world.resource::<Map>().nav_grid(),
-            shape,
-            body.position,
-            desired,
-            body.radius,
-        );
+        let grid = world.resource::<Map>().nav_grid();
+        let slid = terrain::slide_toward(grid, shape, body.position, desired, body.radius);
+        let committed = if grid.fits_statically(body::anchor(slid), shape) {
+            slid
+        } else {
+            body.position
+        };
         if committed != body.position {
             debug_assert!(
                 {
                     let hierarchy = world.resource::<Map>().hierarchy();
-                    hierarchy.is_dirty()
+                    hierarchy.is_dirty_for(shape)
                         || hierarchy
                             .region_of(body::anchor(committed), shape)
                             .is_some()

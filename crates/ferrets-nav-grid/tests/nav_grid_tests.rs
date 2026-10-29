@@ -5,6 +5,7 @@ mod utils;
 use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize, projection::Projection};
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
+    layer_mask::LayerMask,
     mover_shape::MoverShape,
     nav_grid::NavGrid,
     relief::Relief,
@@ -93,14 +94,35 @@ fn set_occupied_by_toggles_single_position() {
 }
 
 #[test]
-fn set_occupied_by_ignores_out_of_bounds() {
+#[should_panic(expected = "a footprint stands on the grid")]
+fn occupying_cell_off_grid_panics() {
     let mut grid = utils::grid(3, 3);
 
     grid.set_occupied_by(utils::GROUND, utils::nav(3, 0), true);
-    grid.set_occupied_by(utils::GROUND, utils::nav(0, 3), true);
+}
 
-    assert!(!grid.is_occupied_by(utils::GROUND, utils::nav(2, 0)));
-    assert!(!grid.is_occupied_by(utils::GROUND, utils::nav(0, 2)));
+#[test]
+#[should_panic(expected = "a footprint occupies some layer")]
+fn occupying_no_layer_panics() {
+    let mut grid = utils::grid(3, 3);
+
+    grid.set_occupied_by(LayerMask::EMPTY, utils::nav(1, 1), true);
+}
+
+#[test]
+#[should_panic(expected = "a claim stands on the grid")]
+fn claiming_cell_off_grid_panics() {
+    let mut grid = utils::grid(3, 3);
+
+    grid.set_claimed_by(utils::GROUND, utils::nav(0, 3), true);
+}
+
+#[test]
+#[should_panic(expected = "a claim holds some layer")]
+fn claiming_no_layer_panics() {
+    let mut grid = utils::grid(3, 3);
+
+    grid.set_claimed_by(LayerMask::EMPTY, utils::nav(1, 1), true);
 }
 
 #[test]

@@ -1145,6 +1145,23 @@ fn static_write_of_state_cell_already_holds_panics() {
     map.set_static_occupied(GROUND_LAYER, cell, true);
 }
 
+#[test]
+#[should_panic(expected = "a footprint stands on the grid")]
+fn static_write_off_map_panics_naming_its_contract() {
+    // 8×2: (8, 0) lies past the right edge.
+    let mut map = wall_test_map();
+
+    map.set_static_occupied(GROUND_LAYER, CellPos::new(8, 0), true);
+}
+
+#[test]
+#[should_panic(expected = "a footprint occupies some layer")]
+fn static_write_on_no_layer_panics_naming_its_contract() {
+    let mut map = wall_test_map();
+
+    map.set_static_occupied(LayerMask::EMPTY, CellPos::new(3, 0), false);
+}
+
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
