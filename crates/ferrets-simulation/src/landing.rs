@@ -26,6 +26,7 @@ use crate::{
     map::Map,
     occupancy::{GridMark, OccupancyClass},
     overbuild::{self, Cover},
+    regions::{self, Relation},
     session::{GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot},
     spawn,
     visibility::{CellVisibility, VisibilityGrid},
@@ -52,7 +53,8 @@ pub(crate) enum ComesFrom {
 }
 
 impl ComesFrom {
-    /// Out of `entity`'s footprint, a cell out, on the layer it stands on.
+    /// Out of the cells `entity` stands on, a cell out, on the layer it stands
+    /// on.
     ///
     /// Panics if `entity` is not a simulation entity, or its type declares no
     /// location.
@@ -60,66 +62,78 @@ impl ComesFrom {
         ComesFrom::within(world, entity, 1)
     }
 
-    /// Out of `entity`'s footprint, `reach` cells out, on the layer it stands
-    /// on.
+    /// Out of the cells `entity` stands on ([`entity_def::standing_rect`]),
+    /// `reach` cells out, on the layer it stands on.
     ///
     /// Panics if `entity` is not a simulation entity, or its type declares no
     /// location.
     pub(crate) fn within(world: &World, entity: Entity, reach: u32) -> Self {
         ComesFrom::Footprint {
-            rect: entity_def::footprint_rect(world, entity),
+            rect: entity_def::standing_rect(world, entity),
             layer: layer_of(world, entity),
             reach,
         }
     }
 
-    /// Out of where the seated `entity` sits, a cell out: its job's footprint
-    /// when `berth`, the cell it sits at, lies inside it, else `berth` alone,
-    /// on the job's layer, or on `entity`'s own once the job is gone.
+    /// Out of the footprint `entity` is set down beside, `reach` cells out, as
+    /// [`out_of`] gives it.
     ///
-    /// Panics if `entity` sits in no berth, or a type it or its job wears
-    /// declares no location.
-    pub(crate) fn berth(world: &World, entity: Entity, berth: CellRect) -> Self {
-        let (rect, layer) = match entity_def::berth_job(world, entity) {
-            Some(job) => {
-                let footprint = entity_def::footprint_rect(world, job);
-                let rect = if footprint.contains(berth.origin) {
-                    footprint
-                } else {
-                    berth
-                };
-                (rect, layer_of(world, job))
-            }
-            None => (berth, layer_of(world, entity)),
-        };
-        ComesFrom::Footprint {
-            rect,
-            layer,
-            reach: 1,
-        }
+    /// Panics if `entity` is not a simulation entity, or a type it or what
+    /// `beside` names wears declares no location.
+    pub(crate) fn beside(world: &World, entity: Entity, beside: Beside, reach: u32) -> Self {
+        let (rect, layer) = out_of(world, entity, beside);
+        ComesFrom::Footprint { rect, layer, reach }
     }
 
-    /// Out of the footprint `entity` is set down beside, as
-    /// [`entity_def::beside_rect`] gives it, `reach` cells out, on the layer
-    /// of the container standing there — the first that stands of what
-    /// `beside` names and what that is inside — or `entity`'s own once none
-    /// remains.
+    /// Out of the footprint `entity` is set down beside, as [`out_of`] gives
+    /// it, a step out across an edge it could walk.
     ///
-    /// Panics if `entity` is not a simulation entity, or its type declares no
-    /// location.
-    pub(crate) fn beside(world: &World, entity: Entity, beside: Beside, reach: u32) -> Self {
-        let standing = match beside {
-            Beside::Container(id) => world
-                .resource::<EntityIndex>()
+    /// Panics if `entity` is not a simulation entity, or a type it or what
+    /// `beside` names wears declares no location.
+    pub(crate) fn steps_out_of(world: &World, entity: Entity, beside: Beside) -> Self {
+        ComesFrom::beside(world, entity, beside, 1)
+    }
+}
+
+/// The footprint and layer a body set down beside `beside` comes out of. Out
+/// of a berth, its job's footprint when the cells it sat on lie inside it,
+/// else those cells, on the job's layer, or on `entity`'s own once the job is
+/// gone.
+///
+/// Otherwise the footprint [`entity_def::beside_rect`] gives, on the layer of
+/// the container standing there — the first that stands of what `beside`
+/// names and what that is inside — or `entity`'s own once none remains.
+///
+/// Panics if `entity` is not a simulation entity, or a type it or what
+/// `beside` names wears declares no location.
+pub(crate) fn out_of(world: &World, entity: Entity, beside: Beside) -> (CellRect, LayerId) {
+    let index = world.resource::<EntityIndex>();
+    match beside {
+        Beside::Berth { job, rect } => match index.any(job) {
+            Some(job) => {
+                let footprint = entity_def::standing_rect(world, job);
+                let out_of = if rect.cells().all(|cell| footprint.contains(cell)) {
+                    footprint
+                } else {
+                    rect
+                };
+                (out_of, layer_of(world, job))
+            }
+            None => (rect, layer_of(world, entity)),
+        },
+        Beside::Container(id) => {
+            let standing = index
                 .any(id)
-                .map(|container| standing_container(world, container)),
-            Beside::WentIn | Beside::Footprint(_) => None,
-        };
-        ComesFrom::Footprint {
-            rect: entity_def::beside_rect(world, entity, beside),
-            layer: layer_of(world, standing.unwrap_or(entity)),
-            reach,
+                .map(|container| standing_container(world, container));
+            (
+                entity_def::beside_rect(world, entity, beside),
+                layer_of(world, standing.unwrap_or(entity)),
+            )
         }
+        Beside::WentIn | Beside::Footprint(_) => (
+            entity_def::beside_rect(world, entity, beside),
+            layer_of(world, entity),
+        ),
     }
 }
 
@@ -505,7 +519,7 @@ fn search(
         let at_level = match first {
             Levels::Any => true,
             Levels::HighestFirst(level) => {
-                highest_level(map.nav_grid(), shape.layer, footprint) == Some(level)
+                regions::highest_level(map.nav_grid(), shape.layer, footprint) == Some(level)
             }
         };
         in_bound
@@ -587,112 +601,37 @@ enum Levels {
     HighestFirst(u32),
 }
 
-/// Where a footprint a body comes out of stands against the body's layer.
-#[derive(Debug, Clone, Copy)]
-enum Relation {
-    /// On the body's own layer.
-    Same,
-    /// On a layer above it.
-    Above,
-    /// On a layer not above it.
-    Below,
-}
-
 impl Reachability {
     /// Where a body of `def`, of `shape`, coming `from` there may land.
     fn of(map: &Map, def: &EntityTypeDef, shape: MoverShape, from: ComesFrom) -> Self {
         let grid = map.nav_grid();
-        let hierarchy = map.hierarchy();
-        let projection = map.projection();
-        // The anchors within `reach` of `rect` a body steps into from there:
-        // within a reach of one only across an edge it could step, as any
-        // touch is judged; any, coming down from a layer above.
-        let stepped_into = |rect: CellRect, reach: u32, relation: Relation| {
-            anchors_within(grid, rect, shape.size, reach).filter(move |&anchor| {
-                let footprint = CellRect::new(anchor, shape.size);
-                match relation {
-                    Relation::Above => projection.in_range_for_rects(rect, footprint, reach),
-                    Relation::Same | Relation::Below => {
-                        grid.reaches(projection, rect, shape, footprint, reach)
-                    }
-                }
-            })
-        };
-        // The levels a body steps onto across `rect`'s edge.
-        let levels_beside = |rect: CellRect, relation: Relation| {
-            let mut levels: Vec<u32> = Vec::new();
-            for anchor in stepped_into(rect, 1, relation) {
-                let level = highest_level(grid, shape.layer, CellRect::new(anchor, shape.size))
-                    .expect("an anchor within reach stands on the map");
-                if !levels.contains(&level) {
-                    levels.push(level);
-                }
-            }
-            levels
-        };
-        let regions_of = |anchors: &mut dyn Iterator<Item = CellPos>| {
-            let mut regions: Vec<u32> = Vec::new();
-            for anchor in anchors {
-                if let Some(region) = hierarchy.region_of(anchor, shape)
-                    && !regions.contains(&region)
-                {
-                    regions.push(region);
-                }
-            }
-            regions
-        };
-        match (def.can_move(), from) {
-            (true, ComesFrom::Point(cell)) => {
-                let point = CellRect::new(cell, CellSize::ONE);
-                Reachability::Regions {
-                    shape,
-                    came_from: point,
-                    // A point on ground the body refuses is left the way a
-                    // footprint is.
-                    regions: match hierarchy.region_of(cell, shape) {
-                        Some(region) => vec![region],
-                        None => regions_of(&mut stepped_into(point, 1, Relation::Same)),
-                    },
-                }
-            }
-            (true, ComesFrom::Footprint { rect, layer, reach }) => {
-                let regions = match relation(grid, layer, shape.layer, rect) {
-                    Relation::Above => regions_of(&mut stepped_into(rect, reach, Relation::Above)),
-                    // Beyond a reach of one, distance carries the body over
-                    // what lies between, but only onto the levels it steps
-                    // onto across the edge.
-                    relation @ (Relation::Same | Relation::Below) => {
-                        let levels = levels_beside(rect, relation);
-                        regions_of(&mut stepped_into(rect, reach, relation).filter(|&anchor| {
-                            let level =
-                                highest_level(grid, shape.layer, CellRect::new(anchor, shape.size))
-                                    .expect("an anchor within reach stands on the map");
-                            levels.contains(&level)
-                        }))
-                    }
-                };
-                Reachability::Regions {
-                    shape,
-                    came_from: rect,
-                    regions,
-                }
-            }
-            (false, ComesFrom::Footprint { rect, layer, .. }) => {
-                match relation(grid, layer, shape.layer, rect) {
+        if def.can_move() {
+            return Reachability::Regions {
+                shape,
+                came_from: match from {
+                    ComesFrom::Point(cell) => CellRect::new(cell, CellSize::ONE),
+                    ComesFrom::Footprint { rect, .. } => rect,
+                },
+                regions: regions::walked_into(map, shape, from),
+            };
+        }
+        match from {
+            ComesFrom::Footprint { rect, layer, .. } => {
+                match regions::relation(grid, layer, shape.layer, rect) {
                     relation @ (Relation::Same | Relation::Below) => Reachability::Heights {
                         shape,
                         came_from: rect,
-                        levels: levels_beside(rect, relation),
+                        levels: regions::levels_beside(map, shape, rect, relation),
                     },
                     Relation::Above => Reachability::Unchecked,
                 }
             }
-            (false, ComesFrom::Point(cell)) => {
+            ComesFrom::Point(cell) => {
                 let point = CellRect::new(cell, CellSize::ONE);
                 Reachability::Heights {
                     shape,
                     came_from: point,
-                    levels: levels_beside(point, Relation::Same),
+                    levels: regions::levels_beside(map, shape, point, Relation::Same),
                 }
             }
         }
@@ -710,7 +649,7 @@ impl Reachability {
                 let footprint = CellRect::new(cell, shape.size);
                 // The ground it comes from is its own.
                 footprint.intersects(*came_from)
-                    || highest_level(map.nav_grid(), shape.layer, footprint)
+                    || regions::highest_level(map.nav_grid(), shape.layer, footprint)
                         .is_some_and(|level| levels.contains(&level))
             }
             Reachability::Regions {
@@ -721,10 +660,7 @@ impl Reachability {
                 // The ground it comes from is its own, whatever region its
                 // cells were read in.
                 CellRect::new(cell, shape.size).intersects(*came_from)
-                    || map
-                        .hierarchy()
-                        .region_of(cell, *shape)
-                        .is_some_and(|region| regions.contains(&region))
+                    || regions::holds(map, *shape, regions, cell)
             }
         }
     }
@@ -738,79 +674,15 @@ fn first_levels(grid: &NavGrid, layer: LayerId, from: ComesFrom) -> Levels {
             rect,
             layer: source,
             ..
-        } => match relation(grid, source, layer, rect) {
+        } => match regions::relation(grid, source, layer, rect) {
             Relation::Above => Levels::HighestFirst(
-                highest_level(grid, layer, rect)
+                regions::highest_level(grid, layer, rect)
                     .expect("a footprint a body comes out of stands on the map"),
             ),
             Relation::Same | Relation::Below => Levels::Any,
         },
         ComesFrom::Point(_) => Levels::Any,
     }
-}
-
-/// Where a footprint on `source` stands against `layer` over `rect`: above
-/// when the source's highest level there lies over the layer's.
-///
-/// Panics if `rect` runs off the map.
-fn relation(grid: &NavGrid, source: LayerId, layer: LayerId, rect: CellRect) -> Relation {
-    if source == layer {
-        return Relation::Same;
-    }
-    let level = |layer| {
-        highest_level(grid, layer, rect).expect("a footprint a body comes out of stands on the map")
-    };
-    if level(source) > level(layer) {
-        Relation::Above
-    } else {
-        Relation::Below
-    }
-}
-
-/// Every anchor of a `size` footprint within `reach` cells of `rect` by its
-/// bounding square, the footprint on the map: none for one wider than it.
-fn anchors_within(
-    grid: &NavGrid,
-    rect: CellRect,
-    size: CellSize,
-    reach: u32,
-) -> impl Iterator<Item = CellPos> {
-    let min_x = rect
-        .origin
-        .x
-        .saturating_sub((size.width - 1).saturating_add(reach));
-    let min_y = rect
-        .origin
-        .y
-        .saturating_sub((size.height - 1).saturating_add(reach));
-    // A footprint wider than the map has no anchor on it.
-    let window = match (
-        grid.width().checked_sub(size.width),
-        grid.height().checked_sub(size.height),
-    ) {
-        (Some(last_x), Some(last_y)) => Some((
-            min_y
-                ..=(rect.origin.y + rect.size.height - 1)
-                    .saturating_add(reach)
-                    .min(last_y),
-            min_x
-                ..=(rect.origin.x + rect.size.width - 1)
-                    .saturating_add(reach)
-                    .min(last_x),
-        )),
-        (None, _) | (_, None) => None,
-    };
-    window.into_iter().flat_map(|(rows, columns)| {
-        rows.flat_map(move |y| columns.clone().map(move |x| CellPos::new(x, y)))
-    })
-}
-
-/// The highest level of `layer` under `rect`, or `None` off the map.
-fn highest_level(grid: &NavGrid, layer: LayerId, rect: CellRect) -> Option<u32> {
-    rect.cells().try_fold(None, |highest: Option<u32>, cell| {
-        let level = grid.relief(layer, cell)?.level;
-        Some(Some(highest.map_or(level, |highest| highest.max(level))))
-    })?
 }
 
 /// The layer `entity`'s type stands on.

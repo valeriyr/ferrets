@@ -11,8 +11,11 @@ use ferrets_math::FixedU64;
 
 use crate::{
     components::{
-        build::BuildComponent, entity_stats::StatsComponent, morph::MorphComponent,
-        rise::RisingComponent, train::TrainQueueComponent,
+        build::{BuildComponent, BuildStage},
+        entity_stats::StatsComponent,
+        morph::MorphComponent,
+        rise::RisingComponent,
+        train::TrainQueueComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -109,7 +112,10 @@ pub fn allows_change(
 /// starts; the effective cost of the form it stands as otherwise.
 fn holding_cost(world: &World, entity: Entity) -> FixedU64 {
     let entity_ref = world.entity(entity);
-    if let Some(morph) = entity_ref.get::<MorphComponent>() {
+    if let Some(morph) = entity_ref
+        .get::<MorphComponent>()
+        .filter(|morph| morph.is_under_way())
+    {
         return world
             .resource::<ContentRegistry>()
             .entity(&morph.into)
@@ -144,7 +150,10 @@ fn totals(world: &World, player: PlayerId) -> (FixedU64, FixedU64) {
         // up already: it comes back only if the work ends early.
         if entity_ref
             .get::<BuildComponent>()
-            .is_some_and(|build| build.building.is_some())
+            .is_some_and(|build| match build.stage {
+                BuildStage::Raising(_) => true,
+                BuildStage::Founding(_) | BuildStage::Joining => false,
+            })
             && let Some(BuilderAttendance::Consumed) = entity_def::builder_attendance(world, entity)
         {
             continue;

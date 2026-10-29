@@ -66,6 +66,7 @@ pub fn run() {
         .init_resource::<view::WorldView>()
         .init_resource::<input::DragStart>()
         .init_resource::<input::InputMode>()
+        .init_resource::<input::Yielders>()
         .init_resource::<input::WarpClick>()
         .init_resource::<input::WarpsSent>()
         .init_resource::<input::AimHover>()
@@ -200,6 +201,7 @@ pub fn run() {
                 input::hover_aim.in_set(render::ReadsSightings),
                 input::judge_aim,
                 input::targeting_input.in_set(render::ReadsSightings),
+                input::note_yielding,
                 input::placement_input.in_set(render::ReadsSightings),
                 input::warp_placement_input.in_set(render::ReadsSightings),
                 input::summon_ghost.in_set(render::ReadsSightings),

@@ -33,8 +33,9 @@ use super::{
 };
 use crate::{
     components::{
-        build::BuildComponent,
+        build::{BuildComponent, BuildStage},
         location::LocationComponent,
+        morph::{MorphComponent, MorphStage},
         order_queue::{CancelPolicy, IdlenessComponent, OrderQueueComponent, OrderState},
     },
     entity_def::{self, Operation, Outage},
@@ -313,9 +314,17 @@ fn conduct(
         Operation::Disabled(_) => match order {
             Order::Train | Order::Research { .. } => Conduct::Holds,
             Order::Die => Conduct::Completes,
-            // A change under way lands; one still queued has nothing to finish.
+            // A change under way lands; one still queued, or still waiting on
+            // its ground, has begun nothing to finish.
             Order::Morph { .. } => match state {
-                OrderState::InProcessing | OrderState::Suspended => Conduct::Completes,
+                OrderState::InProcessing | OrderState::Suspended => match world
+                    .entity(entity)
+                    .get::<MorphComponent>()
+                    .map(|morph| &morph.stage)
+                {
+                    Some(MorphStage::UnderWay(_)) => Conduct::Completes,
+                    Some(MorphStage::Clearing(_)) | None => Conduct::Cancels,
+                },
                 OrderState::New | OrderState::Finished => Conduct::Cancels,
             },
             // A Build with its site raised finishes the site; one still queued
@@ -324,10 +333,10 @@ fn conduct(
                 OrderState::InProcessing | OrderState::Suspended => match world
                     .entity(entity)
                     .get::<BuildComponent>()
-                    .and_then(|build| build.building)
+                    .map(|build| build.stage)
                 {
-                    Some(_) => Conduct::Completes,
-                    None => Conduct::Cancels,
+                    Some(BuildStage::Raising(_)) => Conduct::Completes,
+                    Some(BuildStage::Founding(_) | BuildStage::Joining) | None => Conduct::Cancels,
                 },
                 OrderState::New | OrderState::Finished => Conduct::Cancels,
             },
@@ -543,45 +552,17 @@ pub fn prepare_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut
 /// How something outside the entity's own orders ends them; an order ending
 /// the rest of its own entity's queue returns [`FollowUp::Cancels`] instead.
 pub fn drop_all(world: &mut World, entity: Entity, policy: CancelPolicy) {
-    let mut queue = world
-        .entity_mut(entity)
-        .take::<OrderQueueComponent>()
-        .expect("simulation entities carry an order queue");
-    match policy {
-        CancelPolicy::Force => queue.cancel_all(CancelPolicy::Force),
-        CancelPolicy::Soft => {
-            for entry in &mut queue.0 {
-                let entry_policy = if survives_soft_cancel(&entry.order) {
-                    CancelPolicy::Soft
-                } else {
-                    CancelPolicy::Force
-                };
-                entry.cancel = Some(
-                    entry
-                        .cancel
-                        .map_or(entry_policy, |marked| marked.stronger(entry_policy)),
-                );
-            }
-        }
-    }
-    flush_canceled(entity, &mut queue, world);
-    match policy {
-        CancelPolicy::Force => assert!(
-            queue
-                .0
-                .iter()
-                .all(|entry| matches!(entry.order, Order::Die)),
-            "a force cancel finishes every order but a death"
-        ),
-        CancelPolicy::Soft => assert!(
-            queue
-                .0
-                .iter()
-                .all(|entry| survives_soft_cancel(&entry.order)),
-            "a soft drop finishes every order of a kind that does not stand"
-        ),
-    }
-    world.entity_mut(entity).insert(queue);
+    drop_orders(world, entity, policy, Kept::Nothing);
+}
+
+/// Cancels every order `entity` holds but the one it runs now, as
+/// [`drop_all`] does the whole queue; the current order runs on, a cancel it
+/// was marked for dropped with the rest.
+///
+/// Panics for an entity whose current order is a sub-order of another: the
+/// one it runs for is the order behind it.
+pub fn drop_all_but_current(world: &mut World, entity: Entity, policy: CancelPolicy) {
+    drop_orders(world, entity, policy, Kept::Current);
 }
 
 /// What a flush of the canceled entries did.
@@ -857,4 +838,70 @@ pub(crate) fn prepare_front(
         }),
         "after prepare, the front is InProcessing or held, or the queue is empty"
     );
+}
+
+/// Which of an entity's orders a drop leaves alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kept {
+    /// None: the whole queue is dropped.
+    Nothing,
+    /// The front order, the one the entity runs now.
+    Current,
+}
+
+/// Cancels with `policy` every order `entity` holds but the ones `kept`
+/// names and applies the cancels at once, as [`drop_all`] says.
+fn drop_orders(world: &mut World, entity: Entity, policy: CancelPolicy, kept: Kept) {
+    let mut queue = world
+        .entity_mut(entity)
+        .take::<OrderQueueComponent>()
+        .expect("simulation entities carry an order queue");
+    let spared = match kept {
+        Kept::Nothing => 0,
+        Kept::Current => {
+            match queue.0.get(1).map(|behind| behind.state) {
+                Some(OrderState::Suspended) => {
+                    panic!("only an entity running an order of its own keeps its current one")
+                }
+                Some(OrderState::New | OrderState::InProcessing | OrderState::Finished) | None => {}
+            }
+            if let Some(front) = queue.front_mut() {
+                front.cancel = None;
+            }
+            1
+        }
+    };
+    for entry in queue.0.iter_mut().skip(spared) {
+        let entry_policy = match policy {
+            CancelPolicy::Force => CancelPolicy::Force,
+            CancelPolicy::Soft => {
+                if survives_soft_cancel(&entry.order) {
+                    CancelPolicy::Soft
+                } else {
+                    CancelPolicy::Force
+                }
+            }
+        };
+        entry.mark(entry_policy);
+    }
+    flush_canceled(entity, &mut queue, world);
+    match policy {
+        CancelPolicy::Force => assert!(
+            queue
+                .0
+                .iter()
+                .skip(spared)
+                .all(|entry| matches!(entry.order, Order::Die)),
+            "a force cancel finishes every order but a death"
+        ),
+        CancelPolicy::Soft => assert!(
+            queue
+                .0
+                .iter()
+                .skip(spared)
+                .all(|entry| survives_soft_cancel(&entry.order)),
+            "a soft drop finishes every order of a kind that does not stand"
+        ),
+    }
+    world.entity_mut(entity).insert(queue);
 }

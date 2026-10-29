@@ -17,7 +17,7 @@ use ferrets_simulation::{
     },
     map::Map,
     movement_model::MovementModel,
-    order::{AttackTarget, Order},
+    order::{AttackTarget, BuildTask, Order},
     selection::Selection,
     session::GameSession,
     visibility::{Sighting, VisibilityGrid},
@@ -516,16 +516,19 @@ pub fn draw_orders(
                 Order::Guard { target } => (entity_center(*target), GUARD),
                 Order::Follow { target } => (entity_center(*target), GUARD),
                 Order::Harvest { target } => (entity_center(*target), HARVEST),
-                Order::Build {
-                    type_name,
-                    position,
-                } => {
-                    let size = registry
-                        .entity(type_name)
-                        .and_then(|def| def.location)
-                        .map_or(CellSize::ONE, |location| location.size());
-                    (Some(footprint_center(*position, size)), BUILD)
-                }
+                Order::Build { task } => match task {
+                    BuildTask::Found {
+                        type_name,
+                        position,
+                    } => {
+                        let size = registry
+                            .entity(type_name)
+                            .and_then(|def| def.location)
+                            .map_or(CellSize::ONE, |location| location.size());
+                        (Some(footprint_center(*position, size)), BUILD)
+                    }
+                    BuildTask::Join { site } => (entity_center(*site), BUILD),
+                },
                 Order::Repair { target } => (entity_center(*target), REPAIR),
                 Order::Patrol { target } => {
                     // Both patrol endpoints; before the order starts, the

@@ -27,6 +27,7 @@ use ferrets_simulation::{
         order_queue::OrderQueueComponent,
         rally::{RallyPointComponent, RallyTarget},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        stance::Stance,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -35,7 +36,7 @@ use ferrets_simulation::{
     impacts::{FiredFrom, Following, PendingImpact, PendingImpacts},
     map::Map,
     movement_model::MovementModel,
-    order::Order,
+    order::{BuildTask, Order},
     session::GameSession,
     simulation_id::SimulationId,
     spawn::{self, Boarding},
@@ -359,8 +360,7 @@ fn breeder_seating_broodling_is_refused_building_from_inside() {
 
     // Going inside would take the delver off the map from under its mite.
     let order = Order::Build {
-        type_name: "ready_hatch".into(),
-        position: utils::pos(10, 10),
+        task: BuildTask::found("ready_hatch", utils::pos(10, 10)),
     };
     assert_eq!(
         orders::can_start(app.world(), delver, &order),
@@ -1223,14 +1223,25 @@ fn canceled_change_whose_form_cannot_go_back_refunds_and_settles_brood() {
         .collect();
     assert_eq!(grub_ids.len(), 2);
 
-    // The rug shell lies underfoot, so a worker stands on its (11, 11);
-    // called off, the hatch cannot go back over the worker and is destroyed:
-    // the 10 gold back, its grubs perishing on the hatch's terms.
+    // The rug shell lies underfoot, so a worker standing its ground, which
+    // makes no way for it, stands on its (11, 11); called off, the hatch
+    // cannot go back over the worker and is destroyed: the 10 gold back, its
+    // grubs perishing on the hatch's terms.
     order_morph(&mut app, hatch, "great_hatch");
     utils::run_ticks(&mut app, 3);
     assert_eq!(type_name_of(&app, hatch), "rug_shell");
     assert_eq!(utils::gold(app.world()), 0);
-    utils::place(&mut app, "worker", 11, 11, 0);
+    let worker = utils::place(&mut app, "worker", 11, 11, 0);
+    let worker_id = entity_def::simulation_id(app.world(), worker);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::StandGround,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(type_name_of(&app, hatch), "rug_shell");
     utils::soft_cancel_orders(app.world_mut(), hatch);
     utils::run_ticks(&mut app, 1);
 
@@ -1680,6 +1691,35 @@ fn linger_breeder_leaves_detached_broodlings_standing() {
         assert!(entity_def::stands_on_grid(app.world(), piglet));
     }
     assert!(brood::of(app.world(), pen).is_none());
+}
+
+#[test]
+fn broodlings_detached_from_berths_inside_breeder_stand_beside_it() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let pen = utils::place(&mut app, "inner_pen", 10, 10, 0);
+    utils::run_ticks(&mut app, 20);
+    assert_eq!(alive_of_type(&mut app, "piglet").len(), 2);
+
+    // Their berths lie on the pen's middle cell, read on the pen's old form —
+    // the bare pen has no berths to read them from — so each comes out of the
+    // pen as it stands, onto a free cell beside it.
+    order_morph(&mut app, pen, "bare_pen");
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(type_name_of(&app, pen), "bare_pen");
+    // Out of the pen's (10..12, 10..12) they stand beside its middle: (11, 9)
+    // above it and (9, 11) left of it.
+    let piglets = alive_of_type(&mut app, "piglet");
+    assert_eq!(piglets.len(), 2);
+    let mut cells: Vec<CellPos> = piglets
+        .iter()
+        .map(|&piglet| utils::cell_of(app.world(), piglet))
+        .collect();
+    cells.sort_unstable();
+    assert_eq!(cells, vec![CellPos::new(9, 11), CellPos::new(11, 9)]);
+    for piglet in piglets {
+        assert!(entity_def::stands_on_grid(app.world(), piglet));
+        utils::assert_adjacent_to_footprint(app.world_mut(), piglet, pen);
+    }
 }
 
 #[test]

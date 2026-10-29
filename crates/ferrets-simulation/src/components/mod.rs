@@ -30,6 +30,7 @@ pub mod morph;
 pub mod movement;
 pub mod order_queue;
 pub mod owner;
+pub mod patience;
 pub mod patrol;
 pub mod pool_shifts;
 pub mod pools;

@@ -5,7 +5,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::cell_size::CellSize;
 
 use super::{
-    acquire,
+    acquire::{self, Pursuit},
     chase::{self, Destination},
     orders::{self, Processing, Refusal},
 };
@@ -149,7 +149,7 @@ pub(super) fn engagement(
     targets: LayerMask,
     notice: u32,
 ) -> Option<Order> {
-    let target = acquire::find_target(world, entity, targets, notice)?;
+    let target = acquire::find_target(world, entity, targets, notice, Pursuit::Closes)?;
     Some(leashed_attack(world, entity, target, notice))
 }
 
@@ -162,7 +162,7 @@ pub(super) fn engagement_on(
     notice: u32,
     target: SimulationId,
 ) -> Option<Order> {
-    if !acquire::qualifies(world, entity, targets, target, notice) {
+    if !acquire::qualifies(world, entity, targets, target, notice, Pursuit::Closes) {
         return None;
     }
     Some(leashed_attack(world, entity, target, notice))

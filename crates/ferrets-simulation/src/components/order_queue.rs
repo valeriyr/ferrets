@@ -68,6 +68,15 @@ impl OrderEntry {
             cancel: None,
         }
     }
+
+    /// Marks this entry for cancellation with `policy`, or with the stronger
+    /// of `policy` and the mark it already carries.
+    pub fn mark(&mut self, policy: CancelPolicy) {
+        self.cancel = Some(match self.cancel {
+            Some(marked) => marked.stronger(policy),
+            None => policy,
+        });
+    }
 }
 
 /// Since when an entity has been idle — taking orders and running none — as
@@ -133,10 +142,7 @@ impl OrderQueueComponent {
     /// the mark it already carries.
     fn mark_all(&mut self, policy: CancelPolicy) {
         for entry in &mut self.0 {
-            entry.cancel = Some(match entry.cancel {
-                Some(marked) => marked.stronger(policy),
-                None => policy,
-            });
+            entry.mark(policy);
         }
     }
 }

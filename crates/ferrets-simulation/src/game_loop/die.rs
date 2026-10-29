@@ -5,12 +5,13 @@ use bevy_ecs::{
     entity::Entity,
     world::{Mut, World},
 };
-use ferrets_physics::body;
 
 use ferrets_content::dying::DyingDef;
 
 use super::orders::{Processing, Refusal};
 use crate::{
+    berths,
+    beside::Beside,
     components::{
         dying::{DiedComponent, DyingComponent, Passing},
         location::LocationComponent,
@@ -18,6 +19,7 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
+    landing,
     map::Map,
     occupancy::OccupancyClass,
     order::Order,
@@ -96,11 +98,20 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     world.resource_mut::<EntityIndex>().remove_remains(id);
 
     free_footprint(world, entity);
-    // The berth the entity held through its dying phase — a seated worker
-    // dies in its seat — goes back to the job.
+    // What the entity leaves comes out by the berth it held through its
+    // dying phase — a seated worker dies in its seat — read before the berth
+    // goes back to the job, or out of the cells it stood on; a death off the
+    // map hands nothing on.
+    let beside = if entity_def::attached(world, entity) {
+        Some(berths::held_berth(world, entity))
+    } else if entity_def::hidden(world, entity) {
+        None
+    } else {
+        Some(Beside::Footprint(entity_def::standing_rect(world, entity)))
+    };
     spawn::unseat(world, entity);
     overbuild::uncover_source(world, entity);
-    leave_bequests(world, entity, passing);
+    leave_bequests(world, entity, passing, beside);
     Processing::state(OrderState::Finished)
 }
 
@@ -131,8 +142,9 @@ fn free_footprint(world: &mut World, entity: Entity) {
 /// and nothing else: what bursts out of a dying thing is that thing's own doing.
 ///
 /// Called after the footprint is freed, so the first cells the bequests are
-/// offered are the ones the deceased was standing on.
-fn leave_bequests(world: &mut World, entity: Entity, passing: Passing) {
+/// offered are the ones the deceased comes out of `beside` — the cells it
+/// stood on, or its berth. A death off the map (`None`) hands nothing on.
+fn leave_bequests(world: &mut World, entity: Entity, passing: Passing, beside: Option<Beside>) {
     let (kind, slain) = match passing {
         Passing::Death { kind, slain } => (kind, slain),
         Passing::Removal => return,
@@ -151,19 +163,10 @@ fn leave_bequests(world: &mut World, entity: Entity, passing: Passing) {
     }
     // A death off the map hands nothing on: what goes down inside a carrier,
     // a site or a mine leaves no body and nothing else on the ground.
-    if entity_def::hidden(world, entity) {
+    let Some(beside) = beside else {
         return;
-    }
-
-    let position = entity_def::position(world, entity);
-    // What is left rests on the lattice: a continuous mover dies wherever
-    // pushing left it, and what it leaves takes the cell its body stood on. On
-    // the cell model the two coincide.
-    let around = body::anchor(position);
-    let size = entity_def::of(world, entity)
-        .location
-        .expect("a standing entity has a location")
-        .size();
+    };
+    let (out_of, layer) = landing::out_of(world, entity, beside);
     let fallen = Fallen {
         id: entity_def::simulation_id(world, entity),
         entity_type: entity_def::type_id(world, entity),
@@ -171,6 +174,6 @@ fn leave_bequests(world: &mut World, entity: Entity, passing: Passing) {
     };
 
     for (type_name, count) in left {
-        spawn::spawn_bequest(world, &type_name, count, around, size, fallen, slain);
+        spawn::spawn_bequest(world, &type_name, count, out_of, layer, fallen, slain);
     }
 }

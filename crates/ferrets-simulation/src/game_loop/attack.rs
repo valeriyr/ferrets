@@ -9,7 +9,6 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry, targeting};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
@@ -27,8 +26,9 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
-    impacts::FiredFrom,
+    impacts::{AimedAt, FiredFrom},
     order::{AttackTarget, Order},
+    reach,
     visibility::{self, Senses},
 };
 
@@ -143,7 +143,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     // A named entity must still be reachable and is chased, measured and faced by
     // its whole footprint wherever it goes; a cell is simply where it was aimed, has
     // no footprint of its own, and needs no such check.
-    let (target, target_position, target_size) = match target_aim {
+    let aimed = match target_aim {
         AttackTarget::Entity(id) => {
             let Some(target) = world.resource::<EntityIndex>().interactable(world, id) else {
                 return Processing::state(OrderState::Finished);
@@ -178,14 +178,15 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             {
                 return Processing::state(OrderState::Finished);
             }
-            let (at, size) = entity_def::footprint_of(world, target_def, target);
-            (Some(target), at, size)
+            AimedAt::Body(target)
         }
-        AttackTarget::Position(cell) => (None, cell, CellSize::ONE),
+        AttackTarget::Position(cell) => AimedAt::Point(cell),
     };
-    let reached = reached(target, target_position, target_size);
+    let target = aimed.body();
+    let reached = aimed.reached(world);
+    let (target_position, target_size) = aimed.footprint(world);
 
-    let (position, size) = entity_def::footprint(world, entity);
+    let size = entity_def::location_size(world, entity);
     // How far the body must be walked is the longest reach it has among the
     // weapons that can serve this target, wherever each is fitted: an order is
     // given to the entity, and a keep's guns are as much a reason to stop walking
@@ -200,7 +201,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // must not read as leashed to the leash and out of range to the chase,
         // or the one extra walk breaks a stand-ground stance's never-move
         // promise.
-        if !entity_def::reaches(
+        if !reach::reaches(
             world,
             entity,
             body::standing_rect(leash.anchor, size),
@@ -216,11 +217,10 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     // own initiative, so it tracks what it might yet shoot and lets go of the rest
     // — and never consults the chase, whose patience is about walks that get
     // nowhere and would end a fight a turret is right to be holding.
-    if !entity_def::of(world, entity).can_move()
-        && !within(world, entity, position, size, reached, range)
+    if !entity_def::of(world, entity).can_move() && !reach::in_reach(world, entity, reached, range)
     {
         let notice = entity_def::notice_range_serving(world, entity, target);
-        if !within(world, entity, position, size, reached, notice) {
+        if !reach::in_reach(world, entity, reached, notice) {
             return Processing::state(OrderState::Finished);
         }
         // The swing resets while out of range, as it does for a walker, and the
@@ -295,7 +295,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             registry.weapon_aims_at_cells(weapon)
         }
     };
-    if !body_serves || !within(world, entity, position, size, reached, stats.range) {
+    if !body_serves || !reach::in_reach(world, entity, reached, stats.range) {
         // Out of its own reach the swing waits at its start, as every weapon's
         // does, and the body still comes round on what it is waiting for.
         attack_component.phase = 0;
@@ -328,45 +328,13 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         entity,
         FiredFrom::Body,
         entity_def::footprint_center(world, entity),
-        target,
-        target_position,
+        aimed,
         &stats,
         &mut attack_component.phase,
     );
 
     world.entity_mut(entity).insert(attack_component);
     Processing::state(OrderState::InProcessing)
-}
-
-/// Whether `range` reaches from every cell the attacker `entity` at
-/// `position` of `size` stands on to the cells `reached`, judged exactly as the
-/// chase judges arrival, so a wide attacker reaches from its nearest edge and
-/// a touch only across an edge it could step.
-pub(super) fn within(
-    world: &World,
-    entity: Entity,
-    position: FixedUVec2,
-    size: CellSize,
-    reached: CellRect,
-    range: u32,
-) -> bool {
-    entity_def::reaches(
-        world,
-        entity,
-        body::standing_rect(position, size),
-        reached,
-        range,
-    )
-}
-
-/// The cells an attack on the footprint at `position` of `size` is measured
-/// to: every cell the body `target` stands on, or the cells a bare point's
-/// footprint lies in from its floored corner when there is no target.
-pub(super) fn reached(target: Option<Entity>, position: FixedUVec2, size: CellSize) -> CellRect {
-    match target {
-        Some(_) => body::standing_rect(position, size),
-        None => CellRect::new(CellPos::from(position), size),
-    }
 }
 
 /// Whether a weapon pointing `off_aim` angle units away from its target may fire
@@ -433,29 +401,19 @@ pub(super) fn weapon_stats(
 /// Advances one swing by a tick, on the numbers `stats` gives: the hit leaves
 /// `origin` when the phase reaches the damage point, and the cycle restarts at its
 /// end.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn swing(
     world: &mut World,
     attacker: Entity,
     fired_from: FiredFrom,
     origin: FixedUVec2,
-    target: Option<Entity>,
-    aimed_at: FixedUVec2,
+    aimed: AimedAt,
     stats: &WeaponStats,
     phase: &mut u32,
 ) {
     *phase += 1;
 
     if *phase == stats.damage_point {
-        impacts::deliver(
-            world,
-            attacker,
-            fired_from,
-            origin,
-            target,
-            aimed_at,
-            stats.damage,
-        );
+        impacts::deliver(world, attacker, fired_from, origin, aimed, stats.damage);
     }
 
     // At least, not exactly at: a cycle stat can shrink under a phase already

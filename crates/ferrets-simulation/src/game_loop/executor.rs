@@ -26,7 +26,7 @@ use crate::{
     entity_index::EntityIndex,
     events::SpendCause,
     input::InputFrames,
-    order::{AttackTarget, Order},
+    order::{AttackTarget, BuildTask, Order},
     player_research::PlayerResearch,
     requirements,
     resources::{self, PlayerResources},
@@ -274,8 +274,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 world,
                 vec![entity],
                 Order::Build {
-                    type_name: type_name.clone(),
-                    position: *position,
+                    task: BuildTask::found(type_name, *position),
                 },
                 CancelPolicy::from_bool(*flush),
             );
@@ -448,11 +447,6 @@ pub(super) fn resolve_send_to_entity(
 /// The Build order that puts `entity` to work on the unfinished site `target`, or
 /// `None` if `target` is not an own site: an entity a builder founded, still
 /// rising.
-///
-/// The order names the site's own type and cell, which is what
-/// [`game_loop::build`](super::build) matches an existing site on — so the builder
-/// takes up the work already under way rather than trying to place a second one.
-/// Only the owner's own sites qualify.
 fn assist_construction(world: &World, entity: Entity, target: Entity) -> Option<Order> {
     match entity_def::rise_origin(world, target) {
         Some(RiseOrigin::Founded { .. }) => {}
@@ -461,15 +455,8 @@ fn assist_construction(world: &World, entity: Entity, target: Entity) -> Option<
     if !entity_def::same_owner(world, entity, target) {
         return None;
     }
-    let type_name = world
-        .entity(target)
-        .get::<EntityInfoComponent>()
-        .expect("simulation entity must have EntityInfoComponent")
-        .type_name();
-
     Some(Order::Build {
-        type_name: type_name.to_string(),
-        position: entity_def::position(world, target),
+        task: BuildTask::join(entity_def::simulation_id(world, target)),
     })
 }
 

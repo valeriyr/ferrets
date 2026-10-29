@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::map;
 use ferrets_content::{
     affiliation::Affiliation,
+    attack::Slain,
     berths::BerthGroup,
     brood::OrphanFate,
     detection::Detection,
@@ -48,19 +49,21 @@ use ferrets_nav_grid::{
 };
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{
-        location::LocationComponent, morph::MorphComponent, order_queue::OrderQueueComponent,
-        stance::Stance,
-    },
+    components::{location::LocationComponent, order_queue::OrderQueueComponent, stance::Stance},
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
-    game_loop::orders::{self, Refusal},
+    game_loop::{
+        damage,
+        orders::{self, Refusal},
+    },
+    make_way,
     map::Map,
     map_data::MapData,
     movement_model::MovementModel,
     order::Order,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
+    simulation_id::SimulationId,
     spawn::{self, Boarding, FieldReach},
 };
 
@@ -790,11 +793,32 @@ fn change_cut_short_puts_form_back_where_ground_takes_it() {
 
 #[test]
 fn change_cut_short_where_ground_no_longer_takes_its_form_destroys_it() {
-    // The scaffold lies underfoot, so a walker is placed on (3, 3) while the
-    // kiln changes; cut short, the kiln, a solid static body, cannot be put
-    // back over the walker, and is destroyed.
+    // The scaffold lies underfoot, so an enemy walker is placed on (3, 3)
+    // while the kiln changes; cut short, the kiln, a solid static body, cannot
+    // be put back over the walker, which does not make way for it, and is
+    // destroyed.
     let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
     let (kiln, kiln_id) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
+    utils::order_morph(&mut app, kiln, "furnace");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
+    let (walker, _) = utils::create_owned(&mut app, "walker", 3, 3, 1);
+
+    utils::soft_cancel_orders(app.world_mut(), kiln);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(!utils::alive(&app, kiln_id));
+    assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(3, 3));
+}
+
+#[test]
+fn change_cut_short_sets_idle_ally_on_its_scaffold_down_beside_it() {
+    // The same meeting with a walker of the kiln's own side, idle on the
+    // scaffold at (3, 3): cut short, the change does not wait on it — it is
+    // set down at once on the nearest cell clear of the kiln, (3, 2) above
+    // it, and the kiln goes back where it stood.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    let (kiln, _) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
     utils::order_morph(&mut app, kiln, "furnace");
     utils::run_ticks(&mut app, 3);
     assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
@@ -803,8 +827,79 @@ fn change_cut_short_where_ground_no_longer_takes_its_form_destroys_it() {
     utils::soft_cancel_orders(app.world_mut(), kiln);
     utils::run_ticks(&mut app, 1);
 
-    assert!(!utils::alive(&app, kiln_id));
-    assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(3, 3));
+    assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
+    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
+    assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(3, 2));
+}
+
+#[test]
+fn change_cut_short_sets_ally_walking_across_its_scaffold_down_beside_it() {
+    // An own walker sent from (3, 1) to (3, 7) is crossing into the scaffold's
+    // (3, 3), holding it, on the fifth tick as the change is cut short: it is
+    // set down beside the kiln like an idle ally, the kiln goes back where it
+    // stood, and the walk carries on to its goal.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    let (kiln, kiln_id) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
+    utils::order_morph(&mut app, kiln, "furnace");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
+    let (walker, walker_id) = utils::create_owned(&mut app, "walker", 3, 1, 0);
+    utils::select(&mut app, walker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(3, 7),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(
+        utils::position_of(app.world_mut(), walker),
+        utils::part_way("3", "2.5")
+    );
+
+    utils::soft_cancel_orders(app.world_mut(), kiln);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(utils::alive(&app, kiln_id));
+    assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
+    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
+    utils::run_ticks(&mut app, 20);
+    assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(3, 7));
+    assert!(utils::order_queue_is_empty(app.world_mut(), walker));
+}
+
+#[test]
+fn walker_killed_across_scaffold_no_longer_clears_it() {
+    // The walker crossing into the scaffold's (3, 3) on the fifth tick is
+    // killed: still walking until its death flushes the walk, it no longer
+    // clears the ground it stands on.
+    let (mut app, walker, kiln_id) = walker_across_scaffold();
+    assert!(make_way::clears(app.world(), walker, Some(0)));
+
+    damage::apply(
+        app.world_mut(),
+        kiln_id,
+        walker,
+        FixedU64::from_num(1000),
+        Slain::Nothing,
+    );
+
+    assert!(entity_def::walking(app.world(), walker));
+    assert!(!make_way::clears(app.world(), walker, Some(0)));
+}
+
+#[test]
+fn walker_disabled_across_scaffold_no_longer_clears_it() {
+    // The same walker is stunned instead: still walking until the next tick
+    // flushes the walk, it no longer clears the ground it stands on.
+    let (mut app, walker, _) = walker_across_scaffold();
+    assert!(make_way::clears(app.world(), walker, Some(0)));
+
+    utils::disable_for(&mut app, walker, 60);
+
+    assert!(entity_def::walking(app.world(), walker));
+    assert!(!make_way::clears(app.world(), walker, Some(0)));
 }
 
 #[test]
@@ -1072,7 +1167,7 @@ fn underfoot_pod_reserving_static_form_steps_out_onto_its_own_berth() {
     utils::run_ticks(&mut app, 1);
 
     assert!(!entity_def::attached(app.world(), pod));
-    assert!(app.world().get::<MorphComponent>(pod).is_some());
+    assert!(entity_def::changing(app.world(), pod));
     assert_eq!(utils::cell_of(app.world(), pod), CellPos::new(4, 4));
 }
 
@@ -1873,4 +1968,30 @@ fn change_through(via: &str, into: &str, placement: MorphPlacement) -> MorphTran
         Vec::new(),
         [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
     )
+}
+
+/// The hills under the cell model with a kiln on (3, 3) changing into a
+/// furnace, its scaffold standing from the third tick, and an own walker sent
+/// from (3, 1) to (3, 7), crossing into (3, 3) on the fifth tick after: the
+/// app, the walker and the kiln's id.
+fn walker_across_scaffold() -> (App, Entity, SimulationId) {
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    let (kiln, kiln_id) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
+    utils::order_morph(&mut app, kiln, "furnace");
+    utils::run_ticks(&mut app, 3);
+    let (walker, walker_id) = utils::create_owned(&mut app, "walker", 3, 1, 0);
+    utils::select(&mut app, walker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(3, 7),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(
+        utils::position_of(app.world_mut(), walker),
+        utils::part_way("3", "2.5")
+    );
+    (app, walker, kiln_id)
 }

@@ -41,7 +41,7 @@ use ferrets_simulation::{
         annex::{AnnexComponent, Docking},
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
-        build::BuildComponent,
+        build::{BuildComponent, BuildStage},
         cast::{CastComponent, CastStage},
         concealed::ConcealedComponent,
         dying::{DyingComponent, RemainsComponent},
@@ -3080,6 +3080,22 @@ pub(crate) fn viewed_player(
     session.local_player().or(watch.0)
 }
 
+/// The color of the link from a repairer of `owner`, `stalled` ticks unable to
+/// pay, to its patient, as `viewed` sees it: stalled only for a repairer of
+/// the viewed side or its allies.
+pub fn repair_link_color(
+    session: &GameSession,
+    viewed: Option<PlayerId>,
+    owner: Option<PlayerId>,
+    stalled: u32,
+) -> Color {
+    if stalled > 0 && session.owners_allied(viewed, owner) {
+        STALLED_WORK_COLOR
+    } else {
+        REPAIR_WORK_COLOR
+    }
+}
+
 /// Tints each field tile by what covers its cell, every shown field layered
 /// over the ones before it. Coverage changes only with the tick or the
 /// perspective, so the pass runs once per change of those.
@@ -3434,10 +3450,12 @@ const BROOD_WORK_COLOR: Color = Color::srgb(0.75, 0.45, 0.95);
 /// doing what reads at a glance without the debug overlay (run in `Update`).
 ///
 /// Walking toward a job draws nothing: the link appears when the work does. A
-/// repairer that cannot pay for its work shows its link in the stalled color.
+/// repairer of the viewed side or its allies that cannot pay for its work
+/// shows its link in the stalled color.
 pub fn draw_work_links(
     mut gizmos: Gizmos,
-    registry: Res<ContentRegistry>,
+    session: Res<GameSession>,
+    watch: Res<ObserverPerspective>,
     // Anchored on the interpolated transforms rather than the stepped sim
     // positions, so the lines glide with the sprites they connect.
     workers: Query<
@@ -3449,11 +3467,13 @@ pub fn draw_work_links(
             Option<&BuildComponent>,
             Option<&RepairComponent>,
             Option<&Sighted>,
+            Option<&OwnerComponent>,
         ),
         Without<HiddenComponent>,
     >,
     targets: Query<(&EntityInfoComponent, &Transform), Without<HiddenComponent>>,
 ) {
+    let viewed = viewed_player(&session, &watch);
     let entity_center = |id: SimulationId| {
         targets
             .iter()
@@ -3461,7 +3481,7 @@ pub fn draw_work_links(
             .map(|(_, transform)| transform.translation.truncate())
     };
 
-    for (transform, queue, visibility, harvest, build, repair, sighted) in &workers {
+    for (transform, queue, visibility, harvest, build, repair, sighted, owner) in &workers {
         if !made_out(visibility, sighted) {
             continue;
         }
@@ -3469,22 +3489,10 @@ pub fn draw_work_links(
             continue;
         };
         let (end, color) = match &entry.order {
-            Order::Build {
-                type_name,
-                position,
-            } => {
-                if build.is_none_or(|build| build.building.is_none()) {
-                    continue;
-                }
-                let size = registry
-                    .entity(type_name)
-                    .and_then(|def| def.location)
-                    .map_or(CellSize::ONE, |location| location.size());
-                (
-                    Some(world_center(FixedUVec2::from(CellPos::from(*position)), size).truncate()),
-                    BUILD_WORK_COLOR,
-                )
-            }
+            Order::Build { .. } => match build.map(|build| build.stage) {
+                Some(BuildStage::Raising(site)) => (entity_center(site), BUILD_WORK_COLOR),
+                Some(BuildStage::Founding(_) | BuildStage::Joining) | None => continue,
+            },
             Order::Harvest { .. } => {
                 let Some(source) = harvest.and_then(|harvest| harvest.harvesting) else {
                     continue;
@@ -3495,11 +3503,12 @@ pub fn draw_work_links(
                 let Some(repair) = repair else {
                     continue;
                 };
-                let color = if repair.stalled > 0 {
-                    STALLED_WORK_COLOR
-                } else {
-                    REPAIR_WORK_COLOR
-                };
+                let color = repair_link_color(
+                    &session,
+                    viewed,
+                    owner.map(OwnerComponent::player),
+                    repair.patience.waited(),
+                );
                 (entity_center(*target), color)
             }
             Order::Move { .. }
@@ -3957,7 +3966,9 @@ pub fn draw_status_bars(
             y += 4.0;
         }
 
-        if let Some(morph) = morph {
+        if let Some((morph, under_way)) =
+            morph.and_then(|morph| morph.as_under_way().map(|under_way| (morph, under_way)))
+        {
             // The change's length under the transition's own terms, read from
             // the form the change started from — the one worn now may be an
             // interim form that declares none: a constant is what it says, a
@@ -3971,7 +3982,7 @@ pub fn draw_status_bars(
                 .and_then(|transition| stats?.quantity_ticks(transition.time()))
                 .unwrap_or(1)
                 .max(1);
-            let fraction = morph.progress as f32 / time as f32;
+            let fraction = under_way.progress as f32 / time as f32;
             bar(&mut gizmos, fraction, MORPH_WORK_COLOR, y);
             y += 4.0;
         }

@@ -13,7 +13,7 @@ use ferrets_math::FixedU64;
 use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand, components::location::LocationComponent, map::Map,
-    movement_model::MovementModel,
+    movement_model::MovementModel, order::AttackTarget,
 };
 
 #[test]
@@ -633,5 +633,45 @@ fn claims_are_rebuilt_from_bodies() {
             .resource::<Map>()
             .nav_grid()
             .is_claimed_by(utils::GROUND, CellPos::new(2, 2))
+    );
+}
+
+/// A ranged walk whose goal cell a body that is not walking stands on — one too
+/// heavy to shove, pinned between walls — routes at once to another cell that
+/// serves the goal when its stall clock escalates, as the cell model's rung does,
+/// rather than pressing on it for good.
+#[test]
+fn attacker_takes_free_cell_beside_body_holding_its_goal() {
+    let mut app = utils::continuous_orders_app();
+    let (rampart, rampart_id) = utils::create_owned(&mut app, "rampart", 10, 10, 1);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for (x, y) in [(8, 9), (9, 9), (8, 11), (9, 11)] {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, y), true);
+        }
+    }
+    utils::create_owned(&mut app, "ox", 9, 10, 0);
+    let (soldier, soldier_id) = utils::create_owned(&mut app, "soldier", 3, 10, 0);
+    utils::select(&mut app, soldier_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Entity(rampart_id),
+            flush: true,
+        },
+    );
+
+    // The walk presses on the ox at (9,10) once it reaches (8,10), crumbs of
+    // progress holding its stall clock off until the thirty-ninth; fifteen ticks
+    // on, on the fifty-fourth, the escalation routes it round the walls to
+    // (10,9) above the rampart, where its first blow of 10 lands on the
+    // seventy-second.
+    utils::run_ticks(&mut app, 71);
+    assert_eq!(utils::health_as_u32(&app, rampart), 400);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::health_as_u32(&app, rampart), 390);
+    assert_eq!(
+        utils::position_of(app.world_mut(), soldier),
+        utils::part_way("10", "8.5")
     );
 }

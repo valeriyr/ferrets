@@ -24,6 +24,7 @@ use ferrets_simulation::{
         owner::OwnerComponent,
         rally::{RallyPointComponent, RallyTarget},
         rise::RisingComponent,
+        stance::Stance,
         warp::WarpComponent,
     },
     fields::{self, FieldGrid},
@@ -387,6 +388,67 @@ fn builder_gets_out_of_way_when_it_walks_or_leaves_grid() {
     for name in ["command_center", "tunnel", "corpse"] {
         assert!(!gets_out(name), "{name}");
     }
+}
+
+#[test]
+fn ghost_reads_cells_of_units_making_way_as_free() {
+    // While a building is being placed, the local player's own idle grunt and
+    // its grunt walking off are noted as clearing the ground, and the ghost
+    // reads their cells as free; an enemy's grunt and an own grunt standing
+    // its ground are not.
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    app.init_resource::<input::InputMode>()
+        .init_resource::<input::Yielders>();
+    let (_, idle) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(25, 25), Some(0)).unwrap();
+    // The enemy's grunt stands well out of the others' notice, so none of
+    // them takes it on while the commands land.
+    let (_, enemy) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(45, 25), Some(1)).unwrap();
+    let (_, standing) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(29, 25), Some(0)).unwrap();
+    let (_, walking) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(25, 29), Some(0)).unwrap();
+    utils::select(&mut app, standing, SelectMode::Replace);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::StandGround,
+        },
+    );
+    utils::select(&mut app, walking, SelectMode::Replace);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::at_cell(25, 40),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let noted = |app: &mut App| {
+        app.world_mut()
+            .run_system_once(input::note_yielding)
+            .expect("the noting runs");
+        app.world().resource::<input::Yielders>().0.clone()
+    };
+    assert!(
+        noted(&mut app).is_empty(),
+        "nothing is noted outside placing"
+    );
+    *app.world_mut().resource_mut::<input::InputMode>() =
+        input::InputMode::PlacingBuild("farm".to_string());
+    let yielders = input::Yielders(noted(&mut app));
+    assert_eq!(yielders.0, vec![idle, walking]);
+
+    let world = app.world_mut();
+    let registry = world.resource::<ContentRegistry>();
+    let grunt = registry.type_id("grunt").expect("the demo has grunts");
+    let ignores = |id| input::ghost_ignores(registry, None, &yielders, id, grunt);
+    assert!(ignores(idle));
+    assert!(ignores(walking));
+    assert!(!ignores(standing));
+    assert!(!ignores(enemy));
 }
 
 //

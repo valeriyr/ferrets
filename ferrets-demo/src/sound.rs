@@ -65,7 +65,7 @@ const FALLOFF_CELLS: f32 = 10.0;
 const EAR_GAP_CELLS: f32 = 4.0;
 
 /// The cues the demo can play, one per kind of thing worth hearing.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Cue {
     /// A hit landing on something.
     Hit,
@@ -598,10 +598,11 @@ fn cues_for(
             origin: RiseOrigin::Founded { .. } | RiseOrigin::Warped { .. },
             ..
         } => {
-            if let Some(entity) = world.resource::<EntityIndex>().any(*entity)
-                && own_milestone(local, entity_def::owner(world, entity))
+            if let Some(found) = world.resource::<EntityIndex>().any(*entity)
+                && own_milestone(local, entity_def::owner(world, found))
+                && made_out(*entity)
             {
-                out.push((Cue::Completed, Some(entity_def::whereabouts(world, entity))));
+                out.push((Cue::Completed, Some(entity_def::whereabouts(world, found))));
             }
         }
         SimulationEvent::ResourcesGathered { storage, .. } => {
@@ -636,10 +637,16 @@ fn cues_for(
             }
         }
         // Taking an annex is a gain like finishing a building, heard where it
-        // happens.
-        SimulationEvent::EntityCaptured { to, position, .. } => {
-            if own_milestone(local, Some(*to)) {
-                out.push((Cue::Completed, Some(*position)));
+        // happens, once for everything taken there at once.
+        SimulationEvent::EntityCaptured {
+            entity,
+            to,
+            position,
+            ..
+        } => {
+            let heard = (Cue::Completed, Some(*position));
+            if own_milestone(local, Some(*to)) && made_out(*entity) && !out.contains(&heard) {
+                out.push(heard);
             }
         }
         // A body spent is the cast landing, which the effect cue already

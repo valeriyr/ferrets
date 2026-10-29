@@ -1290,8 +1290,30 @@ fn unload_range_reaches_past_placement_search_radius() {
 #[test]
 fn passenger_unloads_only_within_unload_range() {
     // A raft at the pool's edge, (10,9), unloads within one cell. The land in
-    // reach, (9,8) to (11,8), is held by three soldiers; (10,7) beyond them is
-    // free and on the same land, but two cells off: the marine stays aboard.
+    // reach, (9,8) to (11,8), is held by three of an enemy's soldiers, who make
+    // no way for it; (10,7) beyond them is free and on the same land, but two
+    // cells off: the marine stays aboard.
+    let mut app = raft_app();
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 9, 0);
+    let (marine, marine_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
+    utils::send_to(&mut app, marine_id, raft_id);
+    utils::run_until_aboard(&mut app, raft, 1, 30);
+    for x in 9..12 {
+        utils::create_owned(&mut app, "soldier", x, 8, 1);
+    }
+
+    utils::unload(&mut app, raft_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert!(entity_def::boarded(app.world(), marine));
+}
+
+#[test]
+fn own_soldiers_holding_unload_range_make_way_for_passenger() {
+    // The same three cells in reach held by the raft's own idle soldiers: the
+    // unload that finds no cell asks the one on (10,8), the cell it would
+    // take, off it, and the marine steps out there on the fourth tick, once it
+    // has walked clear.
     let mut app = raft_app();
     let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 9, 0);
     let (marine, marine_id) = utils::create_owned(&mut app, "marine", 10, 7, 0);
@@ -1302,9 +1324,11 @@ fn passenger_unloads_only_within_unload_range() {
     }
 
     utils::unload(&mut app, raft_id, None);
-    utils::run_ticks(&mut app, utils::APPLY + 1);
-
+    utils::run_ticks(&mut app, 3);
     assert!(entity_def::boarded(app.world(), marine));
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::boarded(app.world(), marine));
+    assert_eq!(utils::cell_of(app.world(), marine), CellPos::new(10, 8));
 }
 
 #[test]
@@ -1431,6 +1455,34 @@ fn rally_point_sends_unloaded_passenger_on() {
             .in_range(rifleman_cell, CellPos::new(18, 10), 1),
         "the freed passenger walked to the rally point, stands at {rifleman_cell:?}"
     );
+}
+
+#[test]
+fn passenger_unloads_within_range_of_every_cell_holder_stands_on() {
+    // Under the continuous model the wagon rests at (10.5, 5), across (10, 5)
+    // and (11, 5). Every cell but those and (12, 5) is walled — (10, 5), under
+    // the wagon, too. (12, 5) is one cell from (11, 5), two from (10, 5), the
+    // cell the wagon's position floors into: the rifleman is let out there.
+    let mut app = utils::transport_app();
+    let projection = app.world().resource::<Map>().projection();
+    utils::install_map(&mut app, projection, MovementModel::Continuous);
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 5, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 5, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+    utils::walk_onto(&mut app, wagon, utils::part_way("10.5", "5"), 10);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    for x in [11, 12] {
+        utils::free_cell(&mut app, CellPos::new(x, 5));
+    }
+
+    // The unload lands on the third tick.
+    utils::unload(&mut app, wagon_id, None);
+    utils::run_ticks(&mut app, 2);
+    assert!(entity_def::hidden(app.world(), rifleman));
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::hidden(app.world(), rifleman));
+    assert_eq!(utils::position_of(app.world(), rifleman), utils::pos(12, 5));
 }
 
 #[test]

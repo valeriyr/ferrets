@@ -7,7 +7,7 @@ use crate::{
     components::{last_hit::LastHitComponent, owner},
     entity_def,
     entity_index::EntityIndex,
-    map::Map,
+    reach::{self, Approach},
     session::GameSession,
     simulation_id::SimulationId,
     visibility::{self, Senses},
@@ -22,6 +22,17 @@ pub const ACQUIRE_PERIOD: u32 = 8;
 /// Ticks a recorded hit keeps steering acquisition: within this window an
 /// attacker is preferred over nearer candidates, older stamps no longer aggro.
 pub const HIT_MEMORY: u32 = 40;
+
+/// How a seeker gets at what it acquires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pursuit {
+    /// It fights from where it stands: what lies in range qualifies.
+    Holds,
+    /// It closes on what it engages: only what it gets within its weapons'
+    /// reach of from where it stands qualifies — for a mover, from a cell in a
+    /// region it walks to.
+    Closes,
+}
 
 /// Returns `true` on the ticks `id` is due for an acquisition scan.
 pub fn due(id: SimulationId, tick: u32) -> bool {
@@ -45,6 +56,7 @@ pub fn find_target(
     seeker: Entity,
     targets: LayerMask,
     range: u32,
+    pursuit: Pursuit,
 ) -> Option<SimulationId> {
     find_target_apart_from(
         world,
@@ -52,6 +64,7 @@ pub fn find_target(
         entity_def::standing_rect(world, seeker),
         targets,
         range,
+        pursuit,
         &[],
         None,
     )
@@ -74,12 +87,14 @@ pub fn find_target(
 /// would drag the swing after whoever hit last, resetting it at every scan. The
 /// ranking itself needs no such guard — it is a total order over standing facts,
 /// so a rescan that finds nothing strictly better finds what is already held.
+#[allow(clippy::too_many_arguments)]
 pub fn find_target_apart_from(
     world: &World,
     seeker: Entity,
     from: CellRect,
     targets: LayerMask,
     range: u32,
+    pursuit: Pursuit,
     apart_from: &[SimulationId],
     held: Option<SimulationId>,
 ) -> Option<SimulationId> {
@@ -89,14 +104,14 @@ pub fn find_target_apart_from(
     if held.is_none()
         && let Some(attacker) = fresh_attacker(world, seeker)
         && taken(attacker) == 0
-        && qualifies(world, seeker, targets, attacker, range)
+        && qualifies(world, seeker, targets, attacker, range, pursuit)
     {
         return Some(attacker);
     }
 
     let mut best: Option<(usize, u32, SimulationId)> = None;
     for (id, _) in world.resource::<EntityIndex>().alive_entries() {
-        if !qualifies(world, seeker, targets, id, range) {
+        if !qualifies(world, seeker, targets, id, range, pursuit) {
             continue;
         }
         let rank = (taken(id), standing_distance(world, from, id), id);
@@ -108,15 +123,18 @@ pub fn find_target_apart_from(
 }
 
 /// Whether `target_id` is something `seeker` may auto-engage within `range`:
-/// interactable, hostile, damageable, and standing in range. Layer
-/// reach is judged against `targets`, which is what the weapon that would fire
-/// reaches — its bearer stands wherever the seeker does.
+/// interactable, hostile, damageable, standing in range, and — for a seeker
+/// that closes on it, as `pursuit` says — within reach of the weapons that can
+/// serve against it from somewhere the seeker gets to. Layer reach is judged
+/// against `targets`, which is what the weapon that would fire reaches — its
+/// bearer stands wherever the seeker does.
 pub(super) fn qualifies(
     world: &World,
     seeker: Entity,
     targets: LayerMask,
     target_id: SimulationId,
     range: u32,
+    pursuit: Pursuit,
 ) -> bool {
     let Some(target) = world
         .resource::<EntityIndex>()
@@ -156,10 +174,9 @@ pub(super) fn qualifies(
     // it is a few subtractions, with the seeker's shape and an edge walk only
     // within range, where the sighting below reads the grid and the fields,
     // and most of a battle stands out of range.
-    if !entity_def::reaches(
+    if !reach::in_reach(
         world,
         seeker,
-        entity_def::standing_rect(world, seeker),
         entity_def::standing_rect(world, target),
         range,
     ) {
@@ -169,12 +186,23 @@ pub(super) fn qualifies(
     // Fog of war: a unit only auto-engages what its team makes out, a concealed
     // target only under its team's detection. An ownerless attacker has no team
     // vision, so it is not sight-limited.
-    match entity_def::owner(world, seeker) {
+    let sighted = match entity_def::owner(world, seeker) {
         Some(seeker_owner) => {
             visibility::sees_of(world, seeker_owner, target_def, target, Senses::Ordinary)
         }
         None => true,
-    }
+    };
+    // A chase after what it can never strike ends only once the chase gives
+    // up, and the next scan picks the same target again.
+    sighted
+        && match pursuit {
+            Pursuit::Holds => true,
+            Pursuit::Closes => Approach::from_where_it_is(world, seeker).reaches(
+                world,
+                target,
+                entity_def::weapon_range_serving(world, seeker, Some(target)),
+            ),
+        }
 }
 
 /// The entity's most recent attacker, while the hit is still fresh (see
@@ -192,8 +220,5 @@ pub(super) fn fresh_attacker(world: &World, entity: Entity) -> Option<Simulation
 /// on, on the scale the range gate measures in.
 fn standing_distance(world: &World, from: CellRect, id: SimulationId) -> u32 {
     let entity = world.resource::<EntityIndex>().alive(id).unwrap();
-    world
-        .resource::<Map>()
-        .projection()
-        .distance_for_rects(from, entity_def::standing_rect(world, entity))
+    reach::distance_to(world, from, entity)
 }

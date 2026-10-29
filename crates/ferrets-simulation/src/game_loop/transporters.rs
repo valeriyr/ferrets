@@ -20,6 +20,7 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
+    make_way::{self, Asked},
     session::GameSession,
     simulation_id::SimulationId,
     spawn::{self, Boarding, SetDown},
@@ -127,7 +128,17 @@ pub(crate) fn let_out(
                 .entity_mut(passenger)
                 .remove::<(BoardedComponent, GarrisonFireComponent)>();
         }
-        SetDown::NoCell => {}
+        // Own and allied movers that alone keep it in are asked off, and it
+        // is let out once they have walked clear.
+        SetDown::NoCell => match make_way::clear_landing(
+            world,
+            entity_def::owner(world, passenger),
+            |world| spawn::holder_lander(world, passenger, transporter_id, lean),
+            &[],
+            &[passenger],
+        ) {
+            Asked::Leaves | Asked::Boxed => {}
+        },
     }
     set_down
 }

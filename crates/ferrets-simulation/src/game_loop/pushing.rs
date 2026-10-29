@@ -149,7 +149,7 @@ fn rebuild_from(world: &mut World, claimants: &[(Entity, MoverShape)]) {
     let reservations: Vec<(LayerMask, Vec<CellPos>)> = world
         .query::<&MorphComponent>()
         .iter(world)
-        .filter_map(|morph| morph.reservation.as_ref())
+        .filter_map(|morph| morph.as_under_way()?.reservation.as_ref())
         .map(|reservation| (reservation.layers, reservation.cells.clone()))
         .collect();
     world

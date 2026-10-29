@@ -318,13 +318,9 @@ fn relay_changing_form_refuses_warp() {
     let (relay, _) = utils::create_owned(&mut app, "relay", 5, 10, 0);
     utils::run_ticks(&mut app, 1);
     let from = entity_def::type_id(app.world(), relay);
-    app.world_mut().entity_mut(relay).insert(MorphComponent {
-        from,
-        into: "relay".into(),
-        progress: 0,
-        reservation: None,
-        before: Vec::new(),
-    });
+    app.world_mut()
+        .entity_mut(relay)
+        .insert(MorphComponent::under_way(from, "relay".into(), Vec::new()));
 
     assert_eq!(judged(&app, relay, 12, 10), Err(WarpRefusal::Busy));
 }

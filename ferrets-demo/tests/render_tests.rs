@@ -803,6 +803,44 @@ fn crew_counts_own_side_anywhere_and_rival_only_when_made_out() {
 }
 
 #[test]
+fn stalled_repair_shows_only_to_its_side() {
+    // Players 0 and 1 share a team; player 2 stands alone.
+    let session = GameSession::configured(
+        LocalRole::Player(0),
+        vec![
+            PlayerSlot::occupied(0, PlayerType::Human, Some("human"), Some(1)),
+            PlayerSlot::occupied(1, PlayerType::Human, Some("human"), Some(1)),
+            PlayerSlot::occupied(2, PlayerType::Human, Some("orc"), Some(2)),
+        ],
+        "links",
+        Authority::Host {
+            ai_hosting: AiHosting::Replicated,
+        },
+        DropPolicy::Automatic,
+        FinishPolicy::Endless,
+        ruleset::demo(),
+    );
+
+    let paying = render::repair_link_color(&session, Some(0), Some(0), 0);
+    let stalled = render::repair_link_color(&session, Some(0), Some(0), 3);
+    assert_ne!(stalled, paying, "an own repairer shows it cannot pay");
+    assert_eq!(
+        render::repair_link_color(&session, Some(0), Some(1), 3),
+        stalled
+    );
+    // An enemy's stockpile is its own: its stalled repairer reads as paying,
+    // and an observer watching nobody sees no side's.
+    assert_eq!(
+        render::repair_link_color(&session, Some(0), Some(2), 3),
+        paying
+    );
+    assert_eq!(
+        render::repair_link_color(&session, None, Some(0), 3),
+        paying
+    );
+}
+
+#[test]
 fn passenger_dot_takes_color_of_whose_passenger_is() {
     // Players 0 and 1 share a team; player 2 stands alone.
     let session = GameSession::configured(

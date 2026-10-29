@@ -27,12 +27,13 @@ use crate::{
     components::{
         location::LocationComponent,
         movement::MoveComponent,
-        order_queue::{CancelPolicy, OrderQueueComponent, OrderState},
+        order_queue::{CancelPolicy, OrderState},
     },
     entity_def,
     entity_index::EntityIndex,
+    make_way::{self, Asked, Need, Yielding},
     map::Map,
-    movement_model::{self, MovementModel},
+    movement_model::{self, MovementModel, Settling},
     order::Order,
     session::GameSession,
 };
@@ -143,28 +144,8 @@ pub fn cancel_processing(
 ) -> Processing {
     match policy {
         CancelPolicy::Force => {
-            // A cell-model walk cut down mid-crossing holds the crossing's
-            // target cell — its departed cell was released when the
-            // crossing began. Snap onto the claimed cell, so whoever frees
-            // the footprint next (death, hiding) releases the cell the unit
-            // actually holds rather than a neighbor somebody else may have
-            // claimed since.
-            if let Some(movement) = world.entity(entity).get::<MoveComponent>() {
-                let claimed = movement.path.last().copied();
-                let position = world
-                    .entity(entity)
-                    .get::<LocationComponent>()
-                    .map(|location| location.position);
-                if let (Some(claimed), Some(position)) = (claimed, position)
-                    && let MovementModel::Cell = world.resource::<Map>().movement_model()
-                    && movement_model::is_mid_crossing(position)
-                {
-                    world
-                        .entity_mut(entity)
-                        .get_mut::<LocationComponent>()
-                        .unwrap()
-                        .position = FixedUVec2::from(claimed);
-                }
+            match movement_model::settle_crossing(world, entity) {
+                Settling::Settled | Settling::AtRest => {}
             }
             world.entity_mut(entity).remove::<MoveComponent>();
             Processing::state(OrderState::Finished)
@@ -260,6 +241,37 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
                 && resting_ally_within(world, entity, shape.layers, goal, effective_range)
             {
                 return OrderState::Finished;
+            }
+
+            // Taken goal, as on the cell ladder's rung: the waypoint pursued
+            // would end the walk, and a body that is not walking stands on it.
+            // Pressing on only pushes against it; a claim-aware route to
+            // another cell that serves the goal is taken at once.
+            if let Some(&waypoint) = move_component.path.last()
+                && cell_arrived(
+                    world.resource::<Map>(),
+                    waypoint,
+                    shape,
+                    target,
+                    size,
+                    range,
+                    move_component.frustration,
+                )
+                && settled_body_over(world, entity, shape, waypoint)
+                && let Some(route) = claim_aware_route(
+                    world,
+                    shape,
+                    location_def.solidity(),
+                    position,
+                    target,
+                    size,
+                    range,
+                )
+                && !route.is_empty()
+            {
+                move_component.take_route(route);
+                world.entity_mut(entity).insert(move_component);
+                return OrderState::InProcessing;
             }
 
             // Detour, as on the cell ladder's rung: splice a claim-aware
@@ -709,8 +721,6 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
             effective_range,
         );
     }
-    move_component.forgive();
-
     let heading = Facing::of(FixedVec2::new(
         FixedUVec2::from(next_cell).x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
         FixedUVec2::from(next_cell).y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
@@ -727,6 +737,9 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
             return OrderState::InProcessing;
         }
     }
+    // The way ahead is clear only once the crossing starts: a body still
+    // turning toward the cell may find it taken again before it sets off.
+    move_component.forgive();
 
     // Claim the footprint entered and release the one left behind, before any
     // position change. Claims live on the grid's unit plane, invisible to the
@@ -1021,12 +1034,22 @@ fn cell_arrived(
     }
 }
 
+/// What a settled ally blocking a step does when asked, or what any other
+/// blocker does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Blocking {
+    /// It was asked aside and walks off.
+    Leaves,
+    /// It stays where it is: it holds, is boxed in, or was not asked.
+    Stays,
+}
+
 /// Works down the crowd ladder when the next cell of a crossing is held:
 /// swap with a head-on counterpart, arrive beside a settled ally, skip a
-/// waypoint an idle ally sits on, ask an idle ally to step aside, route at
-/// once to another goal cell when a body that is not walking holds this one,
-/// wait briefly, splice a local detour, and finally throw the plan away for a
-/// claim-aware repath. The give-up budget bounds the waits, detours and
+/// waypoint a settled ally sits on, ask it to step aside, route at once to
+/// another goal cell when a body that is not walking and stays holds this
+/// one, wait briefly, splice a local detour, and finally throw the plan away
+/// for a claim-aware repath. The give-up budget bounds the waits, detours and
 /// repaths; the immediate route repeats only when another body settles first
 /// on each newly chosen cell.
 #[allow(clippy::too_many_arguments)]
@@ -1087,13 +1110,17 @@ fn resolve_blocked_crossing(
             );
         }
 
-        let blocker_idle = world
-            .entity(blocker)
-            .get::<OrderQueueComponent>()
-            .is_none_or(|queue| queue.0.is_empty());
-        let blocker_moves = entity_def::of(world, blocker).can_move();
+        // A settled ally: at rest, idle and able to move, whether or not it
+        // makes way when asked.
+        let owner = entity_def::owner(world, entity);
+        let settled_ally = blocker_at_rest
+            && entity_def::idle(world, blocker)
+            && entity_def::of(world, blocker).can_move()
+            && world
+                .resource::<GameSession>()
+                .owners_allied(owner, entity_def::owner(world, blocker));
 
-        if blocker_at_rest && blocker_idle && blocker_moves && allied(world, entity, blocker) {
+        let blocking = if settled_ally {
             // Peer arrival: a settled ally already inside my acceptance
             // means the spot is taken — arriving beside it kills the
             // pushing contest. Point moves only; a ranged walk finishing
@@ -1127,46 +1154,58 @@ fn resolve_blocked_crossing(
                 }
             }
 
-            // Yield: ask it to step out of the walk's way, then wait below
-            // while it does. The pushed order is prepared here — the tick's
-            // own prepare phase has already passed.
-            if let Some(aside) = yield_target(
-                world,
-                blocker,
-                CellRect::new(current_cell, shape.size),
-                next_cell,
-            ) {
-                let mut queue = world
-                    .entity_mut(blocker)
-                    .take::<OrderQueueComponent>()
-                    .expect("idle blockers keep their order queue");
-                queue.push_front(Order::Move {
-                    target: FixedUVec2::from(aside),
-                    size: CellSize::new(1, 1),
-                    range: 0,
-                });
-                let operation = entity_def::operation(world, blocker);
-                super::orders::prepare_front(blocker, operation, &mut queue, world);
-                world.entity_mut(blocker).insert(queue);
+            // Yield: one that makes way is asked off the cells the walk still
+            // enters along its segment, so it does not step aside onto the way
+            // ahead, and the walk waits below while it walks off; one boxed
+            // in, or holding, stays.
+            match make_way::makes_way(world, blocker, owner) {
+                Yielding::Yields => {
+                    let mut ahead = entered_cells(shape, current_cell, next_cell);
+                    for &cell in move_component.path.iter().rev().skip(1) {
+                        ahead.extend(
+                            CellRect::new(cell, shape.size)
+                                .cells()
+                                .filter(|cell| !ahead.contains(cell))
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                    let need = Need::Passage {
+                        ahead: &ahead,
+                        heading: (current_cell, next_cell),
+                    };
+                    match make_way::ask(world, blocker, owner, need) {
+                        Asked::Leaves => Blocking::Leaves,
+                        Asked::Boxed => Blocking::Stays,
+                    }
+                }
+                Yielding::Holds => Blocking::Stays,
             }
-        } else if blocker_at_rest
-            && !entity_def::walking(world, blocker)
-            && cell_arrived(
-                world.resource::<Map>(),
-                next_cell,
-                shape,
-                target,
-                size,
-                range,
-                move_component.frustration,
-            )
-        {
+        } else {
+            Blocking::Stays
+        };
+        let taken_goal = match blocking {
+            Blocking::Leaves => false,
+            Blocking::Stays => {
+                blocker_at_rest
+                    && !entity_def::walking(world, blocker)
+                    && cell_arrived(
+                        world.resource::<Map>(),
+                        next_cell,
+                        shape,
+                        target,
+                        size,
+                        range,
+                        move_component.frustration,
+                    )
+            }
+        };
+        if taken_goal {
             // Taken goal: the step would end the walk, and the cell is held by
-            // a body that is not walking and will not be asked aside — one at
-            // work, one that cannot move, or one not allied. Detouring back
-            // onto that same cell only stalls: a claim-aware route to another
-            // cell that serves the goal is taken at once. With none, the walk
-            // waits as on any held step.
+            // a body that is not walking and stays — one at work, one that
+            // cannot move, one not allied, or an ally that holds or is boxed
+            // in. Detouring back onto that same cell only stalls: a
+            // claim-aware route to another cell that serves the goal is taken
+            // at once. With none, the walk waits as on any held step.
             let solidity = entity_def::of(world, entity)
                 .location
                 .expect("walkers have a location")
@@ -1316,11 +1355,7 @@ fn swap_crossings(
 /// it. Deterministic — the lowest simulation id wins.
 fn claimant_at(world: &mut World, shape: MoverShape, from: CellPos, to: CellPos) -> Option<Entity> {
     let layers = shape.layers;
-    let left = CellRect::new(from, shape.size);
-    let entered: Vec<CellPos> = CellRect::new(to, shape.size)
-        .cells()
-        .filter(|&cell| !left.contains(cell))
-        .collect();
+    let entered = entered_cells(shape, from, to);
     for (_, candidate) in world.resource::<EntityIndex>().alive_entries() {
         // An entity off the grid holds no cells.
         if !entity_def::stands_on_grid(world, candidate) {
@@ -1361,9 +1396,35 @@ fn claimant_at(world: &mut World, shape: MoverShape, from: CellPos, to: CellPos)
     None
 }
 
-/// Whether some allied mover contesting the same layers is settled within
-/// `range` of the goal rect — the continuous walk's peer-arrival evidence
-/// that a crowded spot is already taken.
+/// Whether a body other than `entity`, claiming cells on the layers of
+/// `shape` and not walking, stands where a footprint of `shape` anchored at
+/// `cell` would — read at the cell each body's claim is stamped on, as the
+/// continuous model's claim plane is.
+fn settled_body_over(world: &World, entity: Entity, shape: MoverShape, cell: CellPos) -> bool {
+    let footprint = CellRect::new(cell, shape.size);
+    world
+        .resource::<EntityIndex>()
+        .alive_iter()
+        .any(|(_, &candidate)| {
+            if candidate == entity
+                || !entity_def::stands_on_grid(world, candidate)
+                || !world.entity(candidate).contains::<LocationComponent>()
+            {
+                return false;
+            }
+            let Some(location_def) = entity_def::of(world, candidate).location else {
+                return false;
+            };
+            location_def.solidity().claims_cells()
+                && location_def.occupies() & shape.layers != LayerMask::EMPTY
+                && !entity_def::walking(world, candidate)
+                && entity_def::occupied_rect(world, candidate).intersects(footprint)
+        })
+}
+
+/// Whether some idle allied mover contesting the same layers is settled
+/// within `range` of the goal rect — the continuous walk's peer-arrival
+/// evidence that a crowded spot is already taken.
 fn resting_ally_within(
     world: &World,
     entity: Entity,
@@ -1391,7 +1452,11 @@ fn resting_ally_within(
             || !location_def.solidity().claims_cells()
             || location_def.occupies() & layers == LayerMask::EMPTY
             || entity_def::walking(world, candidate)
-            || !allied(world, entity, candidate)
+            || !entity_def::idle(world, candidate)
+            || !world.resource::<GameSession>().owners_allied(
+                entity_def::owner(world, entity),
+                entity_def::owner(world, candidate),
+            )
         {
             continue;
         }
@@ -1402,73 +1467,14 @@ fn resting_ally_within(
     false
 }
 
-/// Whether both entities have owners the session treats as allies.
-fn allied(world: &World, a: Entity, b: Entity) -> bool {
-    match (entity_def::owner(world, a), entity_def::owner(world, b)) {
-        (Some(first), Some(second)) => world.resource::<GameSession>().are_allied(first, second),
-        (None, _) | (_, None) => false,
-    }
-}
-
-/// The best free cell an idle blocker steps aside to: a whole-footprint step
-/// off its own anchor, on its own layers, farthest from the mover's direction
-/// of travel, ties broken by cell order. `None` when it is boxed in.
-///
-/// `toward` is the contested cell the mover is crossing into, which fixes
-/// the direction to step away from; `mover` is the mover's standing
-/// footprint, which the blocker must not step onto.
-fn yield_target(
-    world: &World,
-    blocker: Entity,
-    mover: CellRect,
-    toward: CellPos,
-) -> Option<CellPos> {
-    let location_def = entity_def::of(world, blocker).location?;
-    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
-    let size = shape.size;
-    let anchor = CellPos::from(entity_def::position(world, blocker));
-    let map = world.resource::<Map>();
-    let direction_x = toward.x as i64 - mover.origin.x as i64;
-    let direction_y = toward.y as i64 - mover.origin.y as i64;
-
-    let mut best: Option<(i64, CellPos)> = None;
-    for offset_y in -1i64..=1 {
-        for offset_x in -1i64..=1 {
-            if offset_x == 0 && offset_y == 0 {
-                continue;
-            }
-            let x = anchor.x as i64 + offset_x;
-            let y = anchor.y as i64 + offset_y;
-            if x < 0 || y < 0 {
-                continue;
-            }
-            let candidate = CellPos::new(x as u32, y as u32);
-            if CellRect::new(candidate, size).intersects(mover)
-                || !map.can_step_footprint(shape, anchor, candidate)
-            {
-                continue;
-            }
-            // The corner rule the blocker's own crossing will enforce.
-            if offset_x != 0
-                && offset_y != 0
-                && !(map.can_step_footprint(shape, anchor, CellPos::new(candidate.x, anchor.y))
-                    && map.can_step_footprint(shape, anchor, CellPos::new(anchor.x, candidate.y)))
-            {
-                continue;
-            }
-            let along = offset_x * direction_x + offset_y * direction_y;
-            let better = match best {
-                None => true,
-                Some((best_along, best_cell)) => {
-                    along > best_along || (along == best_along && candidate < best_cell)
-                }
-            };
-            if better {
-                best = Some((along, candidate));
-            }
-        }
-    }
-    best.map(|(_, cell)| cell)
+/// The cells a step of `shape` from `from` to `to` enters: those of the
+/// footprint at `to` outside the one at `from`.
+fn entered_cells(shape: MoverShape, from: CellPos, to: CellPos) -> Vec<CellPos> {
+    let left = CellRect::new(from, shape.size);
+    CellRect::new(to, shape.size)
+        .cells()
+        .filter(|&cell| !left.contains(cell))
+        .collect()
 }
 
 /// Asserts (debug builds) the lattice invariant for a mid-crossing entity: its

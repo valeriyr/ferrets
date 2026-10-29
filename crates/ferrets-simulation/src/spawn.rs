@@ -11,6 +11,7 @@ use ferrets_content::{
     attack::Slain,
     base_stats::BaseStats,
     brood::{BreederDef, BroodlingDef, OrphanFate},
+    build::BuilderAttendance,
     dying::{DeathKind, DyingDef},
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
@@ -28,7 +29,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
-use ferrets_physics::body;
+use ferrets_nav_grid::layer_id::LayerId;
 
 use crate::{
     berths,
@@ -310,8 +311,13 @@ pub(crate) fn spawn_bred(
     reach: FieldReach,
     by: SimulationId,
 ) -> Option<(Entity, SimulationId)> {
-    let from = entity_def::footprint_rect(world, job);
-    let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), from)?;
+    let from = entity_def::standing_rect(world, job);
+    let size = world
+        .resource::<ContentRegistry>()
+        .entity(type_name)?
+        .location?
+        .size();
+    let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), size, from)?;
     // Facing the way every fresh entity does; the seat sets the position.
     let location = LocationComponent::new(point, DEFAULT_FACING);
     let (entity, id) = conjure(
@@ -451,8 +457,8 @@ pub fn spawn_sandbox(
     )
 }
 
-/// Sets down `count` of `type_name` around the footprint at `around`, as what
-/// `fallen` left behind.
+/// Sets down `count` of `type_name` out of the footprint `out_of` on `layer`,
+/// as what `fallen` left behind.
 ///
 /// The left type decides what it becomes: one tagged as remains is laid down
 /// ownerless and already dying, its `lifetime` its whole existence, remembering
@@ -475,8 +481,8 @@ pub(crate) fn spawn_bequest(
     world: &mut World,
     type_name: &str,
     count: u32,
-    around: CellPos,
-    around_size: CellSize,
+    out_of: CellRect,
+    layer: LayerId,
     fallen: Fallen,
     slain: Slain,
 ) {
@@ -508,21 +514,16 @@ pub(crate) fn spawn_bequest(
     // ground the deceased freed a moment ago, none on another's footprint:
     // remains at most a cell out, what stands up as far as a release goes.
     let cells: Vec<CellPos> = {
-        let registry = world.resource::<ContentRegistry>();
-        let def = registry
+        let def = world
+            .resource::<ContentRegistry>()
             .entity(type_name)
             .expect("validated content leaves registered types");
-        let fallen_location = registry
-            .def(fallen.entity_type)
-            .location
-            .expect("what falls stood somewhere");
-        let around = CellRect::new(around, around_size);
         let lander = Lander {
             def,
             owner: fallen.owner,
             from: ComesFrom::Footprint {
-                rect: around,
-                layer: entity_def::mover_shape(registry, &fallen_location).layer,
+                rect: out_of,
+                layer,
                 reach: match left {
                     Left::Remains { .. } => REMAINS_RANGE,
                     Left::Entity => 1,
@@ -530,13 +531,13 @@ pub(crate) fn spawn_bequest(
             },
             bound: match left {
                 Left::Remains { .. } => Bound::Range {
-                    rect: around,
+                    rect: out_of,
                     range: REMAINS_RANGE,
                 },
                 Left::Entity => Bound::Radius,
             },
-            around,
-            toward: around,
+            around: out_of,
+            toward: out_of,
         };
         let mut cells: Vec<CellPos> = Vec::new();
         for _ in 0..count {
@@ -885,7 +886,8 @@ pub(crate) fn seat_unseated(
     attachment: &Attachment,
 ) {
     let standing = entity_def::standing_rect(world, entity);
-    let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), standing)
+    let size = entity_def::location_size(world, entity);
+    let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), size, standing)
         .expect("a worker attaches only to a job with a free berth in its group");
     seat_at(world, entity, job, attachment, seat, point);
 }
@@ -1061,19 +1063,39 @@ pub(crate) fn place_back_from_holder(
     holder: SimulationId,
     lean: Lean,
 ) -> SetDown {
+    let location_def = entity_def::of(world, entity)
+        .location
+        .expect("only entities with LocationDef can be placed back");
+    let lander = holder_lander(world, entity, holder, lean);
+    match landing::set_down(world, lander, &[], &[entity], |_, _| true) {
+        Some(cell) => {
+            place_back_at(world, entity, cell, &location_def);
+            SetDown::Placed
+        }
+        None => SetDown::NoCell,
+    }
+}
+
+/// How the hidden `entity` is set down out of `holder`: within the holder's
+/// unload range of the footprint it is set down beside, leaning as `lean`
+/// says.
+///
+/// Panics for a holder gone from the world.
+pub(crate) fn holder_lander(
+    world: &World,
+    entity: Entity,
+    holder: SimulationId,
+    lean: Lean,
+) -> Lander<'_> {
     let holder_entity = world
         .resource::<EntityIndex>()
         .any(holder)
         .expect("a holder lets its passengers out while it is in the world");
-    let def = entity_def::of(world, entity);
-    let location_def = def
-        .location
-        .expect("only entities with LocationDef can be placed back");
     let beside = Beside::Container(holder);
     let around = entity_def::beside_rect(world, entity, beside);
     let range = entity_def::effective_stat_u32(world, holder_entity, EntityStatId::UNLOAD_RANGE);
-    let lander = Lander {
-        def,
+    Lander {
+        def: entity_def::of(world, entity),
         owner: entity_def::owner(world, entity),
         from: ComesFrom::beside(world, entity, beside, range),
         bound: Bound::Range {
@@ -1082,13 +1104,33 @@ pub(crate) fn place_back_from_holder(
         },
         around,
         toward: lean_rect(world, entity, around, lean),
+    }
+}
+
+/// How `entity` is set down beside `beside`: an attached entity steps out of
+/// the berth it sits at; any other comes out beside `beside`, the cells `lean`
+/// names first.
+///
+/// Panics for a `Lean::WentIn` on an entity that is not hidden.
+pub(crate) fn beside_lander(
+    world: &World,
+    entity: Entity,
+    beside: Beside,
+    lean: Lean,
+) -> Lander<'_> {
+    let (beside, lean) = if entity_def::attached(world, entity) {
+        (berths::held_berth(world, entity), Lean::Nothing)
+    } else {
+        (beside, lean)
     };
-    match landing::set_down(world, lander, &[], &[entity], |_, _| true) {
-        Some(cell) => {
-            place_back_at(world, entity, cell, &location_def);
-            SetDown::Placed
-        }
-        None => SetDown::NoCell,
+    let around = entity_def::beside_rect(world, entity, beside);
+    Lander {
+        def: entity_def::of(world, entity),
+        owner: entity_def::owner(world, entity),
+        from: ComesFrom::steps_out_of(world, entity, beside),
+        bound: Bound::Radius,
+        around,
+        toward: lean_rect(world, entity, around, lean),
     }
 }
 
@@ -1148,14 +1190,15 @@ pub(crate) fn stand_or_retry(world: &mut World, entity: Entity, beside: Beside, 
 }
 
 /// Aligns `breeder`'s brood with the form it has just taken, `origin` being
-/// the form the change was declared on. Each of the `seated` broodlings is
-/// moved to a seat of the group its attachment names on the new form, nearest
-/// its old berth, or **detached** when that form does not hold it — no such
-/// group, or no seat left — on the breeder's orphan terms.
+/// the form the change was declared on. Each of the `seated` broodlings, with
+/// the berth it sat at on the old form, is moved to a seat of the group its
+/// attachment names on the new form, nearest its old berth, or **detached**
+/// when that form does not hold it — no such group, or no seat left — on the
+/// breeder's orphan terms, and set down beside that berth.
 pub(crate) fn align_broodlings(
     world: &mut World,
     breeder: Entity,
-    seated: &[SimulationId],
+    seated: &[(SimulationId, Beside)],
     origin: EntityTypeId,
 ) {
     let Some(fate) = brood::terms_on(world, breeder, origin).map(BreederDef::orphans) else {
@@ -1168,14 +1211,13 @@ pub(crate) fn align_broodlings(
     let of = entity_def::simulation_id(world, breeder);
     // Every seat is given up first, so the group is laid out afresh for the
     // form now worn before anyone sits down in it. The tie stays.
-    let unseated: Vec<(Entity, CellPos)> = seated
+    let unseated: Vec<(Entity, Beside)> = seated
         .iter()
-        .map(|&id| {
+        .map(|&(id, berth)| {
             let entity = world
                 .resource::<EntityIndex>()
                 .alive(id)
                 .expect("a counted broodling is alive");
-            let berth = body::anchor(entity_def::position(world, entity));
             unseat(world, entity).expect("a counted broodling sits in a berth");
             (entity, berth)
         })
@@ -1185,7 +1227,7 @@ pub(crate) fn align_broodlings(
         let attachment = brood::broodling_attachment(world, entity)
             .cloned()
             .expect("a seated broodling's type is a broodling");
-        if brood::holds(world, breeder, entity, &attachment) {
+        if brood::holds(world, breeder, &attachment) {
             seat_unseated(world, entity, breeder, &attachment);
         } else {
             detach_broodling(world, breeder, of, entity, berth, fate);
@@ -1229,7 +1271,7 @@ pub(crate) fn broodling_seat(world: &World, entity: Entity, form: EntityTypeId) 
         .map(BroodlingDef::attachment)
         .cloned()
         .expect("a bred entity's bred form is a broodling");
-    if brood::holds(world, breeder, entity, &attachment) {
+    if brood::holds(world, breeder, &attachment) {
         BroodlingSeat::Free {
             breeder,
             attachment,
@@ -1323,7 +1365,7 @@ pub fn relocate(world: &mut World, moves: &[(Entity, CellPos)]) {
                 MovementModel::Cell => !movement_model::is_mid_crossing(position),
                 MovementModel::Continuous => true,
             },
-            "a relocated body stands at rest, its walk dropped before it moves"
+            "a relocated body stands at rest, settled off any crossing"
         );
         from.push(position);
     }
@@ -1548,8 +1590,11 @@ fn announce_death(world: &mut World, entity: Entity, cause: DeathCause, slain: S
 /// as `lean` says.
 ///
 /// The entity keeps its health and its pools. Its orders are dropped and what
-/// they took stays spent, and it leaves every player's selection and control
-/// groups, the two stores that hold ids.
+/// they took stays spent, but for a change of form under way, which goes on
+/// for `to`; it leaves every player's selection and control groups, the two
+/// stores that hold ids. A rising site's consumed builders go with it, each
+/// keeping only its build order. Nothing for an entity already dying: it is
+/// not captured.
 ///
 /// Panics if `to` already owns it.
 pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: SimulationId, lean: Lean) {
@@ -1559,17 +1604,28 @@ pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: Simulat
         "an entity is handed only to a player that does not already own it"
     );
 
+    // What is dying under the old owner is not captured, and its death runs
+    // on as it was.
     let id = entity_def::simulation_id(world, entity);
-    // Whatever it was doing was the old owner's business: the orders go, and
-    // what they took stays spent — losing the entity loses the work in it.
-    // Dropping them can start a death, on a change of form whose type declares
-    // one when interrupted, and what died under the old owner is not captured.
-    orders::drop_all(world, entity, CancelPolicy::Force);
     match world.resource::<EntityIndex>().alive(id) {
         Some(_) => {}
         None => return,
     }
+    // Whatever it was doing was the old owner's business: the orders go, and
+    // what they took stays spent — losing the entity loses the work in it. A
+    // change of form under way is the entity's own becoming, not a task: it
+    // goes on for the new owner, and only what was queued behind it goes.
+    if entity_def::changing(world, entity) {
+        orders::drop_all_but_current(world, entity, CancelPolicy::Force);
+    } else {
+        orders::drop_all(world, entity, CancelPolicy::Force);
+    }
+    hand_over(world, entity, to, by, lean);
+}
 
+/// Hands `entity` to `to` as [`change_owner`] does, its orders kept.
+fn hand_over(world: &mut World, entity: Entity, to: PlayerId, by: SimulationId, lean: Lean) {
+    let id = entity_def::simulation_id(world, entity);
     world.resource_mut::<Selection>().remove(id);
     world.resource_mut::<ControlGroups>().remove(id);
 
@@ -1578,7 +1634,7 @@ pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: Simulat
     let announced = SimulationEvent::EntityCaptured {
         entity: id,
         entity_type: entity_def::type_id(world, entity),
-        from,
+        from: entity_def::owner(world, entity),
         to,
         by,
         position: entity_def::whereabouts(world, entity),
@@ -1591,14 +1647,47 @@ pub fn change_owner(world: &mut World, entity: Entity, to: PlayerId, by: Simulat
     settle_gateway(world, entity, GatewayLoss::Captured { to }, lean);
     settle_unadmitted_passengers(world, entity, to, lean);
 
-    // A rally set on an entity still rising was the old owner's choice of
-    // where it goes, or where what it releases goes.
-    if entity_def::rising(world, entity)
+    // A rally set on an entity still rising or changing form was the old
+    // owner's choice of where it goes, or where what it releases goes.
+    if (entity_def::rising(world, entity) || entity_def::changing(world, entity))
         && let Some(mut rally) = world.get_mut::<RallyPointComponent>(entity)
     {
         rally.0 = None;
     }
     world.entity_mut(entity).insert(OwnerComponent::new(to));
+    capture_consumed_crew(world, entity, to, by, lean);
+}
+
+/// Hands the builders consumed into `entity`, a rising site, to `to` along
+/// with it, each as [`hand_over`] does, its build order kept and every order
+/// queued behind it dropped: they go on raising the site for its new side.
+/// Nothing for an entity no consumed builder raises.
+fn capture_consumed_crew(
+    world: &mut World,
+    entity: Entity,
+    to: PlayerId,
+    by: SimulationId,
+    lean: Lean,
+) {
+    let workers = match world
+        .entity(entity)
+        .get::<RisingComponent>()
+        .map(|rising| rising.attendance.clone())
+    {
+        Some(RiseAttendance::Crew { workers }) => workers,
+        Some(RiseAttendance::Unattended { .. } | RiseAttendance::Halted) | None => return,
+    };
+    for id in workers {
+        let Some(worker) = world.resource::<EntityIndex>().alive(id) else {
+            continue;
+        };
+        match entity_def::builder_attendance(world, worker) {
+            Some(BuilderAttendance::Consumed) => {}
+            Some(BuilderAttendance::Crew(_) | BuilderAttendance::Unattended) | None => continue,
+        }
+        orders::drop_all_but_current(world, worker, CancelPolicy::Force);
+        hand_over(world, worker, to, by, lean);
+    }
 }
 
 /// Keeps aboard a transporter handed to `to` only what `to`'s boarding admits;
@@ -1921,16 +2010,10 @@ pub(crate) fn settle_broodlings(world: &mut World, breeder: Entity, origin: Enti
         match fate {
             OrphanFate::Perish => despawn_entity(world, broodling, DeathCause::Orphaned { of }),
             OrphanFate::Linger(_) => {
-                // Set down by the berth it sat at, where it was seen.
-                let berth = body::anchor(entity_def::position(world, broodling));
-                let size = entity_def::footprint(world, broodling).1;
+                // Set down by the berth it sat at.
+                let berth = berths::held_berth(world, broodling);
                 unseat(world, broodling);
-                stand_or_retry(
-                    world,
-                    broodling,
-                    Beside::Footprint(CellRect::new(berth, size)),
-                    Lean::Nothing,
-                );
+                stand_or_retry(world, broodling, berth, Lean::Nothing);
             }
         }
     }
@@ -1938,27 +2021,21 @@ pub(crate) fn settle_broodlings(world: &mut World, breeder: Entity, origin: Enti
 
 /// Detaches a broodling that has given its seat up and that the form
 /// `breeder` wears does not hold, on `fate`'s terms: perishing, it dies
-/// **unseated**; lingering, its tie is cut and it is set down by `berth`, the
-/// cell it sat at.
+/// **unseated**; lingering, its tie is cut and it is set down beside `berth`,
+/// the berth it sat at.
 fn detach_broodling(
     world: &mut World,
     breeder: Entity,
     of: SimulationId,
     entity: Entity,
-    berth: CellPos,
+    berth: Beside,
     fate: OrphanFate,
 ) {
     match fate {
         OrphanFate::Perish => despawn_entity(world, entity, DeathCause::Unseated { of }),
         OrphanFate::Linger(_) => {
             brood::untie(world, breeder, entity);
-            let size = entity_def::footprint(world, entity).1;
-            stand_or_retry(
-                world,
-                entity,
-                Beside::Footprint(CellRect::new(berth, size)),
-                Lean::Nothing,
-            );
+            stand_or_retry(world, entity, berth, Lean::Nothing);
         }
     }
 }
@@ -2589,34 +2666,11 @@ fn check_starts(registry: &ContentRegistry, def: &EntityTypeDef, starts: &[(Pool
 }
 
 /// The cell [`place_back_beside`] would stand `entity` on, or `None` when
-/// nothing within the search radius takes it: an attached entity steps out
-/// of the berth it sits at; any other comes out beside `beside`, the cells
-/// `lean` names first.
+/// nothing within the search radius takes it (see [`beside_lander`]).
 ///
 /// Panics for a `Lean::WentIn` on an entity that is not hidden.
 fn cell_back_beside(world: &World, entity: Entity, beside: Beside, lean: Lean) -> Option<CellPos> {
-    let (from, around, toward) = if entity_def::attached(world, entity) {
-        let berth = CellRect::new(
-            body::anchor(entity_def::position(world, entity)),
-            CellSize::ONE,
-        );
-        (ComesFrom::berth(world, entity, berth), berth, berth)
-    } else {
-        let around = entity_def::beside_rect(world, entity, beside);
-        (
-            ComesFrom::beside(world, entity, beside, 1),
-            around,
-            lean_rect(world, entity, around, lean),
-        )
-    };
-    let lander = Lander {
-        def: entity_def::of(world, entity),
-        owner: entity_def::owner(world, entity),
-        from,
-        bound: Bound::Radius,
-        around,
-        toward,
-    };
+    let lander = beside_lander(world, entity, beside, lean);
     landing::set_down(world, lander, &[], &[entity], |_, _| true)
 }
 

@@ -1066,6 +1066,37 @@ fn capture_of_last_burrow_loses_everyone_in_old_owners_warren() {
 }
 
 #[test]
+fn consumed_mole_captured_with_its_mound_loses_everyone_in_old_owners_warren() {
+    let mut app = app();
+    let (mole, mole_id) = utils::create_owned(&mut app, "nesting_mole", 10, 10, 0);
+    let (beast, beast_id) = utils::create_owned(&mut app, "beast", 9, 10, 0);
+    utils::send_to(&mut app, beast_id, mole_id);
+    utils::run_ticks(&mut app, utils::APPLY + 10);
+    assert_eq!(held_in(&app, mole), vec![beast_id]);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: mole_id,
+            type_name: "mound".into(),
+            position: utils::pos(12, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 3);
+    assert!(entity_def::hidden(app.world(), mole));
+
+    // The mole is the warren's last gateway on player 0's side; handed to
+    // player 1 with the mound it raises, it leaves player 0's warren, and
+    // everyone inside goes with it.
+    let mound = utils::single_owned_of_type(app.world_mut(), "mound", 0);
+    spawn::change_owner(app.world_mut(), mound, 1, mole_id, Lean::Nothing);
+
+    assert_eq!(entity_def::owner(app.world(), mole), Some(1));
+    assert!(entity_def::dying(app.world(), beast));
+    assert!(held_in_key(&app, warren_of(&app, 0)).is_empty());
+}
+
+#[test]
 fn captured_neutral_burrow_lets_out_everyone_in_captors_warren() {
     let mut app = app();
     let (_, entrance_id) = utils::create_owned(&mut app, "burrow", 5, 10, 0);
@@ -1702,10 +1733,34 @@ fn beast_waits_to_cross_until_cell_beside_other_end_frees() {
 
 #[test]
 fn beast_waits_to_cross_while_nothing_in_other_ends_unload_range_takes_it() {
-    // The tunnel's far end at (20, 20) lets bodies out one cell off, and
-    // critters, which no tunnel carries, stand on all eight cells of that
-    // ring. The open ground two cells off lies well inside the placement
-    // search's radius: the beast waits rather than stepping out there.
+    // The tunnel's far end at (20, 20) lets bodies out one cell off, and an
+    // enemy's critters, which no tunnel carries and which make no way for the
+    // beast, stand on all eight cells of that ring. The open ground two cells
+    // off lies well inside the placement search's radius: the beast waits
+    // rather than stepping out there.
+    let mut app = app();
+    let ((_, raiser_id), _) = tunnel_pair(&mut app, (5, 5), (20, 20));
+    let (beast, beast_id) = utils::create_owned(&mut app, "beast", 4, 5, 0);
+    for y in 19..22 {
+        for x in 19..22 {
+            if (x, y) != (20, 20) {
+                utils::create_owned(&mut app, "critter", x, y, 1);
+            }
+        }
+    }
+
+    utils::board(&mut app, beast_id, raiser_id);
+    utils::run_ticks(&mut app, utils::APPLY + 5);
+
+    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 5));
+}
+
+#[test]
+fn own_critters_at_other_end_make_way_for_beast_crossing() {
+    // The same ring at the far end held by the beast's own idle critters: the
+    // crossing that finds no cell asks the one on (19, 19), the cell it would
+    // take, off it, and the beast crosses onto it on the fourth tick, once the
+    // critter has walked clear.
     let mut app = app();
     let ((_, raiser_id), _) = tunnel_pair(&mut app, (5, 5), (20, 20));
     let (beast, beast_id) = utils::create_owned(&mut app, "beast", 4, 5, 0);
@@ -1718,9 +1773,10 @@ fn beast_waits_to_cross_while_nothing_in_other_ends_unload_range_takes_it() {
     }
 
     utils::board(&mut app, beast_id, raiser_id);
-    utils::run_ticks(&mut app, utils::APPLY + 5);
-
+    utils::run_ticks(&mut app, 3);
     assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 5));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(19, 19));
 }
 
 //
@@ -1833,7 +1889,8 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
 ///   gateway: `burrow`, `great_burrow`, `burrow_deepening`, `deep_burrow`,
 ///   the entrance-only `entrance_burrow`, the exit-only `exit_burrow`, a
 ///   `slow_burrow` taking one body in and letting one out every
-///   `SLOW_PERIOD` ticks, a walking `mole`, and a walking exit-only
+///   `SLOW_PERIOD` ticks, a walking `mole`, a walking `nesting_mole`
+///   consumed into the `mound` it raises, and a walking exit-only
 ///   `pocket_burrow` that rides, as `portable`;
 /// - a `hollow` network of three own `beast`s set down beside its last
 ///   gateway, the `hollow`;
@@ -1969,6 +2026,19 @@ fn register(app: &mut App) {
             .with_dying(1, [])
             .with_gateway(Joins::Network(warren), Doors::Both),
     )));
+    registry.register(
+        leaving(entering(
+            utils::walker("nesting_mole", utils::GROUND_DOMAIN)
+                .with_pool(Pool::health(100))
+                .with_dying(1, [])
+                .with_gateway(Joins::Network(warren), Doors::Both),
+        ))
+        .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+        .with_builder(["mound"], BuilderAttendance::Consumed),
+    );
+    registry.register(
+        utils::building("mound").with_rise(RISE_TIME, utils::rise_initial_pools(&[PoolId::HEALTH])),
+    );
     registry.register(leaving(
         utils::walker("pocket_burrow", utils::GROUND_DOMAIN)
             .with_pool(Pool::health(100))

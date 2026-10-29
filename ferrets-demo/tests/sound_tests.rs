@@ -107,6 +107,30 @@ fn kill_of_cargo_inside_holder_makes_no_sound() {
 }
 
 #[test]
+fn capture_of_holder_and_its_cargo_is_heard_once() {
+    let mut app = sound_app();
+    let world = app.world_mut();
+    let (bunker, bunker_id) =
+        utils::create_entity(world, "bunker", utils::at_cell(6, 6), Some(1)).unwrap();
+    let (cargo, cargo_id) =
+        utils::create_entity(world, "grunt", utils::at_cell(6, 8), Some(1)).unwrap();
+    assert_eq!(spawn::board(world, cargo, bunker), Boarding::Boarded);
+    utils::run_ticks(&mut app, 1);
+    let world = app.world_mut();
+    let bunker_taken = captured(world, bunker, bunker_id);
+    let cargo_taken = captured(world, cargo, cargo_id);
+    world.resource_mut::<EventRecord>().emit(bunker_taken);
+    world.resource_mut::<EventRecord>().emit(cargo_taken);
+    play(&mut app);
+
+    assert_eq!(
+        cue_cells(&mut app),
+        vec![CellPos::new(6, 6)],
+        "everything taken in one place at once is heard once"
+    );
+}
+
+#[test]
 fn canceled_death_makes_no_sound() {
     let mut app = sound_app();
     let world = app.world_mut();
@@ -401,6 +425,78 @@ fn concealed_fire_in_sight_of_watched_side_is_not_heard() {
     utils::run_ticks(&mut app, 1);
 
     play_fire(&mut app);
+    assert_eq!(cue_count(&mut app), 0);
+}
+
+#[test]
+fn capture_of_concealed_depot_in_sight_of_watched_side_is_not_heard() {
+    // An observer watching player 1, whose marine stands beside player 0's
+    // depot: the depot is concealed from player 1, so its capture is heard
+    // only where it is made out, and here it is only glimpsed.
+    let mut app = sound_app_as(LocalRole::Observer);
+    app.insert_resource(FogReveal::Fogged);
+    app.insert_resource(ObserverPerspective(Some(1)));
+    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+        .expect("the demo content defines a marine");
+    let (depot, depot_id) = utils::create_entity(
+        app.world_mut(),
+        "supply_depot",
+        utils::at_cell(8, 8),
+        Some(0),
+    )
+    .expect("the demo content defines a supply depot");
+    let ambushing = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity_buff("ambushing")
+        .expect("the demo content defines the ambush");
+    assert_eq!(
+        game_loop::buffs::apply_entity_buff(app.world_mut(), depot, ambushing),
+        Bearing::Borne
+    );
+    utils::run_ticks(&mut app, 1);
+    let world = app.world_mut();
+    let taken = captured(world, depot, depot_id);
+    world.resource_mut::<EventRecord>().emit(taken);
+    play(&mut app);
+
+    assert_eq!(cue_count(&mut app), 0);
+}
+
+#[test]
+fn rise_of_concealed_depot_in_sight_of_watched_side_is_not_heard() {
+    // As above, the depot only glimpsed by the watched side as it rises.
+    let mut app = sound_app_as(LocalRole::Observer);
+    app.insert_resource(FogReveal::Fogged);
+    app.insert_resource(ObserverPerspective(Some(1)));
+    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+        .expect("the demo content defines a marine");
+    let (depot, depot_id) = utils::create_entity(
+        app.world_mut(),
+        "supply_depot",
+        utils::at_cell(8, 8),
+        Some(0),
+    )
+    .expect("the demo content defines a supply depot");
+    let ambushing = app
+        .world()
+        .resource::<ContentRegistry>()
+        .entity_buff("ambushing")
+        .expect("the demo content defines the ambush");
+    assert_eq!(
+        game_loop::buffs::apply_entity_buff(app.world_mut(), depot, ambushing),
+        Bearing::Borne
+    );
+    utils::run_ticks(&mut app, 1);
+    app.world_mut()
+        .resource_mut::<EventRecord>()
+        .emit(SimulationEvent::EntityRisen {
+            entity: depot_id,
+            by: SimulationId(0),
+            origin: RiseOrigin::Founded { payer: Some(0) },
+        });
+    play(&mut app);
+
     assert_eq!(cue_count(&mut app), 0);
 }
 
@@ -808,6 +904,19 @@ fn hit_at(victim: SimulationId, position: FixedUVec2) -> SimulationEvent {
         attacker_owner: Some(0),
         amount: FixedU64::ONE,
         position,
+    }
+}
+
+/// Player 0's capture of `entity`, `id`, from player 1, announced where it
+/// is.
+fn captured(world: &World, entity: Entity, id: SimulationId) -> SimulationEvent {
+    SimulationEvent::EntityCaptured {
+        entity: id,
+        entity_type: entity_def::type_id(world, entity),
+        from: Some(1),
+        to: 0,
+        by: id,
+        position: entity_def::whereabouts(world, entity),
     }
 }
 

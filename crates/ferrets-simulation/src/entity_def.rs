@@ -350,7 +350,10 @@ pub fn concealed(world: &World, entity: Entity) -> bool {
 /// switched-off entity changes form all the same, and one changing form
 /// still operates.
 pub fn changing(world: &World, entity: Entity) -> bool {
-    world.entity(entity).contains::<MorphComponent>()
+    world
+        .entity(entity)
+        .get::<MorphComponent>()
+        .is_some_and(|morph| morph.is_under_way())
 }
 
 /// Whether a change of form is under way on `entity` while it still wears the
@@ -359,7 +362,7 @@ pub fn changing_in_origin(world: &World, entity: Entity) -> bool {
     world
         .entity(entity)
         .get::<MorphComponent>()
-        .is_some_and(|morph| morph.from == type_id(world, entity))
+        .is_some_and(|morph| morph.is_under_way() && morph.from == type_id(world, entity))
 }
 
 /// Returns the [`Operation`] `entity` is in. One off the map waiting on a cell
@@ -414,6 +417,7 @@ pub fn morph_origin(world: &World, entity: Entity) -> EntityTypeId {
     world
         .entity(entity)
         .get::<MorphComponent>()
+        .filter(|morph| morph.is_under_way())
         .map_or_else(|| type_id(world, entity), |morph| morph.from)
 }
 
@@ -517,22 +521,6 @@ pub fn mover_shape(registry: &ContentRegistry, location_def: &LocationDef) -> Mo
     )
 }
 
-/// Whether `entity`, standing on the cells `from`, reaches `goal` within
-/// `range`: a touch needs an edge between them its domain could step. Its
-/// shape is read only once `goal` lies within `range`.
-pub fn reaches(world: &World, entity: Entity, from: CellRect, goal: CellRect, range: u32) -> bool {
-    let map = world.resource::<Map>();
-    if !map.projection().in_range_for_rects(from, goal, range) {
-        return false;
-    }
-    let location = of(world, entity)
-        .location
-        .expect("only entities with a location reach");
-    let shape = mover_shape(world.resource::<ContentRegistry>(), &location);
-    map.nav_grid()
-        .reaches(map.projection(), from, shape, goal, range)
-}
-
 /// Returns where `entity` stands.
 ///
 /// Panics if `entity` is not a simulation entity, or is off the map: a hidden
@@ -568,7 +556,9 @@ pub fn whereabouts(world: &World, entity: Entity) -> FixedUVec2 {
         Some(container) => whereabouts(world, container),
         None => match waiting_beside(world, entity) {
             Some((Beside::Container(_), last)) => FixedUVec2::from(last.origin),
-            Some((Beside::WentIn | Beside::Footprint(_), _)) | None => went_in(world, entity),
+            Some((Beside::WentIn | Beside::Footprint(_) | Beside::Berth { .. }, _)) | None => {
+                went_in(world, entity)
+            }
         },
     }
 }
@@ -608,15 +598,15 @@ pub fn inside(world: &World, entity: Entity) -> Option<Entity> {
         }
         Inside::Waiting { beside, .. } => match beside {
             Beside::Container(id) => index.any(id),
-            Beside::WentIn | Beside::Footprint(_) => None,
+            Beside::WentIn | Beside::Footprint(_) | Beside::Berth { .. } => None,
         },
         // A link is no entity.
         Inside::Link(_) | Inside::Nothing => None,
     }
 }
 
-/// The footprint of `entity` as it stands, or, off the map, that of what it is
-/// [`inside`] out to the first that stands; once nothing it is inside
+/// The cells `entity` stands on ([`standing_rect`]), or, off the map, those of
+/// what it is [`inside`] out to the first that stands; once nothing it is inside
 /// remains, the footprint a deferred return beside a container last searched,
 /// else where it went in.
 ///
@@ -624,13 +614,15 @@ pub fn inside(world: &World, entity: Entity) -> Option<Entity> {
 /// location.
 pub fn outer_rect(world: &World, entity: Entity) -> CellRect {
     if world.entity(entity).contains::<LocationComponent>() {
-        return footprint_rect(world, entity);
+        return standing_rect(world, entity);
     }
     match inside(world, entity) {
         Some(container) => outer_rect(world, container),
         None => match waiting_beside(world, entity) {
             Some((Beside::Container(_), last)) => last,
-            Some((Beside::WentIn | Beside::Footprint(_), _)) | None => went_in_rect(world, entity),
+            Some((Beside::WentIn | Beside::Footprint(_) | Beside::Berth { .. }, _)) | None => {
+                went_in_rect(world, entity)
+            }
         },
     }
 }
@@ -647,13 +639,19 @@ pub fn beside_rect(world: &World, entity: Entity, beside: Beside) -> CellRect {
             Some(container) => outer_rect(world, container),
             None => match waiting_beside(world, entity) {
                 Some((Beside::Container(waiting_id), last)) if waiting_id == id => last,
-                Some((Beside::Container(_) | Beside::WentIn | Beside::Footprint(_), _)) | None => {
-                    own_rect(world, entity)
-                }
+                Some((
+                    Beside::Container(_)
+                    | Beside::WentIn
+                    | Beside::Footprint(_)
+                    | Beside::Berth { .. },
+                    _,
+                ))
+                | None => own_rect(world, entity),
             },
         },
         Beside::WentIn => own_rect(world, entity),
         Beside::Footprint(rect) => rect,
+        Beside::Berth { rect, .. } => rect,
     }
 }
 
@@ -750,6 +748,17 @@ pub fn effective_ticks(world: &World, entity: Entity, stat: EntityStatId) -> u32
         .expect("simulation entity must have a stat store")
         .effective_ticks(stat)
         .expect("the capability pairs the entity with this stat")
+}
+
+/// The size `entity`'s type declares, wherever it is.
+///
+/// Panics if `entity` is not a simulation entity, or its type declares no
+/// location.
+pub fn location_size(world: &World, entity: Entity) -> CellSize {
+    of(world, entity)
+        .location
+        .expect("only entities with LocationDef have a footprint")
+        .size()
 }
 
 /// Returns where `entity` stands and how much room it takes.
@@ -952,14 +961,6 @@ fn went_in(world: &World, entity: Entity) -> FixedUVec2 {
         .expect("an entity with no location is hidden")
         .went_in
         .position
-}
-
-/// The size `entity`'s type declares. Panics for a type with no location.
-fn location_size(world: &World, entity: Entity) -> CellSize {
-    of(world, entity)
-        .location
-        .expect("only entities with LocationDef have a footprint")
-        .size()
 }
 
 /// What a waiting `entity`'s return searches beside and the footprint it last

@@ -19,7 +19,10 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSi
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::layer_mask::LayerMask;
 
-use super::{acquire, attack, chase, turn};
+use super::{
+    acquire::{self, Pursuit},
+    attack, chase, turn,
+};
 use crate::{
     components::{
         order_queue::{OrderQueueComponent, OrderState},
@@ -28,8 +31,9 @@ use crate::{
     },
     entity_def::{self, Operation},
     entity_index::EntityIndex,
-    impacts::FiredFrom,
+    impacts::{AimedAt, FiredFrom},
     order::{AttackTarget, Order},
+    reach,
     session::GameSession,
     simulation_id::SimulationId,
 };
@@ -151,7 +155,8 @@ fn decide(
     // for itself is given up, not merely left unrenewed.
     let held = match state.quarry {
         Some(AttackTarget::Entity(held))
-            if conditions.hunts && acquire::qualifies(world, entity, gun.targets, held, notice) =>
+            if conditions.hunts
+                && acquire::qualifies(world, entity, gun.targets, held, notice, Pursuit::Holds) =>
         {
             Some(held)
         }
@@ -174,8 +179,17 @@ fn decide(
     } else {
         (entity_def::standing_rect(world, entity), &[][..])
     };
-    acquire::find_target_apart_from(world, entity, from, gun.targets, notice, apart_from, held)
-        .map(AttackTarget::Entity)
+    acquire::find_target_apart_from(
+        world,
+        entity,
+        from,
+        gun.targets,
+        notice,
+        Pursuit::Holds,
+        apart_from,
+        held,
+    )
+    .map(AttackTarget::Entity)
 }
 
 /// One tick of one gun: it comes round on what it is working, and swings when that
@@ -186,10 +200,11 @@ fn work_turret(world: &mut World, entity: Entity, gun: &Gun, state: &mut TurretS
     };
     // Fail-closed residue: what a gun holds was checked this tick, so nothing is
     // expected to have gone in between.
-    let Some((target, target_position, target_size)) = resolve(world, quarry) else {
+    let Some(aimed) = resolve(world, quarry) else {
         state.switch_quarry(None);
         return;
     };
+    let (target_position, target_size) = aimed.footprint(world);
 
     // Coming round happens whether or not the shot can be taken, so an approach is
     // spent aiming rather than waiting.
@@ -210,17 +225,10 @@ fn work_turret(world: &mut World, entity: Entity, gun: &Gun, state: &mut TurretS
         gun.reads.period,
         gun.reads.damage_point,
     );
-    let (position, size) = entity_def::footprint(world, entity);
+    let position = entity_def::position(world, entity);
     // Reach is the body's, not the gun's corner: a target in range of what carries
     // the guns is in range of all of them.
-    if !attack::within(
-        world,
-        entity,
-        position,
-        size,
-        attack::reached(target, target_position, target_size),
-        stats.range,
-    ) {
+    if !reach::in_reach(world, entity, aimed.reached(world), stats.range) {
         // Out of reach the cycle waits at its start, as a walking attacker's swing
         // does when its target steps out of range.
         state.phase = 0;
@@ -239,8 +247,7 @@ fn work_turret(world: &mut World, entity: Entity, gun: &Gun, state: &mut TurretS
         entity,
         FiredFrom::Turret(gun.turret),
         muzzle(position, gun),
-        target,
-        target_position,
+        aimed,
         &stats,
         &mut state.phase,
     );
@@ -268,14 +275,13 @@ fn muzzle(position: FixedUVec2, gun: &Gun) -> FixedUVec2 {
 
 /// What a quarry is to shoot at: a body wherever it now stands, or the cell a
 /// shot was sent to. A body that is gone is nothing to work.
-fn resolve(world: &World, quarry: AttackTarget) -> Option<(Option<Entity>, FixedUVec2, CellSize)> {
+fn resolve(world: &World, quarry: AttackTarget) -> Option<AimedAt> {
     match quarry {
-        AttackTarget::Position(cell) => Some((None, cell, CellSize::ONE)),
-        AttackTarget::Entity(id) => {
-            let target = world.resource::<EntityIndex>().interactable(world, id)?;
-            let (at, size) = entity_def::footprint(world, target);
-            Some((Some(target), at, size))
-        }
+        AttackTarget::Position(cell) => Some(AimedAt::Point(cell)),
+        AttackTarget::Entity(id) => world
+            .resource::<EntityIndex>()
+            .interactable(world, id)
+            .map(AimedAt::Body),
     }
 }
 
@@ -286,11 +292,11 @@ fn resolve(world: &World, quarry: AttackTarget) -> Option<(Option<Entity>, Fixed
 /// along on an approach spends it coming round — and one that could never work
 /// this target at all is left free to answer whatever is nearer.
 fn bears(world: &World, entity: Entity, gun: &Gun, ordered: AttackTarget) -> bool {
-    let Some((target, target_position, target_size)) = resolve(world, ordered) else {
+    let Some(aimed) = resolve(world, ordered) else {
         return false;
     };
-    match target {
-        Some(target) => {
+    match aimed {
+        AimedAt::Body(target) => {
             if !targeting::reaches(
                 world.resource::<ContentRegistry>(),
                 gun.targets,
@@ -301,22 +307,14 @@ fn bears(world: &World, entity: Entity, gun: &Gun, ordered: AttackTarget) -> boo
         }
         // A bare cell is worked only by a gun whose shots are sent to one; the
         // rest are left free to answer what has a body.
-        None => {
+        AimedAt::Point(_) => {
             if !gun.aims_at_cells {
                 return false;
             }
         }
     }
     let range = entity_def::effective_stat_u32(world, entity, gun.reads.acquire_range);
-    let (position, size) = entity_def::footprint(world, entity);
-    attack::within(
-        world,
-        entity,
-        position,
-        size,
-        attack::reached(target, target_position, target_size),
-        range,
-    )
+    reach::in_reach(world, entity, aimed.reached(world), range)
 }
 
 /// What the body has been ordered to attack, if anything.

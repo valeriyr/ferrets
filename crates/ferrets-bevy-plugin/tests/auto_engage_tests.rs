@@ -15,6 +15,7 @@ use ferrets_simulation::{
         stance::{Stance, StanceComponent},
     },
     entity_def,
+    map::Map,
     order::Order,
     session::GameSession,
 };
@@ -217,6 +218,81 @@ fn unit_engages_nearer_of_two_by_cells_target_stands_on() {
     // The first swing landed on the nearer: 60 - 10.
     assert_eq!(utils::health(&app, part_way), utils::fixed("50"));
     assert_eq!(utils::health(&app, whole), utils::fixed("60"));
+}
+
+#[test]
+fn unit_engages_only_targets_it_can_reach() {
+    let mut app = utils::orders_app();
+    // The ox three cells east is walled in on every side; the one four cells
+    // south stands in the open. Both lie within the sentry's acquisition range
+    // of five, and its blade reaches one cell.
+    let (walled, _) = utils::create_owned(&mut app, "ox", 13, 10, 1);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for x in 12..=14 {
+            for y in 9..=11 {
+                if (x, y) != (13, 10) {
+                    map.set_static_occupied(utils::GROUND, CellPos::new(x, y), true);
+                }
+            }
+        }
+    }
+    let (open, _) = utils::create_owned(&mut app, "ox", 10, 14, 1);
+    utils::create_owned(&mut app, "sentry", 10, 10, 0);
+
+    for _ in 0..60 {
+        if utils::health(&app, open) < utils::fixed("60")
+            || utils::health(&app, walled) < utils::fixed("60")
+        {
+            break;
+        }
+        utils::run_ticks(&mut app, 1);
+    }
+
+    // The first swing landed on the open one: 60 - 10.
+    assert_eq!(utils::health(&app, open), utils::fixed("50"));
+    assert_eq!(utils::health(&app, walled), utils::fixed("60"));
+}
+
+#[test]
+fn attack_moving_unit_engages_only_targets_it_can_reach() {
+    // The walled ox and the open one of the test above; the sentry
+    // attack-moves from (10, 10) to (10, 16).
+    let mut app = utils::orders_app();
+    let (walled, _) = utils::create_owned(&mut app, "ox", 13, 10, 1);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for x in 12..=14 {
+            for y in 9..=11 {
+                if (x, y) != (13, 10) {
+                    map.set_static_occupied(utils::GROUND, CellPos::new(x, y), true);
+                }
+            }
+        }
+    }
+    let (open, _) = utils::create_owned(&mut app, "ox", 10, 14, 1);
+    let (sentry, sentry_id) = utils::create_owned(&mut app, "sentry", 10, 10, 0);
+    utils::select(&mut app, sentry_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::AttackMove {
+            target: utils::pos(10, 16),
+            flush: true,
+        },
+    );
+
+    // Walking south past the walled ox at (13, 10), the sentry takes on the
+    // open one at (10, 14) instead, its first blow landing on the twelfth
+    // tick: 60 - 10.
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(utils::health(&app, open), utils::fixed("60"));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::health(&app, open), utils::fixed("50"));
+    assert_eq!(utils::health(&app, walled), utils::fixed("60"));
+    assert_eq!(
+        utils::cell_of(app.world_mut(), sentry),
+        CellPos::new(10, 13)
+    );
 }
 
 #[test]

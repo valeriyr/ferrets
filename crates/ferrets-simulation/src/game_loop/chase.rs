@@ -14,6 +14,7 @@ use crate::{
     components::chase::{ChaseRound, ChaseState},
     entity_def,
     order::Order,
+    reach,
 };
 
 /// Where a chaser stands relative to its destination this tick.
@@ -38,15 +39,7 @@ pub fn advance_to_point(
     range: u32,
 ) -> Destination {
     let goal = CellRect::new(CellPos::from(destination), destination_size);
-    close_on(
-        last_chase,
-        world,
-        chaser,
-        goal,
-        destination,
-        destination_size,
-        range,
-    )
+    close_on(last_chase, world, chaser, goal, destination, range)
 }
 
 /// Like [`advance_to_point`], toward the target entity `destination`, a body
@@ -58,16 +51,13 @@ pub fn advance_to_entity(
     destination: Entity,
     range: u32,
 ) -> Destination {
-    let (destination_position, destination_size) = entity_def::footprint(world, destination);
-    let goal = body::standing_rect(destination_position, destination_size);
-
+    let goal = entity_def::standing_rect(world, destination);
     close_on(
         last_chase,
         world,
         chaser,
         goal,
-        destination_position,
-        destination_size,
+        FixedUVec2::from(goal.origin),
         range,
     )
 }
@@ -156,49 +146,36 @@ fn center_of((origin, size): (FixedUVec2, CellSize)) -> FixedVec2 {
     )
 }
 
-/// Arrives when `chaser` reaches `goal` within `range`, else walks toward
-/// the footprint at `destination`, or gives up when the last walk made no
-/// progress.
+/// Arrives when `chaser` reaches `goal` within `range`, else walks to within
+/// `range` of `goal` — named by `toward`, its first cell or the point an order
+/// names in it — or gives up when the last walk made no progress.
 fn close_on(
     last_chase: &mut ChaseState,
     world: &World,
     chaser: Entity,
     goal: CellRect,
-    destination: FixedUVec2,
-    destination_size: CellSize,
+    toward: FixedUVec2,
     range: u32,
 ) -> Destination {
-    let (from, from_size) = entity_def::footprint(world, chaser);
+    let from = entity_def::position(world, chaser);
     // The chaser is judged by every cell it stands on. Judging a body by one
     // cell of the two it lies across leaves it a little past a corner reading
     // as out of range on one axis or the other however it is quantized, and a
     // working neighbor's nudge decides which — so the walk arrives, the nudge
     // lands, this says out of range, and the round counts as no progress until
-    // the whole order gives up. The walk below plans toward the destination's
-    // floored cell, one of the goal's cells, so a walk that arrives by its own
-    // measure arrives by this one too.
+    // the whole order gives up. The walk below plans toward the goal itself,
+    // so a walk arrives by its own measure exactly where it arrives by this
+    // one.
     //
     // Both sides are footprints: a wide chaser reaches as far as its nearest
     // edge, which is also how acquisition measures — the two must agree, or a
     // wide unit would acquire a target it then walks straight past.
-    if entity_def::reaches(
-        world,
-        chaser,
-        body::standing_rect(from, from_size),
-        goal,
-        range,
-    ) {
+    if reach::in_reach(world, chaser, goal, range) {
         *last_chase = None;
         return Destination::Arrived;
     }
 
-    walk_or_give_up(
-        last_chase,
-        body::anchor(from),
-        destination,
-        destination_size,
-        range,
-    )
+    walk_or_give_up(last_chase, body::anchor(from), toward, goal.size, range)
 }
 
 /// Walks from `own` to within `range` of the footprint at `destination`, of

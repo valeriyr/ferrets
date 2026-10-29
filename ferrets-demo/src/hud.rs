@@ -1149,7 +1149,9 @@ pub fn update_command_card(
         entities.iter().any(|(info, morph, _)| {
             info.id() == id
                 && (registry.def(info.type_id()).breeder.is_some()
-                    || morph.is_some_and(|morph| registry.def(morph.from).breeder.is_some()))
+                    || morph.is_some_and(|morph| {
+                        morph.is_under_way() && registry.def(morph.from).breeder.is_some()
+                    }))
         })
     });
     let has_brood = leading_breeds
@@ -1164,7 +1166,7 @@ pub fn update_command_card(
         leading.0.is_some_and(|id| {
             entities.iter().any(|(info, morph, owner)| {
                 info.id() == id
-                    && morph.is_some()
+                    && morph.is_some_and(|morph| morph.is_under_way())
                     && owner.is_some_and(|owner| owner.player() == local)
             })
         })
@@ -1490,7 +1492,8 @@ fn own_broodlings(
         .iter()
         .filter(|(info, owner, morph)| {
             owner.player() == player
-                && (bred_type(info.type_id()) || morph.is_some_and(|morph| bred_type(morph.from)))
+                && (bred_type(info.type_id())
+                    || morph.is_some_and(|morph| morph.is_under_way() && bred_type(morph.from)))
         })
         .map(|(info, _, _)| info.id())
         .collect()
@@ -1738,6 +1741,7 @@ pub fn update_card_availability(world: &mut World) {
     let calls_off = |world: &World| {
         leading
             .and_then(|entity| world.entity(entity).get::<MorphComponent>())
+            .filter(|morph| morph.is_under_way())
             .and_then(|morph| entity_def::morph_terms(world, morph))
             .is_some_and(|transition| match transition.cancel() {
                 MorphCancel::Refundable | MorphCancel::Forfeit => true,

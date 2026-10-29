@@ -643,8 +643,11 @@ fn body_mid_crossing_lifts_cell_its_crossing_claimed() {
     utils::order_move(&mut app, snail, 1, 5);
     utils::run_ticks(&mut app, 1);
 
-    // Nearest (5, 5) on the claimed cell, lifted with the snail.
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(4, 5));
+    // The snail stood across (4, 5), the cell its crossing claimed, and
+    // (5, 5): the mage takes (5, 5), and the snail the mage's (9, 5). Neither
+    // lands with the crossing's claim left standing: the claim kept on (4, 5)
+    // and the mage's own on (9, 5) refuse the swap.
+    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(5, 5));
     assert_eq!(utils::cell_of(app.world(), snail), CellPos::new(9, 5));
 }
 
@@ -742,6 +745,42 @@ fn homeward_goes_to_nearest_finished_hall() {
 
     // Beside the hall at (14..16, 5..7), on the side it came from.
     assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(13, 5));
+}
+
+#[test]
+fn homeward_goes_to_home_nearest_by_cells_it_stands_on() {
+    // Under the continuous model a caravan, a mover the side counts as a hall,
+    // rests at (10.5, 9), across (10, 9) and (11, 9); a hall stands at
+    // (9..10, 5..6). From the mage at (15, 5) the hall is five cells off and
+    // so is the caravan's floored cell, but the caravan stands on (11, 9), four
+    // off: the mage goes home to the caravan.
+    let mut app = app();
+    app.world_mut().resource_mut::<ContentRegistry>().register(
+        utils::walker("caravan", utils::GROUND_DOMAIN)
+            .with_pool(Pool::health(20))
+            .with_tags(["hall"]),
+    );
+    let projection = app.world().resource::<Map>().projection();
+    utils::install_map(&mut app, projection, MovementModel::Continuous);
+    let (mage, mage_id) = utils::create_owned(&mut app, "mage", 15, 5, 0);
+    utils::create_owned(&mut app, "hall", 9, 5, 0);
+    let (caravan, _) = utils::create_owned(&mut app, "caravan", 10, 9, 0);
+    utils::walk_onto(&mut app, caravan, utils::part_way("10.5", "9"), 10);
+
+    utils::cast_self(&mut app, mage_id, "homeward");
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    // Set down on (10, 9), the free cell nearest the mage beside the caravan's
+    // claim on (11, 9); contact then parts the two a quarter cell each. Gone
+    // home to the hall instead, it would stand at (11, 5).
+    assert_eq!(
+        utils::position_of(app.world(), mage),
+        utils::part_way("9.75", "9")
+    );
+    assert_eq!(
+        utils::position_of(app.world(), caravan),
+        utils::part_way("10.75", "9")
+    );
 }
 
 #[test]

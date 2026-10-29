@@ -375,6 +375,9 @@ impl Map {
         let layers = to.layers;
         let anchor = body::anchor(placed.position);
         CellRect::new(anchor, to.size).cells().all(|cell| {
+            if !self.nav_grid.is_occupied_by(layers, cell) {
+                return true;
+            }
             // The layers lifted bodies mark on this cell, plane by plane.
             let (mut static_lifted, mut claim_lifted) = (LayerMask::EMPTY, LayerMask::EMPTY);
             for mark in lifted {
@@ -387,7 +390,7 @@ impl Map {
                 }
             }
             if static_lifted == LayerMask::EMPTY && claim_lifted == LayerMask::EMPTY {
-                return !self.nav_grid.is_occupied_by(layers, cell);
+                return false;
             }
             // Whatever else is here is on a layer or plane the lifted
             // bodies do not mark.

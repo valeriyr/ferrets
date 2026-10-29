@@ -13,13 +13,14 @@
 //! an interim form, worn from the start of the change until it lands, and
 //! returned from when the change ends early.
 //!
-//! The order runs in four steps. A start is **judged** in full — every check,
-//! and every cell the start will need — before anything changes, and then
-//! **begun** in steps none of which can fail. The change **lands** when its
-//! progress runs out, on the transition's terms for a landing that finds its
-//! ground gone, and **ends early** on its terms for a cancel. A change that
-//! cannot happen finishes silently, like any other order that finds its work
-//! impossible.
+//! A start is **judged** in full — every check, and every cell the start will
+//! need — before anything changes; while own and allied movers stand on that
+//! ground it **waits** for them, asking them off, nothing paid or begun; then
+//! it is **begun** in steps none of which can fail. The change **lands** when
+//! its progress runs out, on the transition's terms for a landing that finds
+//! its ground gone, and **ends early** on its terms for a cancel. A change
+//! that cannot happen finishes silently, like any other order that finds its
+//! work impossible.
 
 use bevy_ecs::{change_detection::Mut, entity::Entity, world::World};
 use ferrets_content::{
@@ -34,7 +35,7 @@ use ferrets_content::{
     pool_def::PoolId,
     registry::ContentRegistry,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
@@ -45,15 +46,16 @@ use super::{
 };
 use crate::{
     berths,
-    beside::Lean,
+    beside::{Beside, Lean},
     brood,
     components::{
         entity_info::EntityInfoComponent,
         last_hit::LastHitComponent,
         location::LocationComponent,
-        morph::{MorphComponent, MorphReservation},
+        morph::{MorphComponent, MorphReservation, MorphStage, MorphUnderWay},
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderState},
+        patience::Waiting,
         pool_shifts::{self, PoolShiftTerms, PoolShiftsComponent},
         pools::{self, PoolsComponent},
         transport::TransporterComponent,
@@ -65,6 +67,7 @@ use crate::{
     game_loop::cost,
     ground,
     landing::{self, Bound, ComesFrom, Lander},
+    make_way::{self, Clearance, Shoved},
     map::Map,
     movement_model::{self, MovementModel},
     occupancy::{GridMark, OccupancyClass},
@@ -93,45 +96,66 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
 ///
 /// Judges the start again — the order may have waited in the queue since it
 /// was judged at issue — along with the requirements and the cost, and only
-/// then begins the change. A refused start finishes the order with nothing
-/// touched.
+/// then begins the change. A start whose ground own and allied movers stand
+/// on waits for them, nothing paid or begun (see [`process`]). A refused
+/// start finishes the order with nothing touched.
 pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     let Order::Morph { type_name } = order else {
         unreachable!("prepare called with a non-Morph order");
     };
-    let Ok(start) = judge(world, entity, type_name) else {
-        return OrderState::Finished;
-    };
-    let Some(player) = entity_def::owner(world, entity) else {
-        return OrderState::Finished;
-    };
-    if !requirements::met(world, player, Some(entity), start.transition.requires())
-        || !cost::can_pay(world, entity, player, start.transition.costs())
-    {
-        return OrderState::Finished;
+    match judge(world, entity, type_name) {
+        Ok(Judged::Starts(start)) => begin_judged(world, entity, type_name, *start),
+        // Waited for from the order's first process, this same tick, which
+        // counts the wait and asks the movers off.
+        Ok(Judged::Clears(_)) => {
+            let from = entity_def::type_id(world, entity);
+            world
+                .entity_mut(entity)
+                .insert(MorphComponent::clearing(from, type_name.to_string()));
+            OrderState::InProcessing
+        }
+        Err(_) => OrderState::Finished,
     }
-    begin(world, entity, player, type_name, start)
 }
 
 /// Advance a Morph order by one tick.
 ///
-/// The unit does nothing else while the progress runs; when it runs out the
-/// change lands on the transition's own terms.
-pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing {
+/// A change still waiting on bodies making way off its ground is judged
+/// again: it begins once the ground is clear, asks any new ones off, and
+/// gives up once its patience runs out (see [`make_way::wait_off`]). Under
+/// way, the unit does nothing else while the progress runs; when it runs out
+/// the change lands on the transition's own terms.
+pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
+    let Order::Morph { .. } = order else {
+        unreachable!("process called with a non-Morph order");
+    };
     let mut morph = world
         .entity_mut(entity)
         .take::<MorphComponent>()
-        .expect("a Morph order under way carries its change");
+        .expect("a Morph order in processing carries its change");
     let transition = entity_def::morph_terms(world, &morph)
-        .expect("a change under way is one the form it came from declares");
+        .expect("a change of form is one the form it comes from declares");
+    let under_way = match &mut morph.stage {
+        MorphStage::Clearing(_) => {
+            return Processing::state(start_or_wait(world, entity, morph));
+        }
+        MorphStage::UnderWay(under_way) => under_way,
+    };
     let time = entity_def::quantity_ticks(world, entity, transition.time());
 
-    morph.progress += 1;
-    if morph.progress < time {
+    under_way.progress += 1;
+    if under_way.progress < time {
         world.entity_mut(entity).insert(morph);
         return Processing::state(OrderState::InProcessing);
     }
-    match finish(world, entity, morph, &transition) {
+    match finish(
+        world,
+        entity,
+        morph.from,
+        &morph.into,
+        under_way,
+        &transition,
+    ) {
         Finish::Landed | Finish::Standing => Processing::state(OrderState::Finished),
         Finish::Dying => Processing::finished_dying(),
     }
@@ -164,17 +188,24 @@ pub fn cancel_processing(
     }
 
     let morph = world
-        .entity(entity)
-        .get::<MorphComponent>()
-        .expect("a Morph order under way carries its change");
-    let transition = entity_def::morph_terms(world, morph)
-        .expect("a change under way is one the form it came from declares");
+        .entity_mut(entity)
+        .take::<MorphComponent>()
+        .expect("a Morph order in processing carries its change");
+    // A change still waiting on its ground was never begun: nothing was paid
+    // or reserved for it.
+    let under_way = match &morph.stage {
+        MorphStage::Clearing(_) => return Processing::state(OrderState::Finished),
+        MorphStage::UnderWay(under_way) => under_way,
+    };
+    let transition = entity_def::morph_terms(world, &morph)
+        .expect("a change of form is one the form it comes from declares");
     let payment = match (transition.cancel(), policy) {
         // A committed window refuses the player's cancel only once it is
         // actually open: an entry still queued has taken nothing and
         // promised nothing, and drops like any other.
         (MorphCancel::Committed, CancelPolicy::Soft) => {
             if entry_state == OrderState::InProcessing {
+                world.entity_mut(entity).insert(morph);
                 return Processing::state(OrderState::InProcessing);
             }
             Payment::Kept
@@ -187,17 +218,13 @@ pub fn cancel_processing(
         (MorphCancel::Refundable, CancelPolicy::Soft) => Payment::Returned,
     };
 
-    let morph = world
-        .entity_mut(entity)
-        .take::<MorphComponent>()
-        .expect("a Morph order under way carries its change");
-    release_reservation(world, &morph);
+    release_reservation(world, under_way);
     // A dying entity keeps the form its death was announced in, and so does
     // one about to die on its transition's terms.
     if entity_def::dying(world, entity) {
         return Processing::state(OrderState::Finished);
     }
-    match abandon(world, entity, &morph, &transition, payment) {
+    match abandon(world, entity, morph.from, under_way, &transition, payment) {
         EarlyEnd::Standing => Processing::state(OrderState::Finished),
         EarlyEnd::Dying => Processing::finished_dying(),
     }
@@ -222,6 +249,56 @@ pub fn requirements_met(world: &World, player: PlayerId, entity: Entity, type_na
 // ─── Judging a start ────────────────────────────────────────────────────────
 //
 
+/// Judges the start of the change `morph` still clearing on `entity`, and
+/// begins it, waits on, or finishes the order: while its requirements are met
+/// and its cost payable, own and allied movers on the ground it needs are
+/// asked off and the order waits for them, `morph` put back on the entity,
+/// while its patience lasts (see [`make_way::wait_off`]); then the
+/// requirements and the cost are judged again and the change begins.
+fn start_or_wait(world: &mut World, entity: Entity, mut morph: MorphComponent) -> OrderState {
+    let patience = match &mut morph.stage {
+        MorphStage::Clearing(patience) => patience,
+        MorphStage::UnderWay(_) => unreachable!("only a change not begun is judged to start"),
+    };
+    let type_name = morph.into.as_str();
+    let start = match judge(world, entity, type_name) {
+        Ok(Judged::Starts(start)) => *start,
+        Ok(Judged::Clears(_)) if !payable(world, entity, type_name) => {
+            return OrderState::Finished;
+        }
+        Ok(Judged::Clears(bodies)) => {
+            let owner = entity_def::owner(world, entity);
+            return match make_way::wait_off(world, owner, &bodies, patience) {
+                Waiting::GivesUp => OrderState::Finished,
+                Waiting::Waits => {
+                    world.entity_mut(entity).insert(morph);
+                    OrderState::InProcessing
+                }
+            };
+        }
+        Err(_) => return OrderState::Finished,
+    };
+    begin_judged(world, entity, type_name, start)
+}
+
+/// Begins the change `start` settled once the requirements and the cost are
+/// met, or finishes the order with nothing touched.
+fn begin_judged(world: &mut World, entity: Entity, type_name: &str, start: Start) -> OrderState {
+    match payer(world, entity, &start.transition) {
+        Some(player) => begin(world, entity, player, type_name, start),
+        None => OrderState::Finished,
+    }
+}
+
+/// What a judged start needs before it begins.
+enum Judged {
+    /// Nothing: it begins as settled.
+    Starts(Box<Start>),
+    /// These own and allied movers off its ground first, each off the
+    /// footprint it stands in the way of.
+    Clears(Vec<(Entity, CellRect)>),
+}
+
 /// Everything a start needs, settled before anything changes and applied as
 /// found.
 struct Start {
@@ -245,8 +322,10 @@ struct Start {
 /// soft flush would leave or others sit in the entity's berths, when the
 /// entity does not operate, and when the ground refuses: no cell for an
 /// attached entity to step onto, none under the interim form where it will
-/// stand, or none under the footprint a reserving change would claim.
-fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusal> {
+/// stand, or none under the footprint a reserving change would claim, where
+/// something holds it. Ground only own and allied movers that clear stand on
+/// is [`Judged::Clears`], with those movers.
+fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refusal> {
     let Some(transition) = transition_into(world, entity, type_name) else {
         return Err(Refusal::Incapable);
     };
@@ -310,10 +389,8 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
         None => settled(world, type_id, standing, from, to),
     };
     let owner = entity_def::owner(world, entity);
-    let allowed = |worn_id: EntityTypeId, anchor: FixedUVec2| {
-        let def = world.resource::<ContentRegistry>().def(worn_id);
-        fields::allows_placement(world, owner, def, body::anchor(anchor))
-    };
+    let allowed =
+        |worn_id: EntityTypeId, anchor: FixedUVec2| fields_allow(world, owner, worn_id, anchor);
 
     // An attached entity holds no cells: before it changes it steps onto the
     // nearest cell to its berth that takes the form standing there through the
@@ -338,17 +415,15 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
             Some(OccupancyClass::Static) => ground::ground_holders(world, &[entity]),
             Some(OccupancyClass::Claim) | None => Vec::new(),
         };
-        let berth = CellRect::new(
-            body::anchor(entity_def::position(world, entity)),
-            CellSize::ONE,
-        );
+        let berth = berths::held_berth(world, entity);
+        let around = entity_def::beside_rect(world, entity, berth);
         let lander = Lander {
             def: stands,
             owner,
-            from: ComesFrom::berth(world, entity, berth),
+            from: ComesFrom::steps_out_of(world, entity, berth),
             bound: Bound::Radius,
-            around: berth,
-            toward: berth,
+            around,
+            toward: around,
         };
         let found = landing::set_down(world, lander, &[], &[entity], |cell, _| match reserved {
             Some(class) => {
@@ -359,10 +434,7 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
             }
             None => true,
         });
-        match found {
-            Some(cell) => Some(cell),
-            None => return Err(Refusal::NoRoom),
-        }
+        Some(found.ok_or(Refusal::NoRoom)?)
     } else {
         None
     };
@@ -376,25 +448,59 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
         .get::<LocationComponent>()
         .filter(|_| step_out.is_none() && on_grid);
     let own_class = OccupancyClass::of(entity_def::of(world, entity));
-    // The body never stands in its own way, standing or stepped out.
-    let takes = |worn_id: EntityTypeId, worn: LocationDef, anchor: FixedUVec2| {
+    // The body never stands in its own way, standing or stepped out; the
+    // movers whose `marks` are lifted, `bodies`, are set aside with it.
+    let takes = |worn_id: EntityTypeId,
+                 worn: LocationDef,
+                 anchor: FixedUVec2,
+                 marks: &[GridMark],
+                 bodies: &[Entity]| {
         let placed = LocationComponent::new(anchor, spawn::DEFAULT_FACING);
+        let lifted: Vec<GridMark> = own
+            .and_then(|location| entity_def::grid_mark_of(location, from, own_class))
+            .into_iter()
+            .chain(marks.iter().copied())
+            .collect();
+        let ignored: Vec<Entity> = std::iter::once(entity)
+            .chain(bodies.iter().copied())
+            .collect();
         allowed(worn_id, anchor)
             && ground::can_place(
                 world,
                 &placed,
                 worn,
                 OccupancyClass::of(world.resource::<ContentRegistry>().def(worn_id)),
-                own.and_then(|location| entity_def::grid_mark_of(location, from, own_class))
-                    .as_slice(),
-                &[entity],
+                &lifted,
+                &ignored,
             )
+    };
+    // Own and allied movers on a footprint the change needs are collected to
+    // be asked off: `false` when what stands there will not move or the
+    // ground refuses it whoever does.
+    let mut clears: Vec<(Entity, CellRect)> = Vec::new();
+    let mut cleared = |worn_id: EntityTypeId, worn: LocationDef, anchor: FixedUVec2| {
+        let footprint = CellRect::new(body::anchor(anchor), worn.size());
+        match make_way::clearance(
+            world,
+            owner,
+            footprint,
+            worn.occupies(),
+            &[entity],
+            |marks, bodies| takes(worn_id, worn, anchor, marks, bodies),
+        ) {
+            Clearance::Clear => true,
+            Clearance::Clears(bodies) => {
+                clears.extend(bodies.into_iter().map(|body| (body, footprint)));
+                true
+            }
+            Clearance::Held => false,
+        }
     };
 
     let reservation = match transition.placement() {
         MorphPlacement::Reserve if on_grid => {
             let anchor = reserved_at(standing);
-            if !takes(type_id, to, anchor) {
+            if !cleared(type_id, to, anchor) {
                 return Err(Refusal::NoRoom);
             }
             // A form that claims no cells holds none ahead: its ground is
@@ -425,17 +531,20 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
         ) {
             allowed(via_id, anchor)
         } else {
-            takes(via_id, worn, anchor)
+            cleared(via_id, worn, anchor)
         };
         if !stands {
             return Err(Refusal::NoRoom);
         }
     }
-    Ok(Start {
+    if !clears.is_empty() {
+        return Ok(Judged::Clears(clears));
+    }
+    Ok(Judged::Starts(Box::new(Start {
         transition,
         step_out,
         reservation,
-    })
+    })))
 }
 
 //
@@ -445,8 +554,10 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Start, Refusa
 /// Begins the change `start` settled, in steps none of which can fail: the
 /// cost is drawn, the change is marked under way, the interim form is put
 /// on, an attached entity steps out onto its cell in the form it now wears,
-/// and a reserving change claims its footprint around what the entity marks. The landing is [`process`]'s, a change with no
-/// time to run landing on its first process — the same tick it begins.
+/// and a reserving change claims its footprint around what the entity marks.
+/// The landing is [`process`]'s, a change with no time to run landing on its
+/// next process — the same tick for a change begun as the order starts, the
+/// next for one begun after waiting on its ground.
 fn begin(
     world: &mut World,
     entity: Entity,
@@ -481,16 +592,11 @@ fn begin(
         .iter()
         .map(|entry| (entry.pool(), entry.value()))
         .collect();
-    let morph = MorphComponent {
-        from: entity_def::type_id(world, entity),
-        into: type_name.to_string(),
-        progress: 0,
-        reservation: None,
-        before,
-    };
+    let from = entity_def::type_id(world, entity);
+    let morph = MorphComponent::under_way(from, type_name.to_string(), before.clone());
     // The change is under way from here, so what the interim form's fitting
     // keeps for the duration — a brood being counted — sees it so.
-    world.entity_mut(entity).insert(morph.clone());
+    world.entity_mut(entity).insert(morph);
     // The interim form goes on where the entity is — still in its berth, for
     // one that steps out — so the cell it steps onto takes the form judged
     // to stand there.
@@ -507,8 +613,8 @@ fn begin(
                 form,
                 Landing::Interim,
                 &carried(enter_pool_carry.iter().map(|(&pool, &carry)| (pool, carry))),
-                &morph.before,
-                morph.from,
+                &before,
+                from,
                 interim_of(world, &transition),
             );
             debug_assert!(
@@ -537,10 +643,14 @@ fn begin(
             to.size(),
             standing,
         );
-        world
+        let mut morph = world
             .get_mut::<MorphComponent>(entity)
-            .expect("the change was put on above")
-            .reservation = Some(MorphReservation {
+            .expect("the change was put on above");
+        let under_way = match &mut morph.stage {
+            MorphStage::UnderWay(under_way) => under_way,
+            MorphStage::Clearing(_) => unreachable!("the change was put on under way above"),
+        };
+        under_way.reservation = Some(MorphReservation {
             cells,
             layers: to.occupies(),
         });
@@ -564,22 +674,25 @@ enum Finish {
     Dying,
 }
 
-/// Ends the change `morph` whose progress has run out: a reserving change
-/// lets go of its reservation and takes the ground it held, judged again
-/// where it settles, a revalidating one re-checks the destination and its
-/// fields, a nearby one searches for it. A refused landing is a fizzle: the
-/// entity meets the transition's terms for an early end — back in the form it
-/// started from, or dead in the one it wore — and a refundable transition's
-/// payment goes back the same way its owner calling it off returns it.
+/// Ends the change `under_way` of `from` into `into`, whose progress has run
+/// out: a reserving change lets go of its reservation and takes the ground it
+/// held, judged again where it settles, a revalidating one re-checks the
+/// destination and its fields, a nearby one searches for it. A refused
+/// landing is a fizzle: the entity meets the transition's terms for an early
+/// end — back in the form it started from, or dead in the one it wore — and
+/// a refundable transition's payment goes back the same way its owner calling
+/// it off returns it.
 fn finish(
     world: &mut World,
     entity: Entity,
-    morph: MorphComponent,
+    from: EntityTypeId,
+    into: &str,
+    under_way: &MorphUnderWay,
     transition: &MorphTransition,
 ) -> Finish {
     // Between the release and the landing nothing else runs, so the ground a
     // reservation held passes to the new footprint atomically.
-    release_reservation(world, &morph);
+    release_reservation(world, under_way);
     let landing = match transition.placement() {
         MorphPlacement::Reserve => Landing::Reserved,
         MorphPlacement::Revalidate => Landing::Revalidated,
@@ -595,11 +708,11 @@ fn finish(
     if land(
         world,
         entity,
-        &morph.into,
+        into,
         landing,
         &carried(transition.land_pool_carry()),
-        &morph.before,
-        morph.from,
+        &under_way.before,
+        from,
         interim_of(world, transition),
     ) {
         brood::hatch(world, entity, own);
@@ -612,7 +725,7 @@ fn finish(
         MorphCancel::Refundable => Payment::Returned,
         MorphCancel::Committed | MorphCancel::Forfeit => Payment::Kept,
     };
-    match abandon(world, entity, &morph, transition, payment) {
+    match abandon(world, entity, from, under_way, transition, payment) {
         EarlyEnd::Standing => Finish::Standing,
         EarlyEnd::Dying => Finish::Dying,
     }
@@ -751,9 +864,19 @@ fn land(
     let Some(anchor) = reoccupy(world, entity, position, anchor, from, to, type_id, landing) else {
         return false;
     };
-    // The brood seated on the old form, to be aligned with the new — its own
-    // copy, since the world changes under it first.
-    let broodlings = brood::broodlings(world, entity).to_vec();
+    // The brood seated on the old form, to be aligned with the new, each with
+    // the berth it sits at there — read now, since the world changes under it
+    // first.
+    let broodlings: Vec<(SimulationId, Beside)> = brood::broodlings(world, entity)
+        .iter()
+        .map(|&id| {
+            let broodling = world
+                .resource::<EntityIndex>()
+                .alive(id)
+                .expect("a counted broodling is alive");
+            (id, berths::held_berth(world, broodling))
+        })
+        .collect();
 
     // A gateway whose new form leaves its link loses it under the old form.
     spawn::keep_or_leave_link(world, entity, type_id, Lean::Nothing);
@@ -1008,11 +1131,7 @@ fn reoccupy(
     let new_class = OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id));
     // Unchanged presence — the same cells on the same plane, the same way —
     // has nothing to swap; a nearby landing may still move.
-    let unchanged = from.occupies() == to.occupies()
-        && from.size() == to.size()
-        && old_class == new_class
-        && from.solidity() == to.solidity()
-        && landing != Landing::Nearby;
+    let unchanged = marks_as(from, old_class, to, new_class) && landing != Landing::Nearby;
     // The same marks on ground the new form may also stand on: a form over
     // other terrains is judged on its own, whatever it marks.
     let same_ground = landing != Landing::Nearby
@@ -1031,10 +1150,6 @@ fn reoccupy(
         .unwrap_or(spawn::DEFAULT_FACING);
     let standing = LocationComponent::new(position, facing);
     let owner = entity_def::owner(world, entity);
-    let allowed = |world: &World, anchor: FixedUVec2| {
-        let def = world.resource::<ContentRegistry>().def(type_id);
-        fields::allows_placement(world, owner, def, body::anchor(anchor))
-    };
 
     // Whether the ground takes the new form at `anchor`, looking past the
     // footprint the entity holds now: its own presence never stands in its
@@ -1064,7 +1179,7 @@ fn reoccupy(
         }
         Landing::Interim => anchor,
         Landing::Revalidated => {
-            if !(allowed(world, anchor) && ground_takes(world)) {
+            if !(fields_allow(world, owner, type_id, anchor) && ground_takes(world)) {
                 return None;
             }
             anchor
@@ -1073,16 +1188,11 @@ fn reoccupy(
             // Its own presence never stands in its way: the search looks past
             // the cells it holds now.
             let standing_mark = entity_def::grid_mark_of(&standing, from, old_class);
-            let registry = world.resource::<ContentRegistry>();
-            let around = CellRect::new(body::anchor(position), from.size());
+            let around = entity_def::standing_rect(world, entity);
             let lander = Lander {
-                def: registry.def(type_id),
+                def: world.resource::<ContentRegistry>().def(type_id),
                 owner,
-                from: ComesFrom::Footprint {
-                    rect: around,
-                    layer: entity_def::mover_shape(registry, &from).layer,
-                    reach: 1,
-                },
+                from: ComesFrom::of(world, entity),
                 bound: Bound::Radius,
                 around,
                 toward: around,
@@ -1126,15 +1236,16 @@ enum Payment {
     Returned,
 }
 
-/// Abandons the change `morph` before it lands, on the transition's terms: a
-/// reverting one puts the entity back in the form it started from, the
-/// payment is returned when `payment` says so, and the entity meets the
-/// transition's terms for an early end — or, when its form could not be put
-/// back, dies in the one it wears.
+/// Abandons the change `under_way` of `from` before it lands, on the
+/// transition's terms: a reverting one puts the entity back in the form it
+/// started from, the payment is returned when `payment` says so, and the
+/// entity meets the transition's terms for an early end — or, when its form
+/// could not be put back, dies in the one it wears.
 fn abandon(
     world: &mut World,
     entity: Entity,
-    morph: &MorphComponent,
+    from: EntityTypeId,
+    under_way: &MorphUnderWay,
     transition: &MorphTransition,
     payment: Payment,
 ) -> EarlyEnd {
@@ -1145,7 +1256,9 @@ fn abandon(
         } => return_to_origin(
             world,
             entity,
-            morph,
+            from,
+            under_way,
+            transition,
             revert.iter().map(|(&pool, &carry)| (pool, carry)),
         ),
         MorphCourse::Direct { .. }
@@ -1169,10 +1282,10 @@ fn abandon(
     }
     match returned {
         Returned::Back | Returned::NotReverting => {
-            ended_early(world, entity, transition.course(), morph.from)
+            ended_early(world, entity, transition.course(), from)
         }
-        Returned::Unseated { of } => perish(world, entity, morph.from, DeathCause::Unseated { of }),
-        Returned::Refused => perish(world, entity, morph.from, DeathCause::Canceled),
+        Returned::Unseated { of } => perish(world, entity, from, DeathCause::Unseated { of }),
+        Returned::Refused => perish(world, entity, from, DeathCause::Canceled),
     }
 }
 
@@ -1266,17 +1379,19 @@ fn perish(world: &mut World, entity: Entity, origin: EntityTypeId, cause: DeathC
 fn return_to_origin(
     world: &mut World,
     entity: Entity,
-    morph: &MorphComponent,
+    from: EntityTypeId,
+    under_way: &MorphUnderWay,
+    transition: &MorphTransition,
     revert: impl Iterator<Item = (PoolId, RevertCarry)>,
 ) -> Returned {
-    let left_its_form = entity_def::type_id(world, entity) != morph.from;
-    if left_its_form && !cargo_fits(world, entity, morph.from) {
+    let left_its_form = entity_def::type_id(world, entity) != from;
+    if left_its_form && !cargo_fits(world, entity, from) {
         return Returned::Refused;
     }
     // A bred body goes back to a berth, never onto the ground: it takes its
     // seat before its form changes back, so the landing writes nothing on
     // the grid.
-    match spawn::broodling_seat(world, entity, morph.from) {
+    match spawn::broodling_seat(world, entity, from) {
         BroodlingSeat::NotBred => {}
         BroodlingSeat::Free {
             breeder,
@@ -1294,18 +1409,13 @@ fn return_to_origin(
         MovementModel::Continuous => pushing::rebuild_claims(world),
         MovementModel::Cell => {}
     }
-    let origin = world
-        .resource::<ContentRegistry>()
-        .def(morph.from)
-        .name
-        .clone();
-    let interim =
-        entity_def::morph_terms(world, morph).and_then(|transition| interim_of(world, &transition));
+    let origin = world.resource::<ContentRegistry>().def(from).name.clone();
+    let interim = interim_of(world, transition);
     let fills: Vec<(PoolId, PoolFill)> = revert
         .map(|(pool, revert)| {
             let fill = match revert {
                 RevertCarry::Restore => PoolFill::Restore(
-                    morph
+                    under_way
                         .before
                         .iter()
                         .find(|&&(kept, _)| kept == pool)
@@ -1317,25 +1427,61 @@ fn return_to_origin(
             (pool, fill)
         })
         .collect();
-    if land(
-        world,
-        entity,
-        &origin,
-        Landing::Return,
-        &fills,
-        &morph.before,
-        morph.from,
-        interim,
-    ) {
-        Returned::Back
-    } else {
-        Returned::Refused
+    let returns = |world: &mut World| {
+        land(
+            world,
+            entity,
+            &origin,
+            Landing::Return,
+            &fills,
+            &under_way.before,
+            from,
+            interim,
+        )
+    };
+    if returns(world) {
+        return Returned::Back;
+    }
+    // Own and allied movers that clear, standing where the origin goes back,
+    // are set down off it at once: a cancel never waits on them.
+    let worn = entity_def::of(world, entity)
+        .location
+        .expect("a form changing back stands somewhere");
+    let to = world
+        .resource::<ContentRegistry>()
+        .def(from)
+        .location
+        .expect("a form changed from stands somewhere");
+    let anchor = settled(world, from, entity_def::position(world, entity), worn, to);
+    let footprint = CellRect::new(body::anchor(anchor), to.size());
+    let owner = entity_def::owner(world, entity);
+    let standing = world
+        .entity(entity)
+        .get::<LocationComponent>()
+        .expect("a form changing back on the grid stands")
+        .clone();
+    let worn_class = OccupancyClass::of(entity_def::of(world, entity));
+    let origin_class = OccupancyClass::of(world.resource::<ContentRegistry>().def(from));
+    let takes = |world: &World, marks: &[GridMark], bodies: &[Entity]| {
+        let placed = LocationComponent::new(anchor, standing.facing);
+        let lifted: Vec<GridMark> = entity_def::grid_mark_of(&standing, worn, worn_class)
+            .into_iter()
+            .chain(marks.iter().copied())
+            .collect();
+        let ignored: Vec<Entity> = std::iter::once(entity)
+            .chain(bodies.iter().copied())
+            .collect();
+        ground::can_place(world, &placed, to, origin_class, &lifted, &ignored)
+    };
+    match make_way::shove_off(world, owner, footprint, to.occupies(), &[entity], takes) {
+        Shoved::Cleared if returns(world) => Returned::Back,
+        Shoved::Cleared | Shoved::Held => Returned::Refused,
     }
 }
 
 /// Lets go of the ground a reserving change held.
-fn release_reservation(world: &mut World, morph: &MorphComponent) {
-    let Some(reservation) = &morph.reservation else {
+fn release_reservation(world: &mut World, under_way: &MorphUnderWay) {
+    let Some(reservation) = &under_way.reservation else {
         return;
     };
     world
@@ -1346,6 +1492,29 @@ fn release_reservation(world: &mut World, morph: &MorphComponent) {
 //
 // ─── The transition's terms and the ground ──────────────────────────────────
 //
+
+/// Whether `entity`'s owner meets the requirements of its transition into
+/// `type_name` and can pay its cost.
+///
+/// Panics for a transition `entity`'s type does not declare.
+fn payable(world: &World, entity: Entity, type_name: &str) -> bool {
+    let transition = entity_def::of(world, entity)
+        .morphs
+        .iter()
+        .find(|transition| transition.into_type() == type_name)
+        .expect("a judged change is one the type declares");
+    payer(world, entity, transition).is_some()
+}
+
+/// The player who pays for `transition` on `entity`: its owner, when they
+/// meet the transition's requirements and can pay its cost; `None` otherwise,
+/// or for an entity nobody owns.
+fn payer(world: &World, entity: Entity, transition: &MorphTransition) -> Option<PlayerId> {
+    let player = entity_def::owner(world, entity)?;
+    (requirements::met(world, player, Some(entity), transition.requires())
+        && cost::can_pay(world, entity, player, transition.costs()))
+    .then_some(player)
+}
 
 /// The transition `entity`'s own type declares into `type_name`, cloned so a
 /// caller holding the world mutably can keep the terms in hand.
@@ -1454,6 +1623,17 @@ fn settled(
         }
         (OccupancyClass::Claim, MovementModel::Continuous) => anchor,
     }
+}
+
+/// Whether the fields let `owner` put a body of `type_id` at `anchor`.
+fn fields_allow(
+    world: &World,
+    owner: Option<PlayerId>,
+    type_id: EntityTypeId,
+    anchor: FixedUVec2,
+) -> bool {
+    let def = world.resource::<ContentRegistry>().def(type_id);
+    fields::allows_placement(world, owner, def, body::anchor(anchor))
 }
 
 /// Takes the entity's standing presence — `standing`, or nothing for a body
@@ -1569,11 +1749,22 @@ fn declared_initial(world: &World, type_id: EntityTypeId, pool: PoolId) -> PoolI
         .initial()
 }
 
-/// Whether a body of `to` holds the ground exactly as one of `from` does: the
-/// same cells on the same planes, held the same way, over ground of the same
-/// shape.
+/// Whether a body of `to` holds the ground exactly as one of `from` does: it
+/// [`marks_as`] one, over ground of the same shape.
 fn holds_ground_as(
     registry: &ContentRegistry,
+    from: LocationDef,
+    from_class: OccupancyClass,
+    to: LocationDef,
+    to_class: OccupancyClass,
+) -> bool {
+    marks_as(from, from_class, to, to_class)
+        && entity_def::mover_shape(registry, &from) == entity_def::mover_shape(registry, &to)
+}
+
+/// Whether a body of `to` marks the grid exactly as one of `from` does: the
+/// same cells on the same planes, held the same way.
+fn marks_as(
     from: LocationDef,
     from_class: OccupancyClass,
     to: LocationDef,
@@ -1583,5 +1774,4 @@ fn holds_ground_as(
         && from.size() == to.size()
         && from_class == to_class
         && from.solidity() == to.solidity()
-        && entity_def::mover_shape(registry, &from) == entity_def::mover_shape(registry, &to)
 }

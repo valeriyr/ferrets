@@ -5,8 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy_ecs::prelude::*;
 use ferrets_math::FixedU64;
 
-use crate::components::chase::ChaseState;
-use crate::simulation_id::SimulationId;
+use crate::{
+    components::{chase::ChaseState, patience::Patience},
+    simulation_id::SimulationId,
+};
 
 /// The crew mending an entity, present exactly while somebody is on the job.
 #[derive(Component, Debug, Default)]
@@ -30,8 +32,8 @@ pub struct RepairComponent {
     /// The last chase round toward the target; identical rounds accumulate
     /// until the chase gives up (see [`ChaseState`]).
     pub last_chase: ChaseState,
-    /// Consecutive ticks spent unable to pay for the work.
-    pub stalled: u32,
+    /// How long the worker has gone on unable to pay for the work.
+    pub patience: Patience,
     /// Fractional cost carried between ticks, by resource kind. Work lands
     /// continuously while stockpiles are whole numbers, so the remainder waits here
     /// rather than being rounded away or charged twice.
@@ -45,7 +47,7 @@ impl RepairComponent {
             target,
             inside_job: false,
             last_chase: None,
-            stalled: 0,
+            patience: Patience::starting(),
             owed: BTreeMap::new(),
         }
     }

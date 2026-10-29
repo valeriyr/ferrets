@@ -428,6 +428,19 @@ fn player_with_no_team_is_allied_with_no_one_but_itself() {
 }
 
 #[test]
+fn owners_allied_reads_teams_and_leaves_unowned_side_with_no_ally() {
+    let session = teams(&[Some(1), Some(1), Some(2)]);
+    assert!(session.owners_allied(Some(0), Some(1)));
+    assert!(session.owners_allied(Some(0), Some(0)));
+    assert!(!session.owners_allied(Some(0), Some(2)));
+    // Nobody owns a side with no owner: it is allied with no one, itself
+    // included.
+    assert!(!session.owners_allied(Some(0), None));
+    assert!(!session.owners_allied(None, Some(0)));
+    assert!(!session.owners_allied(None, None));
+}
+
+#[test]
 fn is_winner_covers_whole_team_or_lone_player() {
     let session = teams(&[Some(1), Some(1), None]);
     // A team victory: every member of that team shares it, no one else.

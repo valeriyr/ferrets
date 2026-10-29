@@ -13,7 +13,9 @@ use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_physics::terrain;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{location::LocationComponent, order_queue::OrderQueueComponent},
+    components::{
+        location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
+    },
     entity_def,
     map::Map,
     movement_model::MovementModel,
@@ -522,6 +524,53 @@ fn cell_walk_comes_round_before_it_claims() {
         utils::position_of(app.world_mut(), mover),
         start,
         "then it crosses"
+    );
+}
+
+/// A body that finds its next cell free and stands to turn toward it has not set
+/// off yet: the cell may be taken again before it does, and a walk that counted
+/// the free cell as clear going would forgive its blockages every time and never
+/// give up. Here each cell the body turns toward is walled the tick it starts
+/// turning, the last one opened again, so the way is always one turn from clear.
+#[test]
+fn walk_gives_up_when_cell_ahead_is_taken_each_time_it_turns() {
+    let mut app = utils::turning_cell_app();
+    let (mover, _) = utils::create_owned(&mut app, "ponderous", 10, 10, 0);
+    let start = utils::position_of(app.world_mut(), mover);
+    walk_to_spot(&mut app, mover, utils::pos(10, 4));
+
+    let mut walled: Option<CellPos> = None;
+    for _ in 0..400 {
+        utils::run_ticks(&mut app, 1);
+        let turning_toward = app
+            .world()
+            .entity(mover)
+            .get::<MoveComponent>()
+            .filter(|movement| movement.pivoting)
+            .and_then(|movement| movement.path.last().copied());
+        if let Some(cell) = turning_toward
+            && walled != Some(cell)
+        {
+            let mut map = app.world_mut().resource_mut::<Map>();
+            if let Some(previous) = walled {
+                map.set_static_occupied(utils::GROUND, previous, false);
+            }
+            map.set_static_occupied(utils::GROUND, cell, true);
+            walled = Some(cell);
+        }
+    }
+
+    assert!(
+        app.world()
+            .entity(mover)
+            .get::<OrderQueueComponent>()
+            .is_some_and(|queue| queue.0.is_empty()),
+        "the walk must give up"
+    );
+    assert_eq!(
+        utils::position_of(app.world_mut(), mover),
+        start,
+        "without ever having set off"
     );
 }
 

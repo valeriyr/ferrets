@@ -164,7 +164,7 @@ fn take_in(world: &mut World, breeder: Entity, terms: &BreederDef, distance: u32
         let attachment = brood::broodling_attachment(world, entity)
             .cloned()
             .expect("a bred type is a broodling");
-        if !brood::holds(world, breeder, entity, &attachment) {
+        if !brood::holds(world, breeder, &attachment) {
             return;
         }
         spawn::attach_entity(world, entity, breeder, &attachment);

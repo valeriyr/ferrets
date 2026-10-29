@@ -42,6 +42,39 @@ pub struct Leash {
     pub radius: u32,
 }
 
+/// What a builder is set to do on a site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildTask {
+    /// Raise a new site of `type_name` at `position`: the builder is its
+    /// founder.
+    Found {
+        /// The type the site is raised as.
+        type_name: String,
+        /// Where the site's footprint is anchored.
+        position: FixedUVec2,
+    },
+    /// Join the crew of the site already under way with the given id.
+    Join {
+        /// The site.
+        site: SimulationId,
+    },
+}
+
+impl BuildTask {
+    /// Raise a new site of `type_name` at `position`.
+    pub fn found(type_name: &str, position: FixedUVec2) -> Self {
+        BuildTask::Found {
+            type_name: type_name.to_string(),
+            position,
+        }
+    }
+
+    /// Join the crew of the site `site` under way.
+    pub fn join(site: SimulationId) -> Self {
+        BuildTask::Join { site }
+    }
+}
+
 /// An order an entity is executing or waiting to execute.
 #[derive(Debug, Clone)]
 pub enum Order {
@@ -85,12 +118,9 @@ pub enum Order {
     /// circular — two forms can each name the other (see
     /// [`components::morph::MorphComponent`](crate::components::morph::MorphComponent)).
     Morph { type_name: String },
-    /// Construct a building of `type_name` at `position`: walk to the site, place
-    /// the building, and work until construction completes.
-    Build {
-        type_name: String,
-        position: FixedUVec2,
-    },
+    /// Construct a building: raise a new site, or join one under way, and work
+    /// on it until construction completes.
+    Build { task: BuildTask },
     /// Harvest resources in a loop: gather from a source, deliver to a storage,
     /// repeat. `target` is the source or storage the order was issued on.
     Harvest { target: SimulationId },
@@ -188,13 +218,11 @@ impl Order {
         }
     }
 
-    /// If this order is a build order, returns the type name and position. Otherwise, returns `None`.
-    pub fn build_params(&self) -> Option<(&str, FixedUVec2)> {
+    /// If this order is a build order, returns the builder's task. Otherwise,
+    /// returns `None`.
+    pub fn build_task(&self) -> Option<&BuildTask> {
         match self {
-            Order::Build {
-                type_name,
-                position,
-            } => Some((type_name, *position)),
+            Order::Build { task } => Some(task),
             _ => None,
         }
     }

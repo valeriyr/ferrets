@@ -6,6 +6,7 @@ mod utils;
 
 use bevy::prelude::App;
 use ferrets_content::{
+    attack::Slain,
     cost::Cost,
     entity_type_def::EntityTypeDef,
     location::Solidity,
@@ -23,11 +24,13 @@ use ferrets_content::{
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
+    beside::Lean,
     command::PlayerCommand,
     components::{
         entity_info::EntityInfoComponent,
         last_hit::{self, LastHitComponent},
         location::LocationComponent,
+        morph::MorphComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         pools::PoolsComponent,
         rally::RallyTarget,
@@ -35,9 +38,11 @@ use ferrets_simulation::{
         train::TrainQueueComponent,
     },
     entity_def,
+    game_loop::damage,
     map::Map,
     movement_model::MovementModel,
     order::Order,
+    rally,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };
@@ -73,6 +78,174 @@ fn same_layer_growth_lands_under_cell_model() {
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "giant");
+}
+
+#[test]
+fn growth_asks_idle_ally_off_its_ground_and_waits_for_it() {
+    // The giant the whelp grows into takes (9..11, 9..11); an idle whelp of the
+    // same side stands on (11, 11). The change does not start over it: it asks
+    // it off, waits until it has walked clear, and only then begins.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    let (bystander, _) = utils::create_owned(&mut app, "whelp", 11, 11, 0);
+
+    // Asked off on the first tick, the bystander crosses to (12, 11), the
+    // nearest cell clear of the giant; the change begins the next tick, once
+    // the crossing has left the ground, and its ten ticks land it on the
+    // twelfth.
+    utils::order_morph(&mut app, whelp, "giant");
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(type_name_of(&app, whelp), "whelp");
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(type_name_of(&app, whelp), "giant");
+    assert_eq!(
+        utils::cell_of(app.world_mut(), bystander),
+        CellPos::new(12, 11)
+    );
+}
+
+#[test]
+fn change_ordered_over_idle_ally_is_accepted_and_lands() {
+    // The player orders the giant's change with an idle whelp of the same
+    // side on (11, 11) of its ground: the order is accepted, the whelp asked
+    // off, and the change lands on the twelfth tick after the order starts.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    let (whelp, whelp_id) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::create_owned(&mut app, "whelp", 11, 11, 0);
+    utils::select(&mut app, whelp_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Morph {
+            type_name: "giant".into(),
+            flush: true,
+        },
+    );
+    // The command lands on the third tick; waiting a tick on the bystander,
+    // the change begins on the fourth and its ten ticks land it on the
+    // fourteenth.
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), whelp));
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(type_name_of(&app, whelp), "whelp");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(type_name_of(&app, whelp), "giant");
+}
+
+#[test]
+fn growth_waiting_on_its_ground_is_paid_only_once_it_begins() {
+    // The brute's change costs 10 gold; an idle whelp of the same side stands
+    // on (11, 11) of the ground it reserves.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::create_owned(&mut app, "whelp", 11, 11, 0);
+    utils::grant_gold(&mut app, 10);
+
+    // The bystander is asked off on the first tick and the change waits,
+    // nothing paid; its crossing leaves the ground and the change begins on
+    // the second, paying then: 10 − 10.
+    utils::order_morph(&mut app, whelp, "brute");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        app.world()
+            .get::<MorphComponent>(whelp)
+            .map(MorphComponent::is_under_way),
+        Some(false)
+    );
+    assert_eq!(utils::gold(app.world()), 10);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        app.world()
+            .get::<MorphComponent>(whelp)
+            .map(MorphComponent::is_under_way),
+        Some(true)
+    );
+    assert_eq!(utils::gold(app.world()), 0);
+}
+
+#[test]
+fn growth_its_owner_cannot_pay_asks_nobody_off_its_ground() {
+    // The brute's change costs 10 gold, and the player has none; an idle
+    // whelp of the same side stands on (11, 11) of the ground it reserves.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    let (bystander, _) = utils::create_owned(&mut app, "whelp", 11, 11, 0);
+
+    // The change is refused on the first tick, before anyone is asked off.
+    utils::order_morph(&mut app, whelp, "brute");
+    utils::run_ticks(&mut app, 1);
+
+    let world = app.world_mut();
+    assert!(utils::order_queue_is_empty(world, whelp));
+    assert!(world.get::<MorphComponent>(whelp).is_none());
+    assert!(utils::order_queue_is_empty(world, bystander));
+    assert_eq!(utils::cell_of(world, bystander), CellPos::new(11, 11));
+}
+
+#[test]
+fn canceled_growth_still_waiting_on_its_ground_leaves_nothing_behind() {
+    // Walled in as below, the bystander on (11, 11) has nowhere to go, so the
+    // brute's change waits on it; the player calls it off mid-wait.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for x in 9..=11 {
+            for y in 9..=11 {
+                map.set_static_occupied(utils::GROUND, CellPos::new(x, y), false);
+            }
+        }
+    }
+    let (whelp, whelp_id) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::create_owned(&mut app, "whelp", 11, 11, 0);
+    utils::grant_gold(&mut app, 10);
+
+    utils::order_morph(&mut app, whelp, "brute");
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(
+        app.world()
+            .get::<MorphComponent>(whelp)
+            .map(MorphComponent::is_under_way),
+        Some(false),
+        "the change waits on its ground"
+    );
+    utils::push_command(&mut app, PlayerCommand::CancelMorph { entity: whelp_id });
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), whelp));
+    assert!(app.world().get::<MorphComponent>(whelp).is_none());
+    assert_eq!(type_name_of(&app, whelp), "whelp");
+    // Nothing was paid while it waited, so nothing comes back.
+    assert_eq!(utils::gold(app.world()), 10);
+}
+
+#[test]
+fn growth_gives_up_on_ally_with_nowhere_to_go() {
+    // Every cell off the giant's (9..11, 9..11) is walled: the idle whelp on
+    // (11, 11) has nowhere to walk to, and the change waits for it, then gives
+    // up without having begun.
+    let mut app = utils::morph_app(MovementModel::Cell);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for x in 9..=11 {
+            for y in 9..=11 {
+                map.set_static_occupied(utils::GROUND, CellPos::new(x, y), false);
+            }
+        }
+    }
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    utils::create_owned(&mut app, "whelp", 11, 11, 0);
+
+    // Judged once a tick from the tick the order starts, as a founding is:
+    // forty judgments of patience, and the forty-first, on the forty-first
+    // tick, gives the order up.
+    utils::order_morph(&mut app, whelp, "giant");
+    utils::run_ticks(&mut app, 40);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), whelp));
+    utils::run_ticks(&mut app, 1);
+    assert!(utils::order_queue_is_empty(app.world_mut(), whelp));
+    assert_eq!(type_name_of(&app, whelp), "whelp");
 }
 
 #[test]
@@ -908,6 +1081,110 @@ fn canceled_change_of_berthed_worker_leaves_it_on_land_it_takes() {
 }
 
 //
+// ─── A capture ────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn change_under_way_goes_on_for_its_captor() {
+    // The whelp wears the chrysalis three ticks into its ten-tick change
+    // into the wyrm when player 1 takes it: the change goes on, and lands as
+    // player 1's wyrm.
+    let mut app = two_sided_morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    let (_, taker_id) = utils::create_owned(&mut app, "whelp", 20, 20, 1);
+    utils::grant_gold(&mut app, 10);
+    utils::order_morph(&mut app, whelp, "wyrm");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+
+    spawn::change_owner(app.world_mut(), whelp, 1, taker_id, Lean::Nothing);
+    assert_eq!(entity_def::owner(app.world(), whelp), Some(1));
+    assert!(entity_def::changing(app.world(), whelp));
+
+    // Ten ticks of change, three done before the capture: six more leave it
+    // a chrysalis, the seventh lands it.
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(type_name_of(&app, whelp), "chrysalis");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(type_name_of(&app, whelp), "wyrm");
+    assert_eq!(entity_def::owner(app.world(), whelp), Some(1));
+}
+
+#[test]
+fn change_under_way_taken_drops_rally_its_old_owner_set() {
+    let mut app = two_sided_morph_app(MovementModel::Cell);
+    let (shrine, shrine_id) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
+    let (_, taker_id) = utils::create_owned(&mut app, "whelp", 20, 20, 1);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetRallyPoint {
+            entity: shrine_id,
+            target: Some(RallyTarget::Position(utils::pos(20, 10))),
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    utils::order_morph(&mut app, shrine, "golem");
+    utils::run_ticks(&mut app, 3);
+    assert!(entity_def::changing(app.world(), shrine));
+
+    spawn::change_owner(app.world_mut(), shrine, 1, taker_id, Lean::Nothing);
+
+    assert_eq!(rally::target_of(app.world(), shrine), None);
+}
+
+#[test]
+fn body_dying_mid_change_is_not_captured_and_dies() {
+    // Struck down three ticks into its change into the wyrm, the chrysalis
+    // is dying when player 1 would take it: it stays player 0's, and its
+    // two-tick death takes it off the map.
+    let mut app = two_sided_morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    let (_, taker_id) = utils::create_owned(&mut app, "whelp", 20, 20, 1);
+    utils::grant_gold(&mut app, 10);
+    utils::order_morph(&mut app, whelp, "wyrm");
+    utils::run_ticks(&mut app, 3);
+    damage::apply(
+        app.world_mut(),
+        taker_id,
+        whelp,
+        FixedU64::from_num(1000),
+        Slain::Nothing,
+    );
+
+    spawn::change_owner(app.world_mut(), whelp, 1, taker_id, Lean::Nothing);
+    assert_eq!(entity_def::owner(app.world(), whelp), Some(0));
+
+    utils::run_ticks(&mut app, 3);
+    utils::assert_despawned(app.world_mut(), whelp);
+}
+
+#[test]
+fn dying_body_is_not_captured() {
+    // Struck down first, the whelp is dying when player 1 would take it: a
+    // force drop leaves its death running, and what died under player 0 is
+    // not handed over.
+    let mut app = two_sided_morph_app(MovementModel::Cell);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    let (_, taker_id) = utils::create_owned(&mut app, "whelp", 20, 20, 1);
+    damage::apply(
+        app.world_mut(),
+        taker_id,
+        whelp,
+        FixedU64::from_num(1000),
+        Slain::Nothing,
+    );
+
+    spawn::change_owner(app.world_mut(), whelp, 1, taker_id, Lean::Nothing);
+
+    assert_eq!(entity_def::owner(app.world(), whelp), Some(0));
+    assert!(entity_def::dying(app.world(), whelp));
+    assert!(matches!(
+        entity_def::orders(app.world(), whelp).as_slice(),
+        [Order::Die]
+    ));
+}
+
+//
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
@@ -1040,5 +1317,17 @@ fn wading_app() -> App {
                     .with_pool(Pool::health(30)),
             );
         },
+    )
+}
+
+/// [`utils::morph_app`] on `model`, seated for two humans, so a body can
+/// change hands.
+fn two_sided_morph_app(model: MovementModel) -> App {
+    utils::morph_app_for(
+        vec![
+            PlayerSlot::occupied(0, PlayerType::Human, None, None),
+            PlayerSlot::occupied(1, PlayerType::Human, None, None),
+        ],
+        model,
     )
 }

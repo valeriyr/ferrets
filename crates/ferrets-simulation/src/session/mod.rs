@@ -445,6 +445,15 @@ impl GameSession {
         }
     }
 
+    /// Whether owners `a` and `b` are allies (see [`Self::are_allied`]); an
+    /// unowned side is nobody's ally.
+    pub fn owners_allied(&self, a: Option<PlayerId>, b: Option<PlayerId>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => self.are_allied(a, b),
+            (None, _) | (_, None) => false,
+        }
+    }
+
     /// Returns `true` when `a` and `b` are allies: the same player, or two
     /// players sharing a team. Players on no team (and unknown slot ids) are
     /// allied with no one but themselves.

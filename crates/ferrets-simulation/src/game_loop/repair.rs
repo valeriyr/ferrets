@@ -18,6 +18,7 @@ use crate::{
     components::{
         entity_stats::StatsComponent,
         order_queue::{CancelPolicy, OrderState},
+        patience::{Patience, Waiting},
         pools::{self, Spending},
         repair::{RepairComponent, UnderRepairComponent},
     },
@@ -212,16 +213,15 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     let Some(carried) = charge(world, entity, target, restored, max_health, &repair.owed) else {
         // Broke: the job is held without progressing, and abandoned once patience
         // runs out. Nothing is charged and nothing is mended this tick.
-        repair.stalled += 1;
-        let patience = repairer_of(world, entity).patience();
-        if patience.is_some_and(|limit| repair.stalled > limit) {
-            return finish(world, entity, target_id);
+        match repair.patience.wait(repairer_of(world, entity).patience()) {
+            Waiting::Waits => {}
+            Waiting::GivesUp => return finish(world, entity, target_id),
         }
         world.entity_mut(entity).insert(repair);
         return Processing::state(OrderState::InProcessing);
     };
 
-    repair.stalled = 0;
+    repair.patience = Patience::starting();
     repair.owed = carried;
     pools::restore(world, target, PoolId::HEALTH, restored);
     world.entity_mut(entity).insert(repair);
@@ -255,12 +255,9 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
         return false;
     }
     // Mending an enemy is never the intent, and a neutral belongs to nobody.
-    matches!(
-        (
-            entity_def::owner(world, entity),
-            entity_def::owner(world, target),
-        ),
-        (Some(worker), Some(subject)) if world.resource::<GameSession>().are_allied(worker, subject)
+    world.resource::<GameSession>().owners_allied(
+        entity_def::owner(world, entity),
+        entity_def::owner(world, target),
     )
 }
 

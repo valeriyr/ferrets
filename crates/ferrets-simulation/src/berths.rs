@@ -4,7 +4,7 @@
 use std::cmp::Reverse;
 
 use bevy_ecs::{entity::Entity, query::Without, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
+use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{
     FixedI64, FixedU64,
     facing::{self, Facing},
@@ -15,6 +15,7 @@ use ferrets_physics::body;
 use ferrets_random::hash;
 
 use crate::{
+    beside::Beside,
     components::{
         attached::{AttachedComponent, Sitting, Way},
         berths::BerthsComponent,
@@ -70,20 +71,30 @@ pub fn seated_by_others(world: &World, job: Entity, except: &[SimulationId]) -> 
         })
 }
 
-/// The free berth of `group` on `job` nearest to `from`, as its index and its
-/// point, or `None` when the group is full or not offered. Ties go to the
+/// The free berth of `group` on `job` nearest to `from` for a worker of
+/// `size` — measured from the cells it would sit on there — as its index and
+/// its point, or `None` when the group is full or not offered. Ties go to the
 /// lowest index.
 pub fn nearest_free_seat(
     world: &World,
     job: Entity,
     group: &str,
+    size: CellSize,
     from: CellRect,
 ) -> Option<(usize, FixedUVec2)> {
     let projection = world.resource::<Map>().projection();
     free_seats(world, job, group)
         .into_iter()
         .map(|seat| (seat, seat_point(world, job, group, seat)))
-        .min_by_key(|&(_, point)| projection.rect_distance(CellPos::from(point), from))
+        .min_by_key(|&(_, point)| {
+            let seated = body::standing_rect(centered_on(point, size), size);
+            projection.distance_for_rects(seated, from)
+        })
+}
+
+/// Whether `job` has a berth of `group` open to a newcomer.
+pub(crate) fn has_free_seat(world: &World, job: Entity, group: &str) -> bool {
+    !free_seats(world, job, group).is_empty()
 }
 
 /// Seats `worker` in berth `seat` of `group` on `job`.
@@ -186,15 +197,34 @@ pub fn reseat(world: &mut World, job: Entity) -> Vec<Entity> {
 /// footprint comes off the point, since a position names the corner its
 /// footprint starts at.
 pub fn position_centered_on(world: &World, worker: Entity, point: FixedUVec2) -> FixedUVec2 {
-    let size = entity_def::of(world, worker)
-        .location
-        .expect("validated content defines a location")
-        .size();
-    let half = |cells: u32| FixedU64::from_num(cells) / 2;
-    FixedUVec2::new(
-        point.x.saturating_sub(half(size.width)),
-        point.y.saturating_sub(half(size.height)),
-    )
+    centered_on(point, entity_def::location_size(world, worker))
+}
+
+/// What the seated `worker` is set down beside: the berth it holds on its job,
+/// at the cells it sits on there however its stance has carried it since — or,
+/// once the job has left the world, the cells it stands on now.
+///
+/// Panics for a worker that is not attached, or whose job stands nowhere on
+/// the map.
+pub(crate) fn held_berth(world: &World, worker: Entity) -> Beside {
+    let attached = world
+        .get::<AttachedComponent>(worker)
+        .expect("only an attached worker holds a berth");
+    let rect = match world.resource::<EntityIndex>().any(attached.job) {
+        Some(job) => {
+            let seated = position_centered_on(
+                world,
+                worker,
+                seat_point(world, job, &attached.berths, attached.seat),
+            );
+            body::standing_rect(seated, entity_def::location_size(world, worker))
+        }
+        None => entity_def::standing_rect(world, worker),
+    };
+    Beside::Berth {
+        job: attached.job,
+        rect,
+    }
 }
 
 /// How `worker`, of `stance`, sits down as it takes its first berth on a job.
@@ -351,11 +381,11 @@ pub fn advance(world: &mut World) {
             (BerthStance::Orbit { radius, period }, Sitting::Orbiting { phase }) => {
                 let step = (facing::PER_TURN / period) % facing::PER_TURN;
                 let phase = Facing::from_bits(phase.to_bits().wrapping_add(step as u16));
-                let centre = seat_point(world, job, &attached.berths, attached.seat);
+                let center = seat_point(world, job, &attached.berths, attached.seat);
                 (
                     Sitting::Orbiting { phase },
                     attached.seat,
-                    Some(offset(centre, phase.unit() * radius.to_num::<FixedI64>())),
+                    Some(offset(center, phase.unit() * radius.to_num::<FixedI64>())),
                 )
             }
             (
@@ -571,9 +601,9 @@ fn group_len(world: &World, job: Entity, group: &str) -> usize {
     group_points(world, job, group).len()
 }
 
-/// `centre` moved by `delta`, never before the map's first cell.
-fn offset(centre: FixedUVec2, delta: FixedVec2) -> FixedUVec2 {
-    unsigned(signed(centre) + delta)
+/// `center` moved by `delta`, never before the map's first cell.
+fn offset(center: FixedUVec2, delta: FixedVec2) -> FixedUVec2 {
+    unsigned(signed(center) + delta)
 }
 
 /// `point` as a signed vector.
@@ -586,5 +616,14 @@ fn unsigned(point: FixedVec2) -> FixedUVec2 {
     FixedUVec2::new(
         point.x.max(FixedI64::ZERO).to_num::<FixedU64>(),
         point.y.max(FixedI64::ZERO).to_num::<FixedU64>(),
+    )
+}
+
+/// The position that puts the middle of a footprint of `size` on `point`.
+fn centered_on(point: FixedUVec2, size: CellSize) -> FixedUVec2 {
+    let half = |cells: u32| FixedU64::from_num(cells) / 2;
+    FixedUVec2::new(
+        point.x.saturating_sub(half(size.width)),
+        point.y.saturating_sub(half(size.height)),
     )
 }

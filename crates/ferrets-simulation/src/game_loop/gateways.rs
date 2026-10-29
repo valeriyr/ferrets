@@ -30,6 +30,7 @@ use crate::{
     entity_index::EntityIndex,
     landing::{self, Bound, ComesFrom, Lander, Landings},
     links::{self, LinkKey, LinkPassengers, Membership},
+    make_way::{self, Asked},
     rally,
     session::GameSession,
     simulation_id::SimulationId,
@@ -131,8 +132,9 @@ pub(crate) enum Through {
 pub(crate) enum Intake {
     /// It went this way.
     Taken(Through),
-    /// No cell within the other end's unload range takes it now; nothing
-    /// was touched.
+    /// No cell within the other end's unload range takes it now; the body
+    /// was not taken in, and own and allied movers keeping it out were asked
+    /// off.
     Waits,
 }
 
@@ -144,6 +146,23 @@ pub(crate) fn take_in(world: &mut World, gateway: Entity, body: Entity) -> Intak
     let entry = would_enter(world, body, gateway)
         .unwrap_or_else(|refusal| unreachable!("judged this tick, got {refusal:?}"));
     let Some(through) = way_through(world, body, entry) else {
+        // Arrivals standing at the other end make way for those behind them:
+        // own and allied movers that alone hold its ground are asked off.
+        match entry {
+            Entry::Crosses(other) => {
+                let lifted: Vec<_> = entity_def::grid_mark(world, body).into_iter().collect();
+                match make_way::clear_landing(
+                    world,
+                    entity_def::owner(world, body),
+                    |world| other_end_lander(world, body, other),
+                    &lifted,
+                    &[body],
+                ) {
+                    Asked::Leaves | Asked::Boxed => {}
+                }
+            }
+            Entry::Held(_) => {}
+        }
         return Intake::Waits;
     };
     // A body taken in by the gateway's own order stops what it was doing; a
@@ -285,17 +304,22 @@ fn out_of_other_end(world: &World, entity: Entity, other: Entity) -> Option<Cell
     let lifted: Vec<_> = entity_def::grid_mark(world, entity).into_iter().collect();
     let ignored = [entity];
     let mut landings = Landings::new(owner, Landing::Anywhere, &[], &lifted, &ignored);
-    let rect = entity_def::footprint_rect(world, other);
+    landing::land(world, &mut landings, other_end_lander(world, entity, other))
+}
+
+/// How `entity` steps out of `other`: within its unload range, nearest it and
+/// then where `entity` stood.
+fn other_end_lander(world: &World, entity: Entity, other: Entity) -> Lander<'_> {
+    let rect = entity_def::standing_rect(world, other);
     let range = entity_def::effective_stat_u32(world, other, EntityStatId::UNLOAD_RANGE);
-    let lander = Lander {
+    Lander {
         def: entity_def::of(world, entity),
-        owner: Some(owner),
+        owner: entity_def::owner(world, entity),
         from: ComesFrom::within(world, other, range),
         bound: Bound::Range { rect, range },
         around: rect,
         toward: entity_def::footprint_rect(world, entity),
-    };
-    landing::land(world, &mut landings, lander)
+    }
 }
 
 /// `gateway`'s definition as a gateway.

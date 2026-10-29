@@ -699,13 +699,22 @@ pub fn cell_crowd_app() -> App {
 }
 
 /// App with the form-change roster on the given movement model — a `whelp`
-/// (1×1 mover, 30 hp) declaring three transitions: growing into the same-layer
-/// 3×3 `giant`, an instant committed change into the 10-hp `husk` paid in
-/// blood, and a timed change into the poolless `wisp` (which changes back);
+/// (1×1 mover, 30 hp) declaring four transitions: growing into the same-layer
+/// 3×3 `giant`, the same growth into the 3×3 `brute` priced at 10 gold, an
+/// instant committed change into the 10-hp `husk` paid in blood, and a timed
+/// change into the poolless `wisp` (which changes back);
 /// plus a `shrine` (2×2 building) that unroots into the same-size `golem`
 /// mover. One human player, session started.
 pub fn morph_app(model: MovementModel) -> App {
-    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    morph_app_for(
+        vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)],
+        model,
+    )
+}
+
+/// [`morph_app`] seated on `slots`.
+pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
+    let mut app = make_app(slots);
     install_map(&mut app, Projection::Isometric, model);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
@@ -733,6 +742,18 @@ pub fn morph_app(model: MovementModel) -> App {
                         MorphCancel::Refundable,
                         MorphReason::Change,
                         Vec::new(),
+                        Vec::new(),
+                        [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                    ),
+                    // The giant's growth, priced, into the brute.
+                    MorphTransition::new(
+                        "brute",
+                        MorphCourse::direct(MorphInterrupted::Reverts),
+                        Quantity::Constant(10),
+                        MorphPlacement::Reserve,
+                        MorphCancel::Refundable,
+                        MorphReason::Change,
+                        vec![Cost::Resources(price::from([("gold", 10)]))],
                         Vec::new(),
                         [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                     ),
@@ -819,6 +840,19 @@ pub fn morph_app(model: MovementModel) -> App {
                     FixedU64::from_num(360),
                 )
                 .with_pool(Pool::health(90))
+                .with_dying(2, []),
+        );
+        registry.register(
+            EntityTypeDef::new("brute")
+                .with_location(GROUND_DOMAIN, CellSize::new(3, 3), Solidity::Solid, GROUND)
+                .with_movement(
+                    fixed("0.3"),
+                    FixedU64::ONE,
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(60))
                 .with_dying(2, []),
         );
         registry.register(
@@ -1018,7 +1052,8 @@ fn brood_change(into: &str) -> MorphTransition {
 ///   `hulk`, which dies when interrupted), or, reserving its ground, into a
 ///   3×3 standing `mound`.
 /// - `linger_pen` seats two and breeds `piglet`s, which linger where they
-///   are set down; it changes into `bare_pen` (no berths). `reseat_pen` breeds
+///   are set down; it changes into `bare_pen` (no berths), as `inner_pen`
+///   does, whose two berths lie on its middle cell. `reseat_pen` breeds
 ///   piglets it takes in from within three cells, and changes into `roomy_pen`
 ///   (the same seats and terms) through a seatless `pen_shell`. The great
 ///   hatch changes back into a `hatch`.
@@ -1132,6 +1167,21 @@ pub fn brood_app(model: MovementModel) -> App {
         registry.register(
             brood_building("linger_pen")
                 .with_berths(brood_berths(2))
+                .with_breeder(
+                    "piglet",
+                    Quantity::Constant(10),
+                    2,
+                    0,
+                    OrphanFate::Linger(Lingering::Stay),
+                )
+                .with_morphs([brood_change("bare_pen")]),
+        );
+        registry.register(
+            brood_building("inner_pen")
+                .with_berths([(
+                    "brood",
+                    BerthGroup::new([berth("1.5", "1.5"), berth("1.5", "1.75")], 2),
+                )])
                 .with_breeder(
                     "piglet",
                     Quantity::Constant(10),
@@ -1619,12 +1669,33 @@ pub fn order_morph(app: &mut App, entity: Entity, type_name: &str) {
 /// Pushes a Move order to `(x, y)` onto the entity's queue, behind whatever
 /// it is doing.
 pub fn order_move(app: &mut App, entity: Entity, x: u32, y: u32) {
+    order_move_onto(app, entity, pos(x, y));
+}
+
+/// Gives `entity` a Move order onto the exact point `target`, as a click on
+/// open ground does, and runs until it stands there, within `limit` ticks.
+///
+/// Panics if it does not get there in time.
+pub fn walk_onto(app: &mut App, entity: Entity, target: FixedUVec2, limit: u32) {
+    order_move_onto(app, entity, target);
+    for _ in 0..limit {
+        if position_of(app.world(), entity) == target {
+            return;
+        }
+        run_ticks(app, 1);
+    }
+    assert_eq!(position_of(app.world(), entity), target, "the walk arrives");
+}
+
+/// Pushes a Move order onto the exact point `target` onto `entity`'s queue,
+/// behind whatever it is doing.
+pub fn order_move_onto(app: &mut App, entity: Entity, target: FixedUVec2) {
     app.world_mut()
         .get_mut::<OrderQueueComponent>(entity)
         .expect("a walker takes orders")
         .push(
             Order::Move {
-                target: pos(x, y),
+                target,
                 size: CellSize::ONE,
                 range: 0,
             },
@@ -1766,18 +1837,20 @@ pub fn within(world: &mut World, a: Entity, b: Entity, distance: u32) -> bool {
         .in_range(cell_a, cell_b, distance)
 }
 
-/// Asserts `unit` stands within one cell of `building`'s footprint.
+/// Asserts `unit` stands beside `building`'s footprint: within one cell of
+/// it, and not on it.
 pub fn assert_adjacent_to_footprint(world: &mut World, unit: Entity, building: Entity) {
     let origin = cell_of(world, building);
     let size = entity_def::of(world, building).location.unwrap().size();
+    let footprint = CellRect::new(origin, size);
     let unit_cell = cell_of(world, unit);
     assert!(
-        world.resource::<Map>().projection().in_range_of_rect(
-            unit_cell,
-            CellRect::new(origin, size),
-            1
-        ),
-        "expected {unit_cell:?} adjacent to the footprint at {origin:?}"
+        world
+            .resource::<Map>()
+            .projection()
+            .in_range_of_rect(unit_cell, footprint, 1)
+            && !footprint.contains(unit_cell),
+        "expected {unit_cell:?} beside the footprint at {origin:?}, not on it"
     );
 }
 

@@ -12,7 +12,7 @@ use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
-    components::order_queue::OrderQueueComponent,
+    components::{order_queue::OrderQueueComponent, stance::Stance},
     map::Map,
     movement_model::MovementModel,
     order::AttackTarget,
@@ -166,11 +166,12 @@ fn head_on_unequal_sizes_never_swap() {
     let world = app.world_mut();
     let wagon_cell = utils::cell_of(world, wagon);
     let soldier_cell = utils::cell_of(world, soldier);
-    // The exact end state: the soldier, stepping aside down the only way
-    // open, keeps ahead of the wagon to (13,5), and the wagon covers its goal
-    // with footprint cells 11..=12. The soldier is still ahead: never swapped.
-    assert_eq!(wagon_cell, CellPos::new(11, 5));
-    assert_eq!(soldier_cell, CellPos::new(13, 5));
+    // The exact end state: the soldier, asked aside down the only way open,
+    // walks ahead of the wagon to (14,5), the nearest cell clear of the cells
+    // the wagon's walk still enters, and the wagon covers its goal with
+    // footprint cells 12..=13. The soldier is still ahead: never swapped.
+    assert_eq!(wagon_cell, CellPos::new(12, 5));
+    assert_eq!(soldier_cell, CellPos::new(14, 5));
 }
 
 #[test]
@@ -193,20 +194,88 @@ fn idle_ally_steps_aside() {
     utils::run_ticks(&mut app, 80);
 
     assert_eq!(utils::cell_of(app.world_mut(), mover), CellPos::new(8, 5));
-    // The yield steps the ally off the walked line, diagonally forward —
-    // the aside cell farthest from the mover's direction of travel.
+    // The yield walks the ally to the nearest cell off the cells the step
+    // enters, the row above first: straight up, off the walked line.
     assert_eq!(
         utils::cell_of(app.world_mut(), bystander),
-        CellPos::new(7, 4)
+        CellPos::new(6, 4)
     );
 }
 
 #[test]
+fn ally_standing_its_ground_is_walked_around_not_asked_aside() {
+    let mut app = utils::orders_app();
+    let (mover, mover_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
+
+    utils::select(&mut app, mover_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(8, 5),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    let (bystander, bystander_id) = utils::create_owned(&mut app, "soldier", 6, 5, 0);
+    utils::select(&mut app, bystander_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::StandGround,
+        },
+    );
+
+    utils::run_ticks(&mut app, 80);
+
+    // Idle but standing its ground, the ally holds as an enemy would: the walk
+    // goes round it to its goal, and the ally never moves.
+    let world = app.world_mut();
+    assert_eq!(utils::cell_of(world, mover), CellPos::new(8, 5));
+    assert_eq!(utils::cell_of(world, bystander), CellPos::new(6, 5));
+}
+
+#[test]
+fn walk_ends_beside_ally_standing_its_ground_on_its_goal() {
+    let mut app = utils::orders_app();
+    let (mover, mover_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
+    let (bystander, bystander_id) = utils::create_owned(&mut app, "soldier", 8, 5, 0);
+    utils::select(&mut app, bystander_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::StandGround,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    utils::select(&mut app, mover_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(8, 5),
+            flush: true,
+        },
+    );
+    // Six cells at two ticks a cell from the order's start on the third tick:
+    // (7, 5) on the twelfth. The ally standing its ground on the goal makes
+    // no way, but it is a settled ally there, so the walk ends beside it on
+    // the thirteenth rather than grinding at its cell.
+    utils::run_ticks(&mut app, 12);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), mover));
+    utils::run_ticks(&mut app, 1);
+
+    let world = app.world_mut();
+    assert!(utils::order_queue_is_empty(world, mover));
+    assert_eq!(utils::cell_of(world, mover), CellPos::new(7, 5));
+    assert_eq!(utils::cell_of(world, bystander), CellPos::new(8, 5));
+}
+
+#[test]
 fn idle_ally_steps_aside_only_onto_its_terrain() {
-    // The meeting of the test above, the cells ahead of the bystander water:
-    // the mover's domain takes it and walks on through, but the landlubber's
-    // takes land alone, so its step aside cannot go forward.
-    let mut app = utils::dry_orders_app(MovementModel::Cell, &[(7, 4), (7, 5), (7, 6)], |_, _| {});
+    // The meeting of the test above, the row above the bystander water: the
+    // mover's domain takes it, but the landlubber's takes land alone, so its
+    // step aside cannot go up.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[(5, 4), (6, 4), (7, 4)], |_, _| {});
     let (mover, mover_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
 
     utils::select(&mut app, mover_id);
@@ -222,12 +291,11 @@ fn idle_ally_steps_aside_only_onto_its_terrain() {
 
     utils::run_ticks(&mut app, 80);
 
-    // The yield takes the best aside cell still on land: beside, not ahead —
-    // the forward diagonal (7,4) of the test above is water — the row above
-    // before the row below.
+    // The yield takes the nearest cell off the walk still on land: the row
+    // below, the row above it took in the test above being water.
     let world = app.world_mut();
     assert_eq!(utils::cell_of(world, mover), CellPos::new(8, 5));
-    assert_eq!(utils::cell_of(world, bystander), CellPos::new(6, 4));
+    assert_eq!(utils::cell_of(world, bystander), CellPos::new(6, 6));
 }
 
 #[test]
@@ -267,7 +335,8 @@ fn crowd_ordered_to_one_point_settles() {
     }
     cells.sort_unstable();
     // The exact settle: the goal taken, the rest ringed beside it — the cells
-    // the hierarchy's lanes lead them to, two rows of three around (5,7).
+    // the hierarchy's lanes lead them to and the yields walk them aside to,
+    // around (5,7).
     assert_eq!(
         cells,
         vec![
@@ -276,7 +345,7 @@ fn crowd_ordered_to_one_point_settles() {
             CellPos::new(5, 6),
             goal,
             CellPos::new(6, 6),
-            CellPos::new(6, 7),
+            CellPos::new(7, 6),
         ]
     );
 }
@@ -331,7 +400,7 @@ fn fanned_group_move_shares_one_corridor() {
         cells,
         vec![
             CellPos::new(28, 28),
-            CellPos::new(28, 29),
+            CellPos::new(29, 28),
             CellPos::new(29, 29),
         ]
     );
@@ -364,6 +433,43 @@ fn attacker_takes_free_cell_beside_working_ally() {
     // depot's 100.
     utils::run_ticks(&mut app, 18);
     assert_eq!(utils::health(&app, depot), FixedU64::ZERO);
+}
+
+#[test]
+fn attacker_takes_free_cell_beside_ally_standing_its_ground() {
+    let mut app = utils::orders_app();
+    let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 1);
+    let (_, guard_id) = utils::create_owned(&mut app, "worker", 9, 10, 0);
+    utils::select(&mut app, guard_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::StandGround,
+        },
+    );
+    let (attacker, attacker_id) = utils::create_owned(&mut app, "soldier", 7, 10, 0);
+    utils::select(&mut app, attacker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Entity(depot_id),
+            flush: true,
+        },
+    );
+
+    // The walk reaches (8, 10) on the fifth tick and finds its reach cell,
+    // (9, 10), held by an ally that stands its ground: it takes another reach
+    // cell at once, (8, 9) on the seventh tick and (9, 9) on the tenth, and the
+    // first blow of 10 lands on the twelfth, not after the waits and detour of
+    // a held step.
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(utils::health(&app, depot), FixedU64::from_num(100));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(
+        utils::cell_of(app.world_mut(), attacker),
+        CellPos::new(9, 9)
+    );
+    assert_eq!(utils::health(&app, depot), FixedU64::from_num(90));
 }
 
 #[test]

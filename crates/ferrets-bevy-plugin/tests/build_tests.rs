@@ -6,16 +6,19 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
+    attack::Slain,
     build::BuilderAttendance,
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{FieldCoverage, FieldDecay, FieldDef, FieldPlacement, FieldVision},
+    kinds::Kinds,
     location::Solidity,
     pool::Pool,
     pool_def::PoolId,
     registry::ContentRegistry,
     terrains::Terrains,
+    transport::{PassengerConduct, PassengerFate},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{
@@ -27,7 +30,7 @@ use ferrets_simulation::{
     beside::Lean,
     command::PlayerCommand,
     components::{
-        build::BuildComponent,
+        build::{BuildComponent, BuildStage},
         entity_info::EntityInfoComponent,
         hidden::Inside,
         location::LocationComponent,
@@ -37,12 +40,15 @@ use ferrets_simulation::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
-    game_loop::orders::{self, Refusal},
+    game_loop::{
+        damage,
+        orders::{self, Refusal},
+    },
     map::Map,
     movement_model::MovementModel,
-    order::{AttackTarget, Order},
+    order::{AttackTarget, BuildTask, Order},
     resources::PlayerResources,
-    session::{player_slot::PlayerSlot, player_type::PlayerType},
+    session::{GameSession, player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn, supply,
 };
@@ -378,6 +384,243 @@ fn builder_standing_on_site_steps_off_it_and_raises_it() {
 }
 
 #[test]
+fn idle_ally_on_site_walks_off_and_site_goes_up() {
+    // An idle soldier of the builder's own stands on (11, 11), a cell of the
+    // depot's (10..11, 10..11). The mason, at (9, 10) on the fifth tick, asks
+    // it off: it walks to (12, 11), the nearest cell clear of the site, and
+    // the site goes up on the seventh tick, once its crossing has left the
+    // site's cells.
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 8, 10, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 11, 11, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    // 80 granted − the depot's 50.
+    assert_eq!(utils::gold(app.world_mut()), 30);
+    assert_eq!(
+        utils::cell_of(app.world_mut(), soldier),
+        CellPos::new(12, 11)
+    );
+    assert_eq!(utils::cell_of(app.world_mut(), mason), CellPos::new(9, 10));
+}
+
+#[test]
+fn idle_allies_on_site_walk_off_to_cells_of_their_own() {
+    // Walls leave the mason's way in, the depot's (10..11, 10..11) and two
+    // cells east of it, (12, 11) and (12, 12). Idle soldiers stand on (11, 10)
+    // and (11, 11), and (12, 11) is the nearest free cell for both: asked
+    // together on the sixth tick, the first is sent there and the second to
+    // (12, 12), so neither drifts back onto the site, and the depot goes up
+    // on the tenth tick, once both have stepped clear of it.
+    let mut app = utils::orders_app();
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for (x, y) in [
+            (8, 10),
+            (9, 10),
+            (10, 10),
+            (11, 10),
+            (10, 11),
+            (11, 11),
+            (12, 11),
+            (12, 12),
+        ] {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, y), false);
+        }
+    }
+    let (_, mason_id) = utils::create_owned(&mut app, "mason", 8, 10, 0);
+    let (first, _) = utils::create_owned(&mut app, "soldier", 11, 10, 0);
+    let (second, _) = utils::create_owned(&mut app, "soldier", 11, 11, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(utils::move_target(&app, first), Some(utils::pos(12, 11)));
+    assert_eq!(utils::move_target(&app, second), Some(utils::pos(12, 12)));
+
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(utils::cell_of(app.world_mut(), first), CellPos::new(12, 11));
+    assert_eq!(
+        utils::cell_of(app.world_mut(), second),
+        CellPos::new(12, 12)
+    );
+}
+
+#[test]
+fn stunned_ally_on_site_keeps_it_from_going_up() {
+    // The own soldier idle on (11, 11) is stunned: an entity that does not
+    // operate holds, so the mason, judging the ground on the sixth tick, gives
+    // the order up at once rather than waiting on it.
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 8, 10, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 11, 11, 0);
+    utils::grant_gold(&mut app, 80);
+    utils::disable_for(&mut app, soldier, 60);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 5);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), mason));
+    utils::run_ticks(&mut app, 1);
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert_eq!(utils::gold(app.world_mut()), 80);
+    assert_eq!(
+        utils::cell_of(app.world_mut(), soldier),
+        CellPos::new(11, 11)
+    );
+}
+
+#[test]
+fn teammates_idle_soldier_on_site_walks_off_and_site_goes_up() {
+    // Players 0 and 1 share a team: the soldier of player 1 idle on
+    // (11, 11) is asked off as the mason's own would be, walks to (12, 11),
+    // and the site goes up on the seventh tick.
+    let mut app = utils::make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, Some(1)),
+        PlayerSlot::occupied(1, PlayerType::Human, None, Some(1)),
+    ]);
+    utils::register_orders_content(&mut app);
+    utils::start_game(&mut app);
+    let (_, mason_id) = utils::create_owned(&mut app, "mason", 8, 10, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 11, 11, 1);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(
+        utils::cell_of(app.world_mut(), soldier),
+        CellPos::new(12, 11)
+    );
+}
+
+#[test]
+fn enemy_on_site_keeps_it_from_going_up() {
+    // The enemy soldier on (11, 11) holds: the mason, judging the ground on
+    // the sixth tick, gives the order up at once.
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 8, 10, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 11, 11, 1);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 5);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), mason));
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert_eq!(utils::gold(app.world_mut()), 80);
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+    assert_eq!(
+        utils::cell_of(app.world_mut(), soldier),
+        CellPos::new(11, 11)
+    );
+}
+
+#[test]
+fn busy_ally_on_site_keeps_it_from_going_up() {
+    // The soldier on (11, 11) is at work, striking an enemy wall beside it: an
+    // ally with an order of its own holds the site as an enemy would, and the
+    // mason, judging the ground on the sixth tick, gives the order up at once.
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 8, 10, 0);
+    let (soldier, soldier_id) = utils::create_owned(&mut app, "soldier", 11, 11, 0);
+    let (_, wall_id) = utils::create_owned(&mut app, "rampart", 12, 11, 1);
+    utils::grant_gold(&mut app, 80);
+    utils::select(&mut app, soldier_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Entity(wall_id),
+            flush: true,
+        },
+    );
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 5);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), mason));
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+    assert_eq!(utils::gold(app.world_mut()), 80);
+    assert_eq!(
+        utils::cell_of(app.world_mut(), soldier),
+        CellPos::new(11, 11)
+    );
+}
+
+#[test]
+fn founding_waits_out_its_patience_on_ally_with_nowhere_to_go() {
+    // Every cell but the site's and the mason's is walled: the idle soldier on
+    // the site has nowhere to walk off to, and the founding waits for it,
+    // then gives up.
+    let mut app = utils::orders_app();
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for (x, y) in [(9, 10), (10, 10), (11, 10), (10, 11), (11, 11)] {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, y), false);
+        }
+    }
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    utils::create_owned(&mut app, "soldier", 11, 11, 0);
+    utils::grant_gold(&mut app, 80);
+
+    // The order is taken up on the third tick and judged every tick from
+    // then on: forty ticks of patience, and the forty-first judgment, on the
+    // forty-third tick, gives the order up.
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 42);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), mason));
+    utils::run_ticks(&mut app, 1);
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+}
+
+#[test]
+fn site_has_one_founder() {
+    // Two carpenters are sent to found one depot, the first standing on its
+    // (10, 10). On the third tick the second, beside it, finds the first
+    // standing on the ground at work on an order of its own: a busy body
+    // holds, so the second founding ends there with nothing paid. The first
+    // steps off on the fourth tick and raises the site alone on the sixth.
+    let mut app = utils::orders_app();
+    let (first, first_id) = utils::create_owned(&mut app, "carpenter", 10, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "carpenter", 9, 11, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, first_id);
+    order_depot(&mut app, second_id);
+    utils::run_ticks(&mut app, 3);
+    assert!(utils::order_queue_is_empty(app.world_mut(), second));
+    assert!(!utils::order_queue_is_empty(app.world_mut(), first));
+    utils::run_ticks(&mut app, 2);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(crew_of_rising(app.world_mut()), vec![first_id]);
+    // 80 granted − one depot's 50.
+    assert_eq!(utils::gold(app.world_mut()), 30);
+    assert_eq!(utils::cell_of(app.world_mut(), second), CellPos::new(9, 11));
+}
+
+#[test]
 fn builder_standing_on_site_it_cannot_pay_for_gives_up_where_it_stands() {
     // Every gate is judged before the builder moves: with no gold for the
     // depot, the mason gives the order up on (10, 10) without stepping off.
@@ -513,8 +756,7 @@ fn builder_that_never_walks_standing_on_site_gives_up() {
     let (mason, mason_id) = utils::create_owned(&mut app, "rooted_mason", 10, 10, 0);
     utils::grant_gold(&mut app, 80);
     let order = Order::Build {
-        type_name: "depot".into(),
-        position: utils::pos(10, 10),
+        task: BuildTask::found("depot", utils::pos(10, 10)),
     };
     assert_eq!(
         orders::can_start(app.world(), mason, &order),
@@ -540,8 +782,7 @@ fn builder_that_never_walks_is_not_blamed_for_site_another_body_holds() {
     utils::create_owned(&mut app, "soldier", 11, 11, 0);
     utils::grant_gold(&mut app, 80);
     let order = Order::Build {
-        type_name: "depot".into(),
-        position: utils::pos(10, 10),
+        task: BuildTask::found("depot", utils::pos(10, 10)),
     };
     assert_eq!(orders::can_start(app.world(), mason, &order), Ok(()));
 
@@ -856,8 +1097,8 @@ fn sending_builder_to_unfinished_site_puts_it_to_work() {
     assert_eq!(
         app.world()
             .get::<BuildComponent>(second)
-            .and_then(|build| build.building),
-        Some(site_id),
+            .map(|build| build.stage),
+        Some(BuildStage::Raising(site_id)),
         "the second builder took up the site rather than trailing after it"
     );
     assert_eq!(
@@ -865,6 +1106,138 @@ fn sending_builder_to_unfinished_site_puts_it_to_work() {
         30,
         "and joining costs nothing on top of what the site was paid for"
     );
+}
+
+#[test]
+fn builder_sent_to_join_site_never_founds_one() {
+    // The second carpenter is sent from (24, 10) to join the depot the first
+    // raised; the site is called off while it walks there. Its order ends:
+    // nothing new is raised, and the stockpile keeps the refund.
+    let mut app = utils::orders_app();
+    let (_, first_id) = utils::create_owned(&mut app, "carpenter", 9, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "carpenter", 24, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, first_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    let site = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    let site_id = app
+        .world_mut()
+        .get::<EntityInfoComponent>(site)
+        .unwrap()
+        .id();
+    utils::select(&mut app, second_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: site_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 1);
+    utils::push_command(&mut app, PlayerCommand::CancelBuild { site: site_id });
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(
+        entity_def::orders(app.world(), second)
+            .last()
+            .and_then(|order| order.build_task().cloned()),
+        Some(BuildTask::join(site_id)),
+        "the cancel lands while the joiner walks to the site"
+    );
+    utils::run_ticks(&mut app, 40);
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert!(utils::order_queue_is_empty(app.world_mut(), second));
+    // 80 granted − 50 for the site + 50 back on the cancel.
+    assert_eq!(utils::gold(app.world_mut()), 80);
+}
+
+#[test]
+fn joiner_whose_site_rises_before_it_arrives_ends_its_order() {
+    // The second carpenter is sent from (30, 10) to join the depot the first
+    // raised; the first finishes it alone on the sixth tick. The joiner
+    // judges the site again only once its walk ends, beside it on (12, 11):
+    // the site has risen, and its order ends with nothing raised or paid.
+    let mut app = utils::orders_app();
+    let (_, first_id) = utils::create_owned(&mut app, "carpenter", 9, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "carpenter", 30, 10, 0);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, first_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    let site = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    let site_id = app
+        .world_mut()
+        .get::<EntityInfoComponent>(site)
+        .unwrap()
+        .id();
+    utils::select(&mut app, second_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: site_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 6);
+    assert!(!entity_def::rising(app.world(), site));
+    assert_eq!(
+        entity_def::orders(app.world(), second)
+            .last()
+            .and_then(|order| order.build_task().cloned()),
+        Some(BuildTask::join(site_id)),
+        "the site stands while the joiner walks to it"
+    );
+    utils::run_ticks(&mut app, 33);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), second));
+    utils::run_ticks(&mut app, 1);
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), second));
+    assert_eq!(
+        utils::cell_of(app.world_mut(), second),
+        CellPos::new(12, 11)
+    );
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    // 80 granted − 50 for the one depot.
+    assert_eq!(utils::gold(app.world_mut()), 30);
+}
+
+#[test]
+fn worker_coming_out_of_finished_site_has_idle_allies_make_way() {
+    // Walls leave the depot's site and a corridor east along row 10. The
+    // worker founds from (12, 10) and works hidden inside; idle soldiers hold
+    // (13, 10) to (19, 10), and another takes (12, 10) once the worker is in,
+    // so when the depot stands on the ninth tick every cell the worker could
+    // come out on within the search is held, (20, 10) lying beyond it. Waiting
+    // off the map, it has the soldiers asked aside, and comes out on (19, 10)
+    // on the eleventh tick.
+    let mut app = utils::orders_app();
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for (x, y) in [(10, 10), (11, 10), (10, 11), (11, 11)] {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, y), false);
+        }
+        for x in 12..=30 {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 10), false);
+        }
+    }
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 12, 10, 0);
+    for x in 13..=19 {
+        utils::create_owned(&mut app, "soldier", x, 10, 0);
+    }
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, worker_id);
+    utils::run_ticks(&mut app, 4);
+    assert!(entity_def::hidden(app.world(), worker));
+    // The cell the worker went in from is taken once it is inside.
+    utils::create_owned(&mut app, "soldier", 12, 10, 0);
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(rising(app.world_mut()), 0);
+    assert!(entity_def::hidden(app.world(), worker));
+    utils::run_ticks(&mut app, 1);
+    assert!(!entity_def::hidden(app.world(), worker));
+    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(19, 10));
 }
 
 #[test]
@@ -992,6 +1365,317 @@ fn open_builder_ordered_away_leaves_site_halted_with_its_progress() {
         "nothing is refunded for a standing site"
     );
     assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+}
+
+#[test]
+fn site_changing_hands_under_its_builder_is_left_halted_to_its_new_side() {
+    // The mason's depot goes up on tick 3 and takes two ticks of work; then
+    // it is handed to player 1. On its next tick the mason, no longer raising
+    // its own side's site, steps off it, and the site stands halted with the
+    // work in it.
+    let mut app = utils::orders_app();
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert_eq!(rising_progress(app.world_mut()), 2);
+
+    let site = depot(app.world_mut());
+    spawn::change_owner(app.world_mut(), site, 1, mason_id, Lean::Nothing);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+    assert!(crew_of_rising(app.world_mut()).is_empty());
+    assert_eq!(
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
+    assert_eq!(rising_progress(app.world_mut()), 2);
+    assert_eq!(entity_def::owner(app.world(), site), Some(1));
+}
+
+#[test]
+fn hidden_worker_leaves_site_changing_hands_halted() {
+    // The worker founds the depot and works it hidden inside from the twelfth
+    // tick; the site is handed to player 1. On its next tick the worker comes
+    // out on (9, 9), where it went in — walking from (5, 5) it stopped on the
+    // diagonal by the depot's corner at (10, 10), within its build range of
+    // one — still player 0's, its order ended, and the site stands halted for
+    // player 1 rather than taken down as a hidden crew's would be.
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, worker_id);
+    utils::run_ticks(&mut app, 12);
+    assert!(entity_def::hidden(app.world(), worker));
+
+    let site = depot(app.world_mut());
+    spawn::change_owner(app.world_mut(), site, 1, worker_id, Lean::Nothing);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(!entity_def::hidden(app.world(), worker));
+    assert!(utils::order_queue_is_empty(app.world_mut(), worker));
+    assert_eq!(utils::cell_of(app.world_mut(), worker), CellPos::new(9, 9));
+    assert_eq!(entity_def::owner(app.world(), worker), Some(0));
+    assert_eq!(
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
+    assert_eq!(entity_def::owner(app.world(), site), Some(1));
+}
+
+#[test]
+fn crew_of_two_leaves_site_changing_hands_halted_with_its_work() {
+    // Two carpenters raise the depot together: four ticks of work by the
+    // fifth tick. Handed to player 1, both orders end on the next tick, and
+    // the last out leaves the site halted with the four ticks in it.
+    let mut app = utils::orders_app();
+    let (first, first_id) = utils::create_owned(&mut app, "carpenter", 9, 10, 0);
+    let (second, second_id) = utils::create_owned(&mut app, "carpenter", 12, 11, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, first_id);
+    order_depot(&mut app, second_id);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
+    assert_eq!(crew_of_rising(app.world_mut()), vec![first_id, second_id]);
+    assert_eq!(rising_progress(app.world_mut()), 4);
+
+    let site = depot(app.world_mut());
+    spawn::change_owner(app.world_mut(), site, 1, first_id, Lean::Nothing);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), first));
+    assert!(utils::order_queue_is_empty(app.world_mut(), second));
+    assert_eq!(
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
+    assert_eq!(rising_progress(app.world_mut()), 4);
+}
+
+#[test]
+fn consumed_builder_is_captured_with_its_site_and_finishes_it() {
+    // The larva works the depot hidden from the twelfth tick, at no progress
+    // yet; the site is handed to player 1, and the larva goes with it, still
+    // inside and on its order, each announced as captured. The depot rises
+    // in six ticks of work, one a tick: five after five ticks, risen for
+    // player 1 on the sixth, consuming the larva.
+    let mut app = recording_orders_app();
+    let (larva, larva_id) = utils::create_owned(&mut app, "larva", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, larva_id);
+    utils::run_ticks(&mut app, 12);
+    assert_eq!(rising_progress(app.world_mut()), 0);
+
+    let site = depot(app.world_mut());
+    let site_id = entity_def::simulation_id(app.world(), site);
+    spawn::change_owner(app.world_mut(), site, 1, larva_id, Lean::Nothing);
+    assert_eq!(entity_def::owner(app.world(), larva), Some(1));
+    assert!(entity_def::hidden(app.world(), larva));
+
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(
+        captures(&app),
+        vec![(site_id, Some(0), 1), (larva_id, Some(0), 1)]
+    );
+    assert_eq!(rising_progress(app.world_mut()), 5);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(rising(app.world_mut()), 0);
+    assert_eq!(entity_def::owner(app.world(), site), Some(1));
+    assert_eq!(deaths(&app), vec![(larva_id, DeathCause::Consumed)]);
+}
+
+#[test]
+fn captors_cancel_sets_consumed_builder_down_as_its_own() {
+    // The larva's site is handed to player 1 with the larva inside; player 1
+    // calls the site off, and the larva comes back onto the map as player 1's.
+    let mut app = utils::orders_app();
+    let (larva, larva_id) = utils::create_owned(&mut app, "larva", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, larva_id);
+    utils::run_ticks(&mut app, 12);
+    let site = depot(app.world_mut());
+    let site_id = entity_def::simulation_id(app.world(), site);
+    spawn::change_owner(app.world_mut(), site, 1, larva_id, Lean::Nothing);
+
+    // Player 1's cancel, carried on this tick's frame: three ticks see the
+    // site gone and the larva set down, the fewest that do.
+    let at = app.world().resource::<GameSession>().tick();
+    utils::run_ticks_commanding(
+        &mut app,
+        3,
+        1,
+        at,
+        vec![PlayerCommand::CancelBuild { site: site_id }],
+    );
+
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert!(!entity_def::hidden(app.world(), larva));
+    // Back on (9, 9), where it went in.
+    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(9, 9));
+    assert_eq!(entity_def::owner(app.world(), larva), Some(1));
+}
+
+#[test]
+fn consumed_builder_captured_with_its_site_keeps_only_its_build() {
+    // Player 0 queues a move behind the larva's build; handed to player 1
+    // with the site, the larva keeps only the build, and once player 1 calls
+    // the site off it stays where it is set down rather than walk on player
+    // 0's way.
+    let mut app = utils::orders_app();
+    let (larva, larva_id) = utils::create_owned(&mut app, "larva", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, larva_id);
+    utils::select(&mut app, larva_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(20, 20),
+            flush: false,
+        },
+    );
+    utils::run_ticks(&mut app, 12);
+    assert!(matches!(
+        entity_def::orders(app.world(), larva).as_slice(),
+        [Order::Build { .. }, Order::Move { .. }]
+    ));
+    let site = depot(app.world_mut());
+    let site_id = entity_def::simulation_id(app.world(), site);
+
+    spawn::change_owner(app.world_mut(), site, 1, larva_id, Lean::Nothing);
+    assert!(matches!(
+        entity_def::orders(app.world(), larva).as_slice(),
+        [Order::Build { .. }]
+    ));
+
+    // Player 1's cancel, carried on this tick's frame: three ticks see the
+    // site gone and the larva set down, the fewest that do.
+    let at = app.world().resource::<GameSession>().tick();
+    utils::run_ticks_commanding(
+        &mut app,
+        3,
+        1,
+        at,
+        vec![PlayerCommand::CancelBuild { site: site_id }],
+    );
+    assert!(utils::order_queue_is_empty(app.world_mut(), larva));
+    // Back on (9, 9), where it went in, not on its way to (20, 20).
+    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(9, 9));
+}
+
+#[test]
+fn consumed_builder_dying_inside_captured_site_takes_it_down() {
+    // The larva is struck dead inside its depot on the tick the site is
+    // handed to player 1, so it is not handed over with it; its death ends
+    // its build, and the site it was to become comes down with it, whatever
+    // side the site is now.
+    let mut app = recording_orders_app();
+    let (larva, larva_id) = utils::create_owned(&mut app, "larva", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, larva_id);
+    utils::run_ticks(&mut app, 12);
+    let site = depot(app.world_mut());
+    let site_id = entity_def::simulation_id(app.world(), site);
+
+    damage::apply(
+        app.world_mut(),
+        site_id,
+        larva,
+        FixedU64::from_num(1000),
+        Slain::Nothing,
+    );
+    spawn::change_owner(app.world_mut(), site, 1, larva_id, Lean::Nothing);
+    assert_eq!(entity_def::owner(app.world(), larva), Some(0));
+    utils::run_ticks(&mut app, 1);
+
+    // Struck down before the tick, the larva's death ends its build on it,
+    // taking the site down.
+    assert_eq!(
+        deaths(&app),
+        vec![
+            (
+                larva_id,
+                DeathCause::Killed {
+                    by: site_id,
+                    by_owner: Some(0)
+                }
+            ),
+            (site_id, DeathCause::Canceled)
+        ]
+    );
+}
+
+#[test]
+fn consumed_holder_captured_with_its_site_sets_down_passengers_captor_bars() {
+    // The ferrying larva carries player 0's rider into the depot it becomes;
+    // handed to player 1 with the site, it boards its owner's side only, so
+    // the rider is set down beside where the larva went in.
+    let mut app = carrying_larvae_app();
+    let (larva, larva_id) = utils::create_owned(&mut app, "ferrying_larva", 5, 5, 0);
+    let (rider, _) = carried_rider(&mut app, larva, larva_id);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, larva_id);
+    utils::run_ticks(&mut app, 12);
+    assert!(entity_def::hidden(app.world(), larva));
+
+    let site = depot(app.world_mut());
+    spawn::change_owner(app.world_mut(), site, 1, larva_id, Lean::Nothing);
+
+    assert_eq!(entity_def::owner(app.world(), larva), Some(1));
+    assert_eq!(utils::passengers_of(app.world(), larva), []);
+    assert!(!entity_def::hidden(app.world(), rider));
+    // Beside (9, 9), where the larva went in, within its unload range of one:
+    // (10, 9).
+    assert_eq!(utils::cell_of(app.world(), rider), CellPos::new(10, 9));
+    assert_eq!(entity_def::owner(app.world(), rider), Some(0));
+}
+
+#[test]
+fn consumed_holder_captured_with_its_site_loses_passengers_captor_bars() {
+    // The devouring larva's fate for a passenger its hold no longer admits is
+    // death, as the capture of any holder would have it.
+    let mut app = carrying_larvae_app();
+    let (larva, larva_id) = utils::create_owned(&mut app, "devouring_larva", 5, 5, 0);
+    let (_, rider_id) = carried_rider(&mut app, larva, larva_id);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, larva_id);
+    utils::run_ticks(&mut app, 12);
+    assert!(entity_def::hidden(app.world(), larva));
+
+    let site = depot(app.world_mut());
+    spawn::change_owner(app.world_mut(), site, 1, larva_id, Lean::Nothing);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(utils::passengers_of(app.world(), larva), []);
+    assert_eq!(
+        deaths(&app),
+        vec![(rider_id, DeathCause::PassengerBarred { holder: larva_id })]
+    );
+}
+
+#[test]
+fn hidden_worker_canceled_on_site_changing_hands_leaves_it_halted() {
+    // The worker's order is taken away on the tick its site is handed to
+    // player 1, so it leaves through the cancel rather than its work: the
+    // last out of a site no longer its side's leaves it halted, as the work
+    // would, not taken down.
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    utils::grant_gold(&mut app, 80);
+    order_depot(&mut app, worker_id);
+    utils::run_ticks(&mut app, 12);
+    let site = depot(app.world_mut());
+    spawn::change_owner(app.world_mut(), site, 1, worker_id, Lean::Nothing);
+    utils::force_cancel_orders(app.world_mut(), worker);
+
+    utils::run_ticks(&mut app, 1);
+
+    assert!(!entity_def::hidden(app.world(), worker));
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(
+        rising_attendance(app.world_mut()),
+        Some(RiseAttendance::Halted)
+    );
 }
 
 #[test]
@@ -1493,8 +2177,8 @@ fn force_cancel_brings_consumed_builder_back_and_keeps_price_spent() {
 fn consumed_builder_survives_placement_that_fails() {
     let mut app = recording_orders_app();
     let (larva, larva_id) = utils::create_owned(&mut app, "larva", 5, 5, 0);
-    // A soldier standing in the footprint blocks the site.
-    utils::create_owned(&mut app, "soldier", 10, 10, 0);
+    // An enemy soldier standing in the footprint blocks the site.
+    utils::create_owned(&mut app, "soldier", 10, 10, 1);
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, larva_id);
@@ -1668,8 +2352,7 @@ fn builder_that_never_walks_is_refused_site_beyond_its_range() {
     let (mason, mason_id) = utils::create_owned(&mut app, "rooted_mason", 4, 10, 0);
     utils::grant_gold(&mut app, 80);
     let order = Order::Build {
-        type_name: "depot".into(),
-        position: utils::pos(24, 10),
+        task: BuildTask::found("depot", utils::pos(24, 10)),
     };
     assert_eq!(
         orders::can_start(app.world(), mason, &order),
@@ -2074,6 +2757,62 @@ fn founder_of_rising(world: &mut World) -> Option<SimulationId> {
         })
 }
 
+/// The orders roster with a `rider` that boards, and two larvae consumed into
+/// the depot they raise that carry riders of their owner's side: a
+/// `ferrying_larva` setting the ones it bars down, a `devouring_larva`
+/// destroying them. Two humans, session started, every tick's announcements
+/// kept.
+fn carrying_larvae_app() -> App {
+    let mut app = utils::make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register(
+            utils::walker("rider", utils::GROUND_DOMAIN)
+                .with_pool(Pool::health(20))
+                .with_dying(2, [])
+                .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+        );
+        for (name, fate) in [
+            ("ferrying_larva", PassengerFate::Eject),
+            ("devouring_larva", PassengerFate::Destroy),
+        ] {
+            registry.register(
+                utils::walker(name, utils::GROUND_DOMAIN)
+                    .with_pool(Pool::health(20))
+                    .with_dying(2, [])
+                    .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                    .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::ONE)
+                    .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+                    .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+                    .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ONE)
+                    .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ONE)
+                    .with_builder(["depot"], BuilderAttendance::Consumed)
+                    .with_transporter(
+                        Kinds::types(["rider"]),
+                        Affiliation::Own,
+                        fate,
+                        PassengerConduct::Shelter,
+                    ),
+            );
+        }
+    }
+    utils::register_orders_content(&mut app);
+    utils::start_game(&mut app);
+    utils::record_announcements(&mut app);
+    app
+}
+
+/// A rider of player 0 created beside `larva` and sent aboard it.
+fn carried_rider(app: &mut App, larva: Entity, larva_id: SimulationId) -> (Entity, SimulationId) {
+    let rider = utils::create_owned(app, "rider", 6, 5, 0);
+    utils::send_to(app, rider.1, larva_id);
+    utils::run_until_aboard(app, larva, 1, 20);
+    rider
+}
+
 /// The economy content roster with every tick's announcements kept, for the
 /// suite that asserts who a completion names.
 fn recording_orders_app() -> App {
@@ -2090,6 +2829,22 @@ fn deaths(app: &App) -> Vec<(SimulationId, DeathCause)> {
         .iter()
         .filter_map(|event| match event {
             SimulationEvent::EntityDied { entity, cause, .. } => Some((*entity, *cause)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every capture announced so far, as the subject, the side it was taken
+/// from and the side it went to.
+fn captures(app: &App) -> Vec<(SimulationId, Option<PlayerId>, PlayerId)> {
+    app.world()
+        .resource::<utils::Announced>()
+        .0
+        .iter()
+        .filter_map(|event| match event {
+            SimulationEvent::EntityCaptured {
+                entity, from, to, ..
+            } => Some((*entity, *from, *to)),
             _ => None,
         })
         .collect()

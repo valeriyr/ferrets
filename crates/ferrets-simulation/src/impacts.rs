@@ -1,9 +1,10 @@
 //! Damage released by a weapon that has not landed yet.
 
 use bevy_ecs::prelude::*;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
-use crate::simulation_id::SimulationId;
+use crate::{entity_def, simulation_id::SimulationId};
 use ferrets_content::{
     attack::{AttackDef, Weapon},
     entity_type_def::{EntityTypeDef, EntityTypeId},
@@ -35,6 +36,42 @@ impl FiredFrom {
         match self {
             FiredFrom::Body => def.attack.as_ref().map(AttackDef::weapon),
             FiredFrom::Turret(turret) => Some(registry.turret_def(turret).weapon()),
+        }
+    }
+}
+
+/// What a weapon is worked against this tick.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AimedAt {
+    /// A body: measured, faced and hit by the cells it stands on.
+    Body(Entity),
+    /// A bare point on the map.
+    Point(FixedUVec2),
+}
+
+impl AimedAt {
+    /// The body aimed at, if one is.
+    pub(crate) fn body(self) -> Option<Entity> {
+        match self {
+            AimedAt::Body(body) => Some(body),
+            AimedAt::Point(_) => None,
+        }
+    }
+
+    /// The cells an attack on it is measured to: every cell the body stands
+    /// on, or the cell the point lies in.
+    pub(crate) fn reached(self, world: &World) -> CellRect {
+        match self {
+            AimedAt::Body(body) => entity_def::standing_rect(world, body),
+            AimedAt::Point(point) => CellRect::new(CellPos::from(point), CellSize::ONE),
+        }
+    }
+
+    /// Where it lies and the room it takes, as a weapon comes round on it.
+    pub(crate) fn footprint(self, world: &World) -> (FixedUVec2, CellSize) {
+        match self {
+            AimedAt::Body(body) => entity_def::footprint(world, body),
+            AimedAt::Point(point) => (point, CellSize::ONE),
         }
     }
 }

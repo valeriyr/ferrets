@@ -249,6 +249,31 @@ fn shot_at_footprint_is_aimed_at_its_nearest_cell() {
 }
 
 #[test]
+fn shot_at_body_is_aimed_at_nearest_cell_it_stands_on() {
+    // Under the continuous model a runner of the other side rests at
+    // (9.5, 20), across (9, 20) and (10, 20). A shell from (14, 20) is aimed
+    // at (10, 20), the nearer cell it stands on — the cell the range was
+    // measured to — not at (9, 20), the cell its position floors into.
+    let mut app = app();
+    let projection = app.world().resource::<Map>().projection();
+    utils::install_map(&mut app, projection, MovementModel::Continuous);
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(14, 20), Some(0))
+        .expect("gunner spawns");
+    let (target, target_id) =
+        utils::create_entity(app.world_mut(), "runner", utils::pos(9, 20), Some(1))
+            .expect("target spawns");
+    utils::walk_onto(&mut app, target, utils::part_way("9.5", "20"), 10);
+
+    utils::attack(&mut app, gunner, target_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let shots = app.world().resource::<PendingImpacts>();
+    let [shot] = shots.in_flight() else {
+        panic!("one shell is in the air");
+    };
+    assert_eq!(shot.impact, utils::pos(10, 20));
+}
+
+#[test]
 fn cell_aimed_shot_misses_target_that_moves_away() {
     // The shell is sent to the cell the target stood on. The target walks off before
     // it lands, so nothing is there to take the hit.

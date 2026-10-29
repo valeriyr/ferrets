@@ -10,6 +10,7 @@ use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{rise, train::TrainQueueComponent},
+    map::Map,
     movement_model::MovementModel,
     player_stats::PlayerStats,
     resources::PlayerResources,
@@ -148,6 +149,41 @@ fn rising_building_refuses_training() {
     utils::run_ticks(&mut app, 14);
     assert_eq!(utils::count_of_type(app.world_mut(), "soldier"), 1);
     assert_eq!(utils::gold(app.world_mut()), 0);
+}
+
+#[test]
+fn own_soldiers_around_trainer_make_way_for_trained_one() {
+    // Walls everywhere but the barracks and a corridor running east from it
+    // along row 10, and the barracks' own idle soldiers fill the corridor
+    // from (12, 10) to (19, 10) — every cell the release searches. The
+    // finished soldier finds no cell, so the one on (12, 10) is asked off;
+    // the soldiers ahead of it step along the corridor in turn, and the new
+    // one stands on the seventh tick.
+    let mut app = utils::orders_app();
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for (x, y) in [(10, 10), (11, 10), (10, 11), (11, 11)] {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, y), false);
+        }
+        for x in 12..=30 {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 10), false);
+        }
+    }
+    let (_, barracks_id) =
+        utils::create_entity(app.world_mut(), "barracks", utils::pos(10, 10), Some(0)).unwrap();
+    for x in 12..=19 {
+        utils::create_owned(&mut app, "soldier", x, 10, 0);
+    }
+    app.world_mut()
+        .resource_mut::<PlayerResources>()
+        .add(0, "gold", 100);
+    queue_soldier(&mut app, barracks_id);
+
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(utils::count_of_type(app.world_mut(), "soldier"), 8);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::count_of_type(app.world_mut(), "soldier"), 9);
 }
 
 //

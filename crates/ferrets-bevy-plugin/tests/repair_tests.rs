@@ -33,7 +33,7 @@ use ferrets_simulation::{
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         pools::{self, Spending},
-        repair::UnderRepairComponent,
+        repair::{RepairComponent, UnderRepairComponent},
     },
     entity_def,
     order::Order,
@@ -377,6 +377,9 @@ fn unaffordable_repair_holds_job_then_abandons_it() {
     utils::grant_gold(&mut app, 10);
 
     repair(&mut app, worker_id, depot_id);
+    // The order starts on the third tick and the worker reaches the depot on
+    // the fifth; it mends on the sixth and seventh, and is broke from the
+    // eighth.
     utils::run_ticks(&mut app, utils::APPLY + 3 + 6);
 
     // 0 + 10: a pro-rata point costs 200 × 0.5 / 100 = 1 gold, so the 10 gold
@@ -387,13 +390,11 @@ fn unaffordable_repair_holds_job_then_abandons_it() {
         "work stops partway once the gold runs out"
     );
     assert_eq!(utils::gold(app.world()), 0, "every coin went into the work");
-    assert!(
-        !utils::order_queue_is_empty(app.world_mut(), worker),
-        "the worker waits at the job while it cannot pay"
-    );
+    // Ticks 8 to 12 stalled: 5, the patience.
+    assert_eq!(stalled_ticks(&app, worker), 5);
 
-    // Patience is 5 ticks, and it has already stalled for several.
-    utils::run_ticks(&mut app, 10);
+    // The thirteenth would be the sixth stalled tick, more than the patience.
+    utils::run_ticks(&mut app, 1);
     assert_eq!(
         utils::health_as_u32(&app, depot),
         10,
@@ -423,9 +424,15 @@ fn patient_repairer_waits_indefinitely_and_resumes_when_paid() {
         !utils::order_queue_is_empty(app.world_mut(), worker),
         "a repairer with no patience limit never gives up on the job"
     );
+    // Thirty ticks of the order, the first two walking the cell to the depot:
+    // twenty-eight spent broke, each counted though nothing ends the wait.
+    assert_eq!(stalled_ticks(&app, worker), 28);
 
     utils::grant_gold(&mut app, 500);
-    utils::run_ticks(&mut app, 30);
+    utils::run_ticks(&mut app, 1);
+    // The first paid tick starts the wait over.
+    assert_eq!(stalled_ticks(&app, worker), 0);
+    utils::run_ticks(&mut app, 29);
     assert_eq!(
         utils::health_as_u32(&app, depot),
         100,
@@ -1157,4 +1164,13 @@ fn drain_energy(app: &mut App, entity: Entity, amount: &str) {
         Spending::Paid,
         "the worker had that much energy to spend"
     );
+}
+
+/// How many ticks `worker`'s repair has gone on unable to pay.
+fn stalled_ticks(app: &App, worker: Entity) -> u32 {
+    app.world()
+        .get::<RepairComponent>(worker)
+        .expect("the worker is on a repair")
+        .patience
+        .waited()
 }

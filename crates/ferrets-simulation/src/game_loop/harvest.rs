@@ -1,7 +1,12 @@
-//! Harvest order implementation.
-//! Called by [`super::orders`] as part of the shared order lifecycle.
+//! The Harvest order: a carrier's loop of working a source of one resource
+//! kind and delivering what it carries to its owner's storage.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_content::{
+    entity_stats::EntityStatId,
+    resource::{Banking, DepletionPolicy, ResourceCarrierDef},
+    work::WorkPresence,
+};
 use ferrets_geometry::cell_rect::CellRect;
 
 use super::{
@@ -23,17 +28,14 @@ use crate::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     events::DeathCause,
+    landing::ComesFrom,
     map::Map,
     order::Order,
+    reach::{self, Approach},
     resources,
     session::player_id::PlayerId,
     simulation_id::SimulationId,
     spawn,
-};
-use ferrets_content::{
-    entity_stats::EntityStatId,
-    resource::{Banking, DepletionPolicy, ResourceCarrierDef},
-    work::WorkPresence,
 };
 
 /// How close the carrier must be to a storage to hand its load over, in grid cells.
@@ -64,100 +66,6 @@ struct Reading {
 /// operating storage of its own that accepts the load it holds.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     reading(world, entity, order).map(|_| ())
-}
-
-/// The [`Reading`] of `order`'s target for `entity` when it may start the
-/// order, or why it may not — see [`can_start`].
-fn reading(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refusal> {
-    let reading = read_target(world, entity, order)?;
-    // A delivery never leaves the map; the source the order goes on to is
-    // judged where it is taken up.
-    if reading.source.is_some() {
-        let harvest_data = entity_def::harvest_data(world, entity, &reading.kind)
-            .expect("a source reading names a kind the carrier carries");
-        work::requires_free_to_hide(world, entity, harvest_data.presence())?;
-    }
-    Ok(reading)
-}
-
-/// The [`Reading`] of `order`'s target for `entity`, or why the target takes
-/// no harvest from it.
-fn read_target(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refusal> {
-    let target_id = order
-        .harvest_target()
-        .expect("Harvest order must have a target");
-    let Some(carrier_def) = entity_def::of(world, entity).resource_carrier.as_ref() else {
-        return Err(Refusal::Incapable);
-    };
-    orders::requires_operating(world, entity)?;
-    let Some(target) = world
-        .resource::<EntityIndex>()
-        .interactable(world, target_id)
-    else {
-        return Err(Refusal::TargetGone);
-    };
-    orders::target_operating(world, target)?;
-
-    let target_def = entity_def::of(world, target);
-    // A source of a kind the carrier works names the order's kind outright —
-    // one that admits this carrier: its owner's, when it has an owner, and
-    // offering the berths the carrier sits in, when it attaches.
-    if world.entity(target).contains::<ResourceSourceComponent>()
-        && let Some(source) = target_def.resource_source.as_ref()
-        && carrier_def.can_carry(source.kind())
-    {
-        if !admits(world, target, entity, carrier_def, source.kind()) {
-            return Err(Refusal::TargetUnfit);
-        }
-        return Ok(Reading {
-            kind: source.kind().to_string(),
-            source: Some(target_id),
-        });
-    }
-    // A storage takes a delivery: the carrier's own, holding a load of a kind
-    // the storage accepts.
-    let Some(storage) = target_def.resource_storage.as_ref() else {
-        return Err(Refusal::TargetUnfit);
-    };
-    let own = matches!(
-        (entity_def::owner(world, entity), entity_def::owner(world, target)),
-        (Some(carrier), Some(holder)) if carrier == holder
-    );
-    let load = world
-        .entity(entity)
-        .get::<ResourceCarrierComponent>()
-        .filter(|carrier| carrier.amount > 0)
-        .and_then(|carrier| carrier.kind.clone());
-    match load {
-        Some(kind) if own && storage.accepts(&kind) => Ok(Reading { kind, source: None }),
-        Some(_) | None => Err(Refusal::TargetUnfit),
-    }
-}
-
-/// Whether `source` admits `carrier` for `kind`: a source with an owner takes
-/// only that owner's carriers, the carrier's kind must list the source's type,
-/// and a carrier that attaches for the kind needs the source to offer the berth
-/// group it sits in.
-fn admits(
-    world: &World,
-    source: Entity,
-    carrier: Entity,
-    carrier_def: &ResourceCarrierDef,
-    kind: &str,
-) -> bool {
-    let owned_by_another = entity_def::owner(world, source)
-        .is_some_and(|holder| Some(holder) != entity_def::owner(world, carrier));
-    if owned_by_another {
-        return false;
-    }
-    let Some(data) = carrier_def.harvest_data(kind) else {
-        return false;
-    };
-    data.sources().admits(entity_def::of(world, source))
-        && data
-            .presence()
-            .attachment()
-            .is_none_or(|attachment| berths::offers(world, source, attachment.berths()))
 }
 
 /// Called once when a Harvest order becomes the front `New` entry.
@@ -263,7 +171,7 @@ fn advance(
     let carrier_def = entity_def::of(world, entity)
         .resource_carrier
         .as_ref()
-        .unwrap()
+        .expect("a Harvest order runs on a carrier")
         .clone();
 
     // Standing out a blocked path: the retry timer runs down before the
@@ -277,7 +185,7 @@ fn advance(
         let carrier = world
             .entity(entity)
             .get::<ResourceCarrierComponent>()
-            .unwrap();
+            .expect("a carrier keeps its load");
         (carrier.kind.clone(), carrier.amount)
     };
 
@@ -315,7 +223,7 @@ fn advance(
         && world
             .resource::<EntityIndex>()
             .interactable(world, target_id)
-            .is_some_and(|t| entity_def::of(world, t).resource_storage.is_some());
+            .is_some_and(|target| entity_def::of(world, target).resource_storage.is_some());
     let deliver = carrying
         && (carried_amount >= carried_capacity || ordered_storage_pending || source.is_none());
 
@@ -362,7 +270,9 @@ fn advance(
         let banked_at = entity_def::simulation_id(world, storage);
         resources::credit_gathered(world, player, &kind, carried_amount, banked_at);
         let mut entity_mut = world.entity_mut(entity);
-        let mut carrier = entity_mut.get_mut::<ResourceCarrierComponent>().unwrap();
+        let mut carrier = entity_mut
+            .get_mut::<ResourceCarrierComponent>()
+            .expect("a carrier keeps its load");
         carrier.kind = None;
         carrier.amount = 0;
         harvest_component.delivered_initial_load = true;
@@ -384,7 +294,7 @@ fn advance(
         let source_def = entity_def::of(world, source_entity)
             .resource_source
             .as_ref()
-            .unwrap();
+            .expect("resolve_source returns sources");
         (source_def.kind().to_string(), source_def.depletion())
     };
     let harvest_data = carrier_def
@@ -409,14 +319,17 @@ fn advance(
         ) {
             Destination::OutOfReach => {
                 // The way to this source is shut, not the source spent: pick
-                // another of the same kind beside it, and with none to pick wait
-                // here for the way to open — the order gives up only when no
-                // source of its kind is left at all.
-                let beside = entity_def::footprint_rect(world, source_entity);
-                let kind = harvest_component.kind.as_str();
-                let replacement = nearest(world, beside, Some(SOURCE_SEARCH_RADIUS), |id, _| {
-                    id != source_id && source_matches(world, id, entity, &carrier_def, kind)
-                });
+                // another of the same kind the carrier reaches, around where it
+                // is, and with none to pick wait here for the way to open — the
+                // order gives up only when no source of its kind is left at all.
+                let replacement = nearest_source(
+                    world,
+                    entity,
+                    &carrier_def,
+                    &harvest_component.kind,
+                    Beside::Container(source_id),
+                    &[source_id],
+                );
                 harvest_component.last_chase = None;
                 match replacement {
                     Some(replacement) => harvest_component.source = Some(replacement),
@@ -459,7 +372,7 @@ fn advance(
         let available = world
             .entity(source_entity)
             .get::<ResourceSourceComponent>()
-            .unwrap()
+            .expect("a source keeps what is left in it")
             .amount;
         // A load of some other kind is wasted here, not banked: the hands
         // take the new kind and drop whatever they held — sending a
@@ -484,7 +397,9 @@ fn advance(
         match harvest_data.banking() {
             Banking::Carried => {
                 let mut entity_mut = world.entity_mut(entity);
-                let mut carrier = entity_mut.get_mut::<ResourceCarrierComponent>().unwrap();
+                let mut carrier = entity_mut
+                    .get_mut::<ResourceCarrierComponent>()
+                    .expect("a carrier keeps its load");
                 carrier.kind = Some(source_kind);
                 carrier.amount = kept + take;
             }
@@ -500,7 +415,9 @@ fn advance(
 
         let remaining = {
             let mut source_mut = world.entity_mut(source_entity);
-            let mut source_resources = source_mut.get_mut::<ResourceSourceComponent>().unwrap();
+            let mut source_resources = source_mut
+                .get_mut::<ResourceSourceComponent>()
+                .expect("a source keeps what is left in it");
             source_resources.amount -= drained;
             source_resources.amount
         };
@@ -524,6 +441,97 @@ fn advance(
     }
 
     Processing::state(OrderState::InProcessing)
+}
+
+/// The [`Reading`] of `order`'s target for `entity` when it may start the
+/// order, or why it may not — see [`can_start`].
+fn reading(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refusal> {
+    let reading = read_target(world, entity, order)?;
+    // A delivery never leaves the map; the source the order goes on to is
+    // judged where it is taken up.
+    if reading.source.is_some() {
+        let harvest_data = entity_def::harvest_data(world, entity, &reading.kind)
+            .expect("a source reading names a kind the carrier carries");
+        work::requires_free_to_hide(world, entity, harvest_data.presence())?;
+    }
+    Ok(reading)
+}
+
+/// The [`Reading`] of `order`'s target for `entity`, or why the target takes
+/// no harvest from it.
+fn read_target(world: &World, entity: Entity, order: &Order) -> Result<Reading, Refusal> {
+    let target_id = order
+        .harvest_target()
+        .expect("Harvest order must have a target");
+    let Some(carrier_def) = entity_def::of(world, entity).resource_carrier.as_ref() else {
+        return Err(Refusal::Incapable);
+    };
+    orders::requires_operating(world, entity)?;
+    let Some(target) = world
+        .resource::<EntityIndex>()
+        .interactable(world, target_id)
+    else {
+        return Err(Refusal::TargetGone);
+    };
+    orders::target_operating(world, target)?;
+
+    let target_def = entity_def::of(world, target);
+    // A source of a kind the carrier works names the order's kind outright —
+    // one that admits this carrier: its owner's, when it has an owner, and
+    // offering the berths the carrier sits in, when it attaches.
+    if world.entity(target).contains::<ResourceSourceComponent>()
+        && let Some(source) = target_def.resource_source.as_ref()
+        && carrier_def.can_carry(source.kind())
+    {
+        if !admits(world, target, entity, carrier_def, source.kind()) {
+            return Err(Refusal::TargetUnfit);
+        }
+        return Ok(Reading {
+            kind: source.kind().to_string(),
+            source: Some(target_id),
+        });
+    }
+    // A storage takes a delivery: the carrier's own, holding a load of a kind
+    // the storage accepts.
+    let Some(storage) = target_def.resource_storage.as_ref() else {
+        return Err(Refusal::TargetUnfit);
+    };
+    let own = entity_def::same_owner(world, entity, target);
+    let load = world
+        .entity(entity)
+        .get::<ResourceCarrierComponent>()
+        .filter(|carrier| carrier.amount > 0)
+        .and_then(|carrier| carrier.kind.clone());
+    match load {
+        Some(kind) if own && storage.accepts(&kind) => Ok(Reading { kind, source: None }),
+        Some(_) | None => Err(Refusal::TargetUnfit),
+    }
+}
+
+/// Whether `source` admits `carrier` for `kind`: a source with an owner takes
+/// only that owner's carriers, the carrier's kind must list the source's type,
+/// and a carrier that attaches for the kind needs the source to offer the berth
+/// group it sits in.
+fn admits(
+    world: &World,
+    source: Entity,
+    carrier: Entity,
+    carrier_def: &ResourceCarrierDef,
+    kind: &str,
+) -> bool {
+    let owned_by_another = entity_def::owner(world, source)
+        .is_some_and(|holder| Some(holder) != entity_def::owner(world, carrier));
+    if owned_by_another {
+        return false;
+    }
+    let Some(data) = carrier_def.harvest_data(kind) else {
+        return false;
+    };
+    data.sources().admits(entity_def::of(world, source))
+        && data
+            .presence()
+            .attachment()
+            .is_none_or(|attachment| berths::offers(world, source, attachment.berths()))
 }
 
 /// Whether `entity` is shut out of working `source` for `kind` by the crew already
@@ -596,17 +604,17 @@ fn stop_work(world: &mut World, entity: Entity, harvest: &mut HarvestComponent) 
 fn resolve_source(
     entity: Entity,
     order: &Order,
-    hc: &HarvestComponent,
+    harvest: &HarvestComponent,
     carrier_def: &ResourceCarrierDef,
     world: &World,
 ) -> Option<SimulationId> {
-    let kind = hc.kind.as_str();
+    let kind = harvest.kind.as_str();
 
     let target_id = order
         .harvest_target()
         .expect("Harvest order must have a target");
 
-    for candidate in [hc.harvesting, hc.source, Some(target_id)]
+    for candidate in [harvest.harvesting, harvest.source, Some(target_id)]
         .into_iter()
         .flatten()
     {
@@ -615,11 +623,38 @@ fn resolve_source(
         }
     }
 
+    nearest_source(
+        world,
+        entity,
+        carrier_def,
+        kind,
+        beside_source(harvest),
+        &[],
+    )
+}
+
+/// The nearest source of `kind` but `except` within [`SOURCE_SEARCH_RADIUS`]
+/// of where `entity` searches from — beside `beside`, off the map — that
+/// [`source_matches`] and that it reaches within its harvest range.
+fn nearest_source(
+    world: &World,
+    entity: Entity,
+    carrier_def: &ResourceCarrierDef,
+    kind: &str,
+    beside: Beside,
+    except: &[SimulationId],
+) -> Option<SimulationId> {
+    let approach = approach(world, entity, beside);
+    let range = entity_def::effective_stat_u32(world, entity, EntityStatId::HARVEST_RANGE);
     nearest(
         world,
-        searching_from(world, entity, beside_source(hc)),
+        searching_from(world, entity, beside),
         Some(SOURCE_SEARCH_RADIUS),
-        |id, _| source_matches(world, id, entity, carrier_def, kind),
+        |id, candidate| {
+            !except.contains(&id)
+                && source_matches(world, id, entity, carrier_def, kind)
+                && approach.reaches(world, candidate, range)
+        },
     )
 }
 
@@ -649,7 +684,7 @@ fn source_matches(
         && world
             .entity(source)
             .get::<ResourceSourceComponent>()
-            .is_some_and(|s| s.amount > 0)
+            .is_some_and(|left| left.amount > 0)
         && carrier_def.can_carry(source_def.kind())
         && source_def.kind() == kind
         && admits(world, source, carrier, carrier_def, kind)
@@ -668,7 +703,7 @@ fn resolve_storage(
         entity_def::of(world, storage)
             .resource_storage
             .as_ref()
-            .is_some_and(|s| s.accepts(kind))
+            .is_some_and(|storage_def| storage_def.accepts(kind))
             && entity_def::owner(world, storage) == Some(player)
             && orders::target_operating(world, storage).is_ok()
     };
@@ -686,11 +721,14 @@ fn resolve_storage(
     }
 
     // A carrier delivers standing: its trip ended before the search.
+    let approach = Approach::from_where_it_is(world, entity);
     let id = nearest(
         world,
         entity_def::standing_rect(world, entity),
         None,
-        |_, e| qualifies(e),
+        |_, candidate| {
+            qualifies(candidate) && approach.reaches(world, candidate, DELIVERY_DISTANCE)
+        },
     )?;
     world.resource::<EntityIndex>().alive(id)
 }
@@ -706,6 +744,20 @@ fn searching_from(world: &World, entity: Entity, beside: Beside) -> CellRect {
     }
 }
 
+/// How the carrier gets within reach of what it searches for: from where it
+/// stands, or, off the map, from where it would be set down beside `beside`.
+fn approach(world: &World, entity: Entity, beside: Beside) -> Approach {
+    if entity_def::hidden(world, entity) {
+        Approach::coming_from(
+            world,
+            entity,
+            ComesFrom::steps_out_of(world, entity, beside),
+        )
+    } else {
+        Approach::from_where_it_is(world, entity)
+    }
+}
+
 /// What a carrier off the map is set down beside: the source it works, or
 /// where it went in when it works none.
 fn beside_source(harvest: &HarvestComponent) -> Beside {
@@ -716,7 +768,7 @@ fn beside_source(harvest: &HarvestComponent) -> Beside {
 }
 
 /// Finds the alive entity matching `filter` nearest to `from`, measured to the
-/// entity's footprint with the map's projection metric — so `from` is the
+/// cells the entity stands on ([`reach::distance_to`]) — so `from` is the
 /// searcher's [`searching_from`], the side that does the reaching.
 /// Ties break on the lower [`SimulationId`], so the result is deterministic.
 fn nearest(
@@ -729,19 +781,22 @@ fn nearest(
     let mut best: Option<(u32, SimulationId)> = None;
 
     for (id, entity) in world.resource::<EntityIndex>().alive_entries() {
-        // Nothing off the map is reached.
-        if !filter(id, entity) || entity_def::hidden(world, entity) {
+        // Nothing off the map is reached; the distance gate comes before the
+        // filter, which may judge a walk there.
+        if entity_def::hidden(world, entity) {
             continue;
         }
-        let reached = entity_def::footprint_rect(world, entity);
         if let Some(max) = max_distance
-            && !projection.in_range_for_rects(from, reached, max)
+            && !projection.in_range_for_rects(from, entity_def::standing_rect(world, entity), max)
         {
+            continue;
+        }
+        if !filter(id, entity) {
             continue;
         }
         // Footprint to footprint: an anchor is not the body, and a wide
         // seeker's nearest edge may rank the candidates differently.
-        let distance = projection.distance_for_rects(from, reached);
+        let distance = reach::distance_to(world, from, entity);
         // Ascending id iteration: strictly-closer wins, ties keep the lower id.
         if best.is_none_or(|(best_distance, _)| distance < best_distance) {
             best = Some((distance, id));

@@ -18,7 +18,7 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
-    impacts::{FiredFrom, Following, PendingImpact, PendingImpacts},
+    impacts::{AimedAt, FiredFrom, Following, PendingImpact, PendingImpacts},
     map::Map,
     session::GameSession,
     simulation_id::SimulationId,
@@ -34,28 +34,27 @@ use ferrets_content::{
     targeting,
 };
 
-/// Delivers one hit from `attacker`'s `fired_from` weapon against `target`,
-/// released from `origin` — where that weapon sits: the middle of the body for the
-/// weapon it points itself, the middle of a turret's mount for a turret, and the
-/// middle of the holder for a weapon fired from inside something else, whose
-/// bearer stands nowhere.
+/// Delivers one hit from `attacker`'s `fired_from` weapon against what `aimed`
+/// names — a body, or a point on the ground — released from `origin`, where
+/// that weapon sits: the middle of the body for the weapon it points itself,
+/// the middle of a turret's mount for a turret, and the middle of the holder
+/// for a weapon fired from inside something else, whose bearer stands nowhere.
 ///
 /// A type with a projectile releases a shot that lands after its flight time; one
-/// without applies the damage now. A target-following shot damages `target` wherever
-/// it has moved to and centres its blast there; a cell-aimed one commits to the cell
-/// `target` occupied at release, so a target that keeps moving escapes it.
+/// without applies the damage now. A shot following a body damages it wherever
+/// it has moved to and centers its blast there; a cell-aimed one commits to the
+/// cell the body stood on nearest the weapon at release, so a body that keeps
+/// moving escapes it; a shot at a point lands there.
 ///
 /// Firing is the attacker's attack: every buff of its that an attack cuts
 /// short ends here, whatever weapon fired and whether or not the shot then
 /// finds a victim.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn deliver(
     world: &mut World,
     attacker: Entity,
     fired_from: FiredFrom,
     origin: FixedUVec2,
-    target: Option<Entity>,
-    aimed_at: FixedUVec2,
+    aimed: AimedAt,
     damage: FixedU64,
 ) {
     let Some(attacker_id) = world
@@ -65,11 +64,15 @@ pub(super) fn deliver(
     else {
         return;
     };
+    let target = aimed.body();
     let target_id = target.and_then(|target| target_id(world, target));
-    // A shot at an entity is aimed at the cell of its footprint nearest the
+    // A shot at an entity is aimed at the cell it stands on nearest the
     // weapon, not at the corner its position names; a shot at bare ground goes
     // where it was sent.
-    let impact = target.map_or(aimed_at, |target| aim_cell(world, origin, target));
+    let impact = match aimed {
+        AimedAt::Body(target) => aim_cell(world, origin, target),
+        AimedAt::Point(point) => point,
+    };
 
     let delivery = fired_from
         .weapon(
@@ -433,13 +436,13 @@ fn flight_ticks(distance: FixedU64, speed: FixedU64) -> u32 {
     (distance / speed).ceil().to_num::<u32>().max(1)
 }
 
-/// The cell of `target`'s footprint nearest to a shot released from `origin`:
-/// where the shot is aimed, and where a following one lands. Ties go to the
-/// first cell in row-major order.
+/// The cell `target` stands on ([`entity_def::standing_rect`]) nearest to a
+/// shot released from `origin`: where the shot is aimed, and where a following
+/// one lands. Ties go to the first cell in row-major order.
 fn aim_cell(world: &World, origin: FixedUVec2, target: Entity) -> FixedUVec2 {
     let projection = world.resource::<Map>().projection();
     let from = CellPos::from(origin);
-    let cell = entity_def::footprint_rect(world, target)
+    let cell = entity_def::standing_rect(world, target)
         .cells()
         .min_by_key(|&cell| projection.metric(from, cell))
         .expect("a footprint has at least one cell");

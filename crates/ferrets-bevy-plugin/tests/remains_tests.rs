@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
     attack::Slain,
+    berths::BerthGroup,
     dying::{Bequest, DeathKind, LeftBy},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -12,13 +13,17 @@ use ferrets_content::{
     location::Solidity,
     pool::Pool,
     registry::ContentRegistry,
+    resource::DepletionPolicy,
     transport::{PassengerConduct, PassengerFate},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{dying::RemainsComponent, entity_info::EntityInfoComponent},
+    components::{
+        dying::RemainsComponent, entity_info::EntityInfoComponent,
+        resource::ResourceSourceComponent,
+    },
     entity_def,
     entity_index::EntityIndex,
     events::DeathCause,
@@ -328,6 +333,56 @@ fn unbounded_remains_hold_every_body() {
 //
 
 #[test]
+fn remains_of_mover_between_cells_are_set_down_from_cells_it_stood_across() {
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |registry, _| {
+        registry.register(
+            EntityTypeDef::new("husk")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Passable,
+                    utils::GROUND,
+                )
+                .with_tags(["remains"])
+                .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
+        );
+        registry.register(
+            EntityTypeDef::new("runner")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_movement(
+                    utils::fixed("0.5"),
+                    utils::fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
+                )
+                .with_pool(Pool::health(30))
+                .with_dying(2, utils::leaves("husk")),
+        );
+    });
+    let (runner, _) = utils::create_owned(&mut app, "runner", 5, 5, 0);
+    let (_, killer) = utils::create_owned(&mut app, "soldier", 20, 20, 1);
+    utils::walk_onto(&mut app, runner, utils::part_way("9.5", "5"), 30);
+    assert_eq!(
+        utils::position_of(app.world_mut(), runner),
+        utils::part_way("9.5", "5")
+    );
+
+    // Resting at x 9.5 the runner stands across (9, 5) and (10, 5); its husk
+    // is offered those cells first and lies on the first of them, not on the
+    // (10, 5) its position rounds to.
+    kill(&mut app, runner, killer, Slain::Remains);
+    let left = bodies(&app);
+    assert_eq!(left.len(), 1);
+    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(9, 5));
+}
+
+#[test]
 fn kill_stands_up_what_is_not_body() {
     let mut app = app(RemainsLimit::Unbounded);
     let (hive, _) = utils::create_owned(&mut app, "hive", 5, 5, 0);
@@ -482,6 +537,68 @@ fn what_death_stands_up_stands_only_on_terrain_its_domain_takes() {
         .map(|&entity| CellPos::from(entity_def::position(app.world(), entity)))
         .collect();
     assert_eq!(cells, vec![CellPos::new(10, 8), CellPos::new(9, 8)]);
+}
+
+#[test]
+fn what_death_in_berth_stands_up_comes_out_of_job_around_it() {
+    // A warden sits in the one berth of a 3×3 hoard, (8,5)..(10,7), on its
+    // middle cell (9,6), and hands on a landlubber when killed. Out of the
+    // hoard as it stands, the landlubber stands on a cell beside it; out of
+    // the middle cell alone, walled in by the hoard, it would step onto none
+    // and nothing would stand up.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[], |registry, _| {
+        registry.register(
+            EntityTypeDef::new("hoard")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_resource_source("gold", DepletionPolicy::Persist)
+                .with_berths([("rim", BerthGroup::new([utils::berth("1.5", "1.5")], 1))]),
+        );
+        let mut warden = registry
+            .entity("sylph")
+            .expect("the orders content declares a sylph")
+            .clone()
+            .with_dying(
+                2,
+                [Bequest::new(
+                    "landlubber",
+                    1,
+                    LeftBy::Named(vec![DeathKind::Killed]),
+                )],
+            );
+        warden.name = "warden".to_string();
+        registry.register(warden);
+    });
+    let (hoard, hoard_id) =
+        utils::create_entity(app.world_mut(), "hoard", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(hoard)
+        .unwrap()
+        .amount = 1000;
+    let (warden, warden_id) = utils::create_owned(&mut app, "warden", 7, 6, 0);
+    let (_, killer) = utils::create_owned(&mut app, "soldier", 20, 20, 1);
+    utils::select(&mut app, warden_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: hoard_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(entity_def::attached(app.world(), warden));
+
+    kill(&mut app, warden, killer, Slain::Remains);
+
+    let stood_up = standing(&app, "landlubber");
+    assert_eq!(stood_up.len(), 1);
+    utils::assert_adjacent_to_footprint(app.world_mut(), stood_up[0], hoard);
+    // The cell above the hoard's middle column, the first the search offers.
+    assert_eq!(utils::cell_of(app.world(), stood_up[0]), CellPos::new(9, 4));
 }
 
 #[test]

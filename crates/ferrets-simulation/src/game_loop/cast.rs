@@ -30,7 +30,6 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_physics::body;
 
 use super::{
     buffs::{self, Bearing},
@@ -56,7 +55,7 @@ use crate::{
     order::Order,
     overbuild::{self, Cover},
     player_skills::{self, PlayerSkills},
-    requirements,
+    reach, requirements,
     resources::{self, PlayerResources},
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
@@ -419,21 +418,7 @@ pub fn reaches_aim(world: &World, caster: Entity, skill: SkillId, aim: CastAim) 
     if entity_def::of(world, caster).can_move() {
         return true;
     }
-    let goal = match aim {
-        CastAim::Cell(cell) => CellRect::new(cell, CellSize::ONE),
-        CastAim::Entity(target) | CastAim::Remains(target) => {
-            let (position, size) = entity_def::footprint(world, target);
-            body::standing_rect(position, size)
-        }
-    };
-    let (position, size) = entity_def::footprint(world, caster);
-    entity_def::reaches(
-        world,
-        caster,
-        body::standing_rect(position, size),
-        goal,
-        range,
-    )
+    reach::in_reach(world, caster, aimed_standing_rect(world, aim), range)
 }
 
 /// Where a resolved entity cast lands.
@@ -808,7 +793,7 @@ fn summoning(
     if tunnels::refuses_raising(world, caster, def) {
         return None;
     }
-    let around = aimed_rect(world, aim);
+    let around = aimed_standing_rect(world, aim);
     // Remains aimed at are spent before the bodies land, so their ground is
     // free for them.
     let (lifted, ignored) = match aim {
@@ -870,8 +855,8 @@ fn relocation(
     landing: Landing,
     aim: CastAim,
 ) -> Option<CastPlan> {
-    let caster_rect = entity_def::footprint_rect(world, caster);
-    let aim_rect = aimed_rect(world, aim);
+    let caster_rect = entity_def::standing_rect(world, caster);
+    let aim_rect = aimed_standing_rect(world, aim);
     let aimed = match aim {
         CastAim::Entity(entity) => Some(entity),
         CastAim::Cell(_) | CastAim::Remains(_) => None,
@@ -904,7 +889,7 @@ fn relocation(
                     let home = home(world, player, kinds, caster_rect, &[caster])?;
                     (
                         (
-                            entity_def::footprint_rect(world, home),
+                            entity_def::standing_rect(world, home),
                             ComesFrom::of(world, home),
                         ),
                         Some(home),
@@ -943,7 +928,7 @@ fn relocation(
                     let home = home(world, player, kinds, aim_rect, &not_home)?;
                     (
                         (
-                            entity_def::footprint_rect(world, home),
+                            entity_def::standing_rect(world, home),
                             ComesFrom::of(world, home),
                         ),
                         home,
@@ -968,7 +953,7 @@ fn relocation(
         // Each lands nearest where the other stood.
         Journey::Swap { .. } => {
             let target = aimed.expect("a swap is aimed at an entity");
-            let target_rect = entity_def::footprint_rect(world, target);
+            let target_rect = entity_def::standing_rect(world, target);
             (
                 vec![
                     (caster, (target_rect, ComesFrom::of(world, target))),
@@ -1084,8 +1069,8 @@ fn gather(
 }
 
 /// The home a journey goes to: `player`'s building of `kinds` standing on the
-/// map and finished, nearest `spot` by map distance, ties by id, none of
-/// `not_home`. `None` when there is none at all.
+/// map and finished, nearest `spot` by map distance to the cells it stands on,
+/// ties by id, none of `not_home`. `None` when there is none at all.
 fn home(
     world: &World,
     player: PlayerId,
@@ -1093,7 +1078,6 @@ fn home(
     spot: CellRect,
     not_home: &[Entity],
 ) -> Option<Entity> {
-    let projection = world.resource::<Map>().projection();
     world
         .resource::<EntityIndex>()
         .alive_entries()
@@ -1105,12 +1089,7 @@ fn home(
                 && !entity_def::rising(world, entity)
                 && names(world, entity, kinds)
         })
-        .min_by_key(|&(id, entity)| {
-            (
-                projection.distance_for_rects(entity_def::footprint_rect(world, entity), spot),
-                id,
-            )
-        })
+        .min_by_key(|&(id, entity)| (reach::distance_to(world, spot, entity), id))
         .map(|(_, entity)| entity)
 }
 
@@ -1131,17 +1110,6 @@ fn aimed_source(world: &World, aim: CastAim) -> ComesFrom {
     match aim {
         CastAim::Cell(cell) => ComesFrom::Point(cell),
         CastAim::Entity(target) | CastAim::Remains(target) => ComesFrom::of(world, target),
-    }
-}
-
-/// The ground a resolved `aim` covers: the aimed cell, or the aimed body's
-/// footprint.
-fn aimed_rect(world: &World, aim: CastAim) -> CellRect {
-    match aim {
-        CastAim::Cell(cell) => CellRect::new(cell, CellSize::ONE),
-        CastAim::Entity(target) | CastAim::Remains(target) => {
-            entity_def::footprint_rect(world, target)
-        }
     }
 }
 

@@ -23,13 +23,14 @@ use crate::{
     annex, berths,
     beside::Beside,
     components::{
-        build::BuildComponent,
+        build::{BuildComponent, BuildStage},
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
         hidden::{self, Inside},
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
         owner::OwnerComponent,
+        patience::Waiting,
         rise::{RiseAttendance, RisingComponent},
     },
     entity_def,
@@ -37,10 +38,11 @@ use crate::{
     events::{DeathCause, SpendCause},
     fields, ground,
     landing::{self, Bound, ComesFrom, Lander},
+    make_way::{self, Clearance},
     occupancy::{GridMark, OccupancyClass},
-    order::Order,
+    order::{BuildTask, Order},
     overbuild::{self, Cover},
-    requirements,
+    reach, requirements,
     resources::{self, PlayerResources},
     session::player_id::PlayerId,
     simulation_id::SimulationId,
@@ -52,43 +54,21 @@ use ferrets_content::{
     work::WorkPresence,
 };
 
-/// Whether `entity` may start this Build: its type raises the ordered type,
-/// that type rises, it operates, attending the site would not take it off
-/// the map from under others seated on it, and, for a builder that never
-/// walks, the site lies within its build range and the builder does not
-/// stand in its way. Whether the ground admits the site is decided on
-/// arrival.
+/// Whether `entity` may start this Build. To found a site: its type raises
+/// the ordered type, that type rises, it operates, attending the site would
+/// not take it off the map from under others seated on it, and, for a builder
+/// that never walks, the site lies within its build range and the builder
+/// does not stand in its way; whether the ground admits the site is decided
+/// on arrival. To join one: the site still rises, its type is one the builder
+/// raises, the builder operates and is free to attend, and one that never
+/// walks reaches it.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
-    let (type_name, position) = order.build_params().expect("Build order must have params");
-    if !entity_def::of(world, entity)
-        .builder
-        .as_ref()
-        .is_some_and(|builder_def| builder_def.can_build(type_name))
-    {
-        return Err(Refusal::Incapable);
-    }
-    let Some(raised) = world
-        .resource::<ContentRegistry>()
-        .entity(type_name)
-        .filter(|def| def.rise.is_some())
-    else {
-        return Err(Refusal::Incapable);
-    };
-    // A bound tunnel end has its other end already.
-    if tunnels::refuses_raising(world, entity, raised) {
-        return Err(Refusal::Incapable);
-    }
-    orders::requires_operating(world, entity)?;
-    requires_free_to_attend(world, entity)?;
-    if entity_def::of(world, entity).can_move() {
-        return Ok(());
-    }
-    if !reaches_site(world, entity, type_name, position) {
-        return Err(Refusal::OutOfReach);
-    }
-    match in_the_way(world, entity, type_name, position) {
-        InTheWay::InItsWay => Err(Refusal::NoRoom),
-        InTheWay::Clear => Ok(()),
+    match order.build_task().expect("called with a Build order") {
+        BuildTask::Found {
+            type_name,
+            position,
+        } => can_found(world, entity, type_name, *position),
+        BuildTask::Join { site } => can_join(world, entity, *site).map(|_| ()),
     }
 }
 
@@ -100,7 +80,11 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
-    world.entity_mut(entity).insert(BuildComponent::default());
+    let build_component = match order.build_task().expect("called with a Build order") {
+        BuildTask::Found { .. } => BuildComponent::founding(),
+        BuildTask::Join { .. } => BuildComponent::joining(),
+    };
+    world.entity_mut(entity).insert(build_component);
     OrderState::InProcessing
 }
 
@@ -135,28 +119,10 @@ pub fn cancel_processing(
         return Processing::state(OrderState::Finished);
     };
 
-    if let Some(building_id) = build_component.building {
-        let departure = leave_crew(world, building_id, entity);
-        // The builder steps out beside the site as it stands, before the last
-        // one out decides its fate.
-        work::leave(world, entity, Beside::Container(building_id));
-        // The last builder off a site decides its fate by how it attended
-        // it: one that worked inside the site, or was to become it, takes the
-        // site down with it; one that stood on or beside it leaves the site
-        // standing for whoever takes it up next.
-        match departure {
-            Departure::LastOut => match attendance(world, entity) {
-                BuilderAttendance::Crew(WorkPresence::Hidden { .. })
-                | BuilderAttendance::Consumed => abandon_site(world, entity, building_id),
-                BuilderAttendance::Crew(
-                    WorkPresence::Present { .. } | WorkPresence::Attached(_),
-                ) => halt_site(world, building_id),
-                BuilderAttendance::Unattended => {
-                    unreachable!("an unattended builder is never on a crew")
-                }
-            },
-            Departure::OthersRemain | Departure::JobGone => {}
-        }
+    match build_component.stage {
+        // Nothing is taken up yet: there is no site to leave.
+        BuildStage::Founding(_) | BuildStage::Joining => {}
+        BuildStage::Raising(building_id) => leave_site(world, entity, building_id),
     }
 
     Processing::state(OrderState::Finished)
@@ -171,9 +137,12 @@ pub fn survives_soft_cancel() -> bool {
 /// Advance a Build order by one tick.
 ///
 /// Until the site is taken up: walk to within the builder's `build_range` of it
-/// (suspending on a chase move), then either join a matching site already under way
-/// there, or pay the price and place one, a builder in the open in the site's way
-/// first walking off it. The order finishes early if the ground refuses the site, if
+/// (suspending on a chase move), then either join the site under way — the one a
+/// joining order names, or a matching one standing where a founding order goes —
+/// or pay the price and place one, a builder in the open in the site's way first
+/// walking off it, and own and allied movers on the ground asked off and waited
+/// for (see [`make_way::wait_off`]). The order finishes early if the ground refuses
+/// the site or the wait runs out, if a joined site is gone, has risen or is dying, if
 /// the site is already held by a builder that will not share it, if the price cannot
 /// be paid, if a builder in the site's way cannot walk, or finds no cell off it or no
 /// way there, or if others sat down on the builder since the order started and its
@@ -181,7 +150,9 @@ pub fn survives_soft_cancel() -> bool {
 ///
 /// After that: every builder on the site advances the same progress counter by one
 /// tick's work. When the rise time is reached the rising marker is removed,
-/// and a builder that raised the site from inside comes back out beside it.
+/// and a builder that raised the site from inside comes back out beside it. A
+/// site not the builder's side's is left: the builder steps off it, and the
+/// last one out decides its fate (see [`leave_site`]).
 ///
 /// A builder that leaves the site unattended is done the moment the site
 /// stands: the site advances itself from there (see
@@ -189,17 +160,52 @@ pub fn survives_soft_cancel() -> bool {
 /// as the site completes instead of stepping back out. A site whose crew left
 /// it halted is taken up again by the next builder sent to it.
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
-    let (type_name, position) = order.build_params().expect("Build order must have params");
-
-    let Some(mut build_component) = world.entity_mut(entity).take::<BuildComponent>() else {
+    let task = order
+        .build_task()
+        .expect("called with a Build order")
+        .clone();
+    let Some(build_component) = world.entity_mut(entity).take::<BuildComponent>() else {
         return Processing::state(OrderState::Finished);
     };
+    match (build_component.stage, task) {
+        (BuildStage::Raising(site), _) => construct(world, entity, build_component, site),
+        (
+            BuildStage::Founding(_),
+            BuildTask::Found {
+                type_name,
+                position,
+            },
+        ) => found(world, entity, build_component, &type_name, position),
+        (BuildStage::Joining, BuildTask::Join { site }) => {
+            join(world, entity, build_component, site)
+        }
+        (BuildStage::Founding(_), BuildTask::Join { .. })
+        | (BuildStage::Joining, BuildTask::Found { .. }) => {
+            unreachable!("a Build's stage follows its task")
+        }
+    }
+}
 
-    let (rise_time, building_location_def, price) = {
+//
+// ─── Founding, joining and building ─────────────────────────────────────────
+//
+
+/// One tick of founding a site of `type_name` at `position`: walk within build
+/// range of it, then join a matching own site already under way there, or pay
+/// the price and raise one — a builder in the open in the site's way first
+/// walking off it, own and allied movers on the ground asked off and waited
+/// for (see [`make_way::wait_off`]).
+fn found(
+    world: &mut World,
+    entity: Entity,
+    mut build_component: BuildComponent,
+    type_name: &str,
+    position: FixedUVec2,
+) -> Processing {
+    let (building_location_def, price) = {
         let registry = world.resource::<ContentRegistry>();
         let type_def = registry.entity(type_name).expect("type checked in prepare");
         (
-            type_def.rise_time().expect("type checked in prepare"),
             type_def
                 .location
                 .expect("validated content defines a location"),
@@ -209,243 +215,327 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let site_anchor = CellPos::from(position);
     let size = building_location_def.size();
 
-    let Some(building_id) = build_component.building else {
-        // Walk-and-place phase. A builder in the open in the site's way
-        // already reaches it, and is walked off it only once the site is
-        // judged.
-        let site = CellRect::new(site_anchor, size);
-        let in_way = in_the_way(world, entity, type_name, position);
-        match in_way {
-            InTheWay::Clear => {
-                match chase::advance_to_point(
-                    &mut build_component.last_chase,
-                    world,
-                    entity,
-                    position,
-                    size,
-                    entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE),
-                ) {
-                    Destination::OutOfReach => return Processing::state(OrderState::Finished),
-                    // A builder that never walks gives the order up as soon
-                    // as the site lies beyond its reach.
-                    Destination::Walk(move_order) => {
-                        if !entity_def::of(world, entity).can_move() {
-                            return Processing::state(OrderState::Finished);
-                        }
-                        world.entity_mut(entity).insert(build_component);
-                        return Processing::suspend(move_order);
+    // A builder in the open in the site's way already reaches it, and is
+    // walked off it only once the site is judged.
+    let site = CellRect::new(site_anchor, size);
+    let in_way = in_the_way(world, entity, type_name, position);
+    match in_way {
+        InTheWay::Clear => {
+            match chase::advance_to_point(
+                &mut build_component.last_chase,
+                world,
+                entity,
+                position,
+                size,
+                entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE),
+            ) {
+                Destination::OutOfReach => return Processing::state(OrderState::Finished),
+                // A builder that never walks gives the order up as soon
+                // as the site lies beyond its reach.
+                Destination::Walk(move_order) => {
+                    if !entity_def::of(world, entity).can_move() {
+                        return Processing::state(OrderState::Finished);
                     }
-                    Destination::Arrived => {}
+                    world.entity_mut(entity).insert(build_component);
+                    return Processing::suspend(move_order);
                 }
-            }
-            InTheWay::InItsWay => {}
-        }
-
-        chase::face(world, entity, position, size);
-
-        let owner = entity_def::owner(world, entity);
-
-        // Work already under way here is joined rather than started again: the site
-        // holds the cells, so a second placement could only ever fail.
-        if let Some(under_way) = site_under_way_at(world, type_name, site_anchor, owner) {
-            if site_excludes(world, under_way, entity) {
-                return Processing::state(OrderState::Finished);
-            }
-            // A builder others sat down on since the order started gives
-            // the order up.
-            match requires_free_to_attend(world, entity) {
-                Ok(()) => {}
-                Err(_) => return Processing::state(OrderState::Finished),
-            }
-            // Nothing is placed and nothing is paid for — joining is just taking up
-            // a position on somebody else's job.
-            let building = world
-                .resource::<EntityIndex>()
-                .alive(under_way)
-                .expect("a site is taken up only when found standing this tick");
-            let taken = join_site(world, under_way, entity);
-            enter_site(world, entity, building);
-            // A builder that leaves the site to itself is done the moment it
-            // has taken it up, exactly as it is done the moment it raises one.
-            match taken {
-                Taken::OnCrew => {}
-                Taken::LeftToItself => return Processing::state(OrderState::Finished),
-            }
-            build_component.building = Some(under_way);
-            world.entity_mut(entity).insert(build_component);
-            return Processing::state(OrderState::InProcessing);
-        }
-
-        // Every gate is judged before anything moves.
-        if let Some(player) = owner {
-            let def = world
-                .resource::<ContentRegistry>()
-                .entity(type_name)
-                .expect("type checked in prepare");
-            if !supply::allows(world, player, def) {
-                return Processing::state(OrderState::Finished);
-            }
-            // Requirements gate the placement: a site already standing keeps
-            // its crew even when its requirement falls.
-            if !requirements::met(world, player, Some(entity), &def.requires) {
-                return Processing::state(OrderState::Finished);
-            }
-            if !world
-                .resource::<PlayerResources>()
-                .can_afford(player, &price)
-            {
-                return Processing::state(OrderState::Finished);
+                Destination::Arrived => {}
             }
         }
-        // Fields and docks gate the placement the same way: judged at the
-        // raise, never again for a site already standing.
-        let overbuilds = {
-            let def = world
-                .resource::<ContentRegistry>()
-                .entity(type_name)
-                .expect("type checked in prepare");
-            if !fields::allows_placement(world, owner, def, site_anchor)
-                || !annex::allows_placement(world, entity, def, site_anchor)
-            {
-                return Processing::state(OrderState::Finished);
-            }
-            def.overbuilds.clone()
-        };
+        InTheWay::InItsWay => {}
+    }
 
-        // A site raised over a resource source needs one of the type under it,
-        // on exactly its footprint; the source's cells then count as the
-        // site's own.
-        let cover = match overbuilds {
-            Some(over) => {
-                let Some(source) = overbuild::source_under(world, &over, site) else {
-                    return Processing::state(OrderState::Finished);
-                };
-                Cover::Source(source)
-            }
-            None => Cover::Nothing,
-        };
+    chase::face(world, entity, position, size);
 
-        // The ground takes the site with the source off it and the builder in
-        // nobody's way: it steps off, steps inside or takes a berth. The cells
-        // it holds are set aside while it stands on the grid.
-        let builder_mark: Vec<GridMark> = mark_on_grid(world, entity).into_iter().collect();
-        if !ground_takes_site(world, type_name, position, cover, &builder_mark, &[entity]) {
+    let owner = entity_def::owner(world, entity);
+
+    // Work already under way here is joined rather than started again: the site
+    // holds the cells, so a second placement could only ever fail.
+    if let Some(under_way) = site_under_way_at(world, type_name, site_anchor, owner) {
+        return take_up(world, entity, build_component, under_way);
+    }
+
+    // Every gate is judged before anything moves.
+    if let Some(player) = owner {
+        let def = world
+            .resource::<ContentRegistry>()
+            .entity(type_name)
+            .expect("type checked in prepare");
+        if !supply::allows(world, player, def) {
             return Processing::state(OrderState::Finished);
         }
-
-        // A builder others sat down on since the order started gives the
-        // order up before raising anything.
-        match requires_free_to_attend(world, entity) {
-            Ok(()) => {}
-            Err(_) => return Processing::state(OrderState::Finished),
+        // Requirements gate the placement: a site already standing keeps
+        // its crew even when its requirement falls.
+        if !requirements::met(world, player, Some(entity), &def.requires) {
+            return Processing::state(OrderState::Finished);
         }
-
-        // A builder in the open in the site's way walks onto a cell off the
-        // site from which it still reaches it, and the site is judged again
-        // once it stands there; one that never walks, or finds no such cell
-        // or no way there, gives the order up.
-        match in_way {
-            InTheWay::InItsWay => {
-                if !entity_def::of(world, entity).can_move() {
-                    return Processing::state(OrderState::Finished);
-                }
-                let Some(off) = cell_off_site(world, entity, site) else {
-                    return Processing::state(OrderState::Finished);
-                };
-                return match chase::advance_onto_point(
-                    &mut build_component.last_chase,
-                    world,
-                    entity,
-                    FixedUVec2::from(off),
-                ) {
-                    Destination::OutOfReach => Processing::state(OrderState::Finished),
-                    Destination::Walk(move_order) => {
-                        world.entity_mut(entity).insert(build_component);
-                        Processing::suspend(move_order)
-                    }
-                    Destination::Arrived => {
-                        unreachable!("a builder standing on a cell off the site is out of its way")
-                    }
-                };
-            }
-            InTheWay::Clear => {}
+        if !world
+            .resource::<PlayerResources>()
+            .can_afford(player, &price)
+        {
+            return Processing::state(OrderState::Finished);
         }
-
-        // A builder that disappears into its work leaves the map now, and one
-        // that attaches to the site leaves the grid, either freeing any of
-        // the site's cells it stood on; the attached one sits in its berths
-        // once the site stands. The site is judged for them as the judge
-        // above set them aside: the cells they held may still read as claimed
-        // until the claims are rebuilt. The site is not raised yet, so the
-        // builder is inside nothing until it takes the site up.
-        let (lifted, ignored): (&[GridMark], Vec<Entity>) = match attendance(world, entity) {
-            BuilderAttendance::Crew(WorkPresence::Hidden { .. }) | BuilderAttendance::Consumed => {
-                spawn::hide_entity(world, entity, Inside::Nothing);
-                (&builder_mark, Vec::new())
-            }
-            BuilderAttendance::Crew(WorkPresence::Attached(_)) => {
-                spawn::free_to_seat(world, entity);
-                (&builder_mark, vec![entity])
-            }
-            BuilderAttendance::Crew(WorkPresence::Present { .. })
-            | BuilderAttendance::Unattended => (&[], Vec::new()),
-        };
-
-        let builder = entity_def::simulation_id(world, entity);
-        let rise_attendance = founding_attendance(world, entity, builder);
-        // The source comes off the map so the site can take its cells.
-        overbuild::lift(world, cover);
-        let (building, building_sim_id) = spawn::spawn_founded(
-            world,
-            type_name,
-            position,
-            owner,
-            FieldReach::Initial,
-            builder,
-            rise_attendance.clone(),
-            lifted,
-            &ignored,
-        )
-        .unwrap_or_else(|| unreachable!("the ground was judged to take the site this tick"));
-        overbuild::settle(world, cover, Some(building));
-
-        // A builder hidden before the site was raised is inside it now; one
-        // off the grid sits down in the site's berths; one in the open takes
-        // it up where it stands, and one that leaves it to itself stays where
-        // it stands.
-        match attendance(world, entity) {
-            BuilderAttendance::Crew(WorkPresence::Hidden { .. }) | BuilderAttendance::Consumed => {
-                hidden::record_inside(world, entity, Inside::Job(building_sim_id));
-            }
-            BuilderAttendance::Crew(WorkPresence::Attached(attachment)) => {
-                spawn::seat_unseated(world, entity, building, &attachment);
-            }
-            BuilderAttendance::Crew(WorkPresence::Present { .. })
-            | BuilderAttendance::Unattended => {}
+    }
+    // Fields and docks gate the placement the same way: judged at the
+    // raise, never again for a site already standing.
+    let overbuilds = {
+        let def = world
+            .resource::<ContentRegistry>()
+            .entity(type_name)
+            .expect("type checked in prepare");
+        if !fields::allows_placement(world, owner, def, site_anchor)
+            || !annex::allows_placement(world, entity, def, site_anchor)
+        {
+            return Processing::state(OrderState::Finished);
         }
-        if let Some(player) = owner {
-            resources::charge(
-                world,
-                player,
-                price,
-                SpendCause::Construction {
-                    site: building_sim_id,
-                },
-            );
-        }
-
-        match rise_attendance {
-            RiseAttendance::Crew { .. } => {}
-            RiseAttendance::Unattended { .. } => {
-                return Processing::state(OrderState::Finished);
-            }
-            RiseAttendance::Halted => unreachable!("a site is never raised halted"),
-        }
-        build_component.building = Some(building_sim_id);
-        world.entity_mut(entity).insert(build_component);
-        return Processing::state(OrderState::InProcessing);
+        def.overbuilds.clone()
     };
 
+    // A site raised over a resource source needs one of the type under it,
+    // on exactly its footprint; the source's cells then count as the
+    // site's own.
+    let cover = match overbuilds {
+        Some(over) => {
+            let Some(source) = overbuild::source_under(world, &over, site) else {
+                return Processing::state(OrderState::Finished);
+            };
+            Cover::Source(source)
+        }
+        None => Cover::Nothing,
+    };
+
+    // The ground takes the site with the source off it and the builder in
+    // nobody's way: it steps off, steps inside or takes a berth. The cells
+    // it holds are set aside while it stands on the grid. Own and allied
+    // movers standing there are asked off, and the founding waits for them
+    // a while.
+    let builder_mark: Vec<GridMark> = mark_on_grid(world, entity).into_iter().collect();
+    let clearance = make_way::clearance(
+        world,
+        owner,
+        site,
+        building_location_def.occupies(),
+        &[entity],
+        |marks, bodies| {
+            let lifted: Vec<GridMark> = builder_mark.iter().chain(marks).copied().collect();
+            let ignored: Vec<Entity> = std::iter::once(entity)
+                .chain(bodies.iter().copied())
+                .collect();
+            ground_takes_site(world, type_name, position, cover, &lifted, &ignored)
+        },
+    );
+    match clearance {
+        Clearance::Clear => {}
+        Clearance::Clears(bodies) => {
+            let patience = match &mut build_component.stage {
+                BuildStage::Founding(patience) => patience,
+                BuildStage::Joining | BuildStage::Raising(_) => {
+                    unreachable!("a site is founded only before one is raised")
+                }
+            };
+            let bodies: Vec<(Entity, CellRect)> =
+                bodies.into_iter().map(|body| (body, site)).collect();
+            return match make_way::wait_off(world, owner, &bodies, patience) {
+                Waiting::GivesUp => Processing::state(OrderState::Finished),
+                Waiting::Waits => {
+                    world.entity_mut(entity).insert(build_component);
+                    Processing::state(OrderState::InProcessing)
+                }
+            };
+        }
+        Clearance::Held => return Processing::state(OrderState::Finished),
+    }
+
+    // A builder others sat down on since the order started gives the
+    // order up before raising anything.
+    match requires_free_to_attend(world, entity) {
+        Ok(()) => {}
+        Err(_) => return Processing::state(OrderState::Finished),
+    }
+
+    // A builder in the open in the site's way walks onto a cell off the
+    // site from which it still reaches it, and the site is judged again
+    // once it stands there; one that never walks, or finds no such cell
+    // or no way there, gives the order up.
+    match in_way {
+        InTheWay::InItsWay => {
+            if !entity_def::of(world, entity).can_move() {
+                return Processing::state(OrderState::Finished);
+            }
+            let Some(off) = cell_off_site(world, entity, site) else {
+                return Processing::state(OrderState::Finished);
+            };
+            return match chase::advance_onto_point(
+                &mut build_component.last_chase,
+                world,
+                entity,
+                FixedUVec2::from(off),
+            ) {
+                Destination::OutOfReach => Processing::state(OrderState::Finished),
+                Destination::Walk(move_order) => {
+                    world.entity_mut(entity).insert(build_component);
+                    Processing::suspend(move_order)
+                }
+                Destination::Arrived => {
+                    unreachable!("a builder standing on a cell off the site is out of its way")
+                }
+            };
+        }
+        InTheWay::Clear => {}
+    }
+
+    // A builder that disappears into its work leaves the map now, and one
+    // that attaches to the site leaves the grid, either freeing any of
+    // the site's cells it stood on; the attached one sits in its berths
+    // once the site stands. The site is judged for them as the judge
+    // above set them aside: the cells they held may still read as claimed
+    // until the claims are rebuilt. The site is not raised yet, so the
+    // builder is inside nothing until it takes the site up.
+    let (lifted, ignored): (&[GridMark], Vec<Entity>) = match attendance(world, entity) {
+        BuilderAttendance::Crew(WorkPresence::Hidden { .. }) | BuilderAttendance::Consumed => {
+            spawn::hide_entity(world, entity, Inside::Nothing);
+            (&builder_mark, Vec::new())
+        }
+        BuilderAttendance::Crew(WorkPresence::Attached(_)) => {
+            spawn::free_to_seat(world, entity);
+            (&builder_mark, vec![entity])
+        }
+        BuilderAttendance::Crew(WorkPresence::Present { .. }) | BuilderAttendance::Unattended => {
+            (&[], Vec::new())
+        }
+    };
+
+    let builder = entity_def::simulation_id(world, entity);
+    let rise_attendance = founding_attendance(world, entity, builder);
+    // The source comes off the map so the site can take its cells.
+    overbuild::lift(world, cover);
+    let (building, building_sim_id) = spawn::spawn_founded(
+        world,
+        type_name,
+        position,
+        owner,
+        FieldReach::Initial,
+        builder,
+        rise_attendance.clone(),
+        lifted,
+        &ignored,
+    )
+    .unwrap_or_else(|| unreachable!("the ground was judged to take the site this tick"));
+    overbuild::settle(world, cover, Some(building));
+
+    // A builder hidden before the site was raised is inside it now; one
+    // off the grid sits down in the site's berths; one in the open takes
+    // it up where it stands, and one that leaves it to itself stays where
+    // it stands.
+    match attendance(world, entity) {
+        BuilderAttendance::Crew(WorkPresence::Hidden { .. }) | BuilderAttendance::Consumed => {
+            hidden::record_inside(world, entity, Inside::Job(building_sim_id));
+        }
+        BuilderAttendance::Crew(WorkPresence::Attached(attachment)) => {
+            spawn::seat_unseated(world, entity, building, &attachment);
+        }
+        BuilderAttendance::Crew(WorkPresence::Present { .. }) | BuilderAttendance::Unattended => {}
+    }
+    if let Some(player) = owner {
+        resources::charge(
+            world,
+            player,
+            price,
+            SpendCause::Construction {
+                site: building_sim_id,
+            },
+        );
+    }
+
+    match rise_attendance {
+        RiseAttendance::Crew { .. } => {}
+        RiseAttendance::Unattended { .. } => {
+            return Processing::state(OrderState::Finished);
+        }
+        RiseAttendance::Halted => unreachable!("a site is never raised halted"),
+    }
+    build_component.stage = BuildStage::Raising(building_sim_id);
+    world.entity_mut(entity).insert(build_component);
+    Processing::state(OrderState::InProcessing)
+}
+
+/// One tick of joining the own site `site` under way: walk within build range
+/// of it, then take it up. The order ends when the site is gone, has risen or
+/// is dying — a builder sent to join a site never founds one.
+fn join(
+    world: &mut World,
+    entity: Entity,
+    mut build_component: BuildComponent,
+    site: SimulationId,
+) -> Processing {
+    let Ok(building) = can_join(world, entity, site) else {
+        return Processing::state(OrderState::Finished);
+    };
+    match chase::advance_to_entity(
+        &mut build_component.last_chase,
+        world,
+        entity,
+        building,
+        entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE),
+    ) {
+        Destination::OutOfReach => return Processing::state(OrderState::Finished),
+        // A builder that never walks gives the order up as soon as the site
+        // lies beyond its reach.
+        Destination::Walk(move_order) => {
+            if !entity_def::of(world, entity).can_move() {
+                return Processing::state(OrderState::Finished);
+            }
+            world.entity_mut(entity).insert(build_component);
+            return Processing::suspend(move_order);
+        }
+        Destination::Arrived => {}
+    }
+    chase::face_entity(world, entity, building);
+    take_up(world, entity, build_component, site)
+}
+
+/// Takes up `site`, standing within reach of it: the builder joins its crew,
+/// or the order ends when the site shuts it out, others sat down on the
+/// builder since the order started, or it leaves the site to itself. Nothing
+/// is placed and nothing is paid for.
+fn take_up(
+    world: &mut World,
+    entity: Entity,
+    mut build_component: BuildComponent,
+    site: SimulationId,
+) -> Processing {
+    if site_excludes(world, site, entity) {
+        return Processing::state(OrderState::Finished);
+    }
+    match requires_free_to_attend(world, entity) {
+        Ok(()) => {}
+        Err(_) => return Processing::state(OrderState::Finished),
+    }
+    let building = world
+        .resource::<EntityIndex>()
+        .alive(site)
+        .expect("a site is taken up only when found standing this tick");
+    let taken = join_site(world, site, entity);
+    enter_site(world, entity, building);
+    // A builder that leaves the site to itself is done the moment it has taken
+    // it up, exactly as it is done the moment it raises one.
+    match taken {
+        Taken::OnCrew => {}
+        Taken::LeftToItself => return Processing::state(OrderState::Finished),
+    }
+    build_component.stage = BuildStage::Raising(site);
+    world.entity_mut(entity).insert(build_component);
+    Processing::state(OrderState::InProcessing)
+}
+
+/// One tick of `entity`'s work on the site `building_id` it has taken up:
+/// every builder on the site advances the same progress by one tick's work.
+fn construct(
+    world: &mut World,
+    entity: Entity,
+    build_component: BuildComponent,
+    building_id: SimulationId,
+) -> Processing {
     // Construction phase: one tick of this builder's work, whoever else is on the
     // site. Every way out of it leaves the site; the consumed builder's way out
     // is its death.
@@ -459,6 +549,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     if !entity_def::rising(world, building) {
         return leave_finished_site(world, entity, building_id);
     }
+    // A site not the builder's side's is not its to raise.
+    if !entity_def::same_owner(world, entity, building) {
+        leave_site(world, entity, building_id);
+        return Processing::state(OrderState::Finished);
+    }
+    let rise_time = entity_def::of(world, building)
+        .rise_time()
+        .expect("a rising site's type rises");
     let builder = entity_def::simulation_id(world, entity);
     match rise::put_in_work(world, building, rise_time, builder) {
         Worked::Risen => return leave_finished_site(world, entity, building_id),
@@ -469,15 +567,94 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     Processing::state(OrderState::InProcessing)
 }
 
+/// Whether `entity` may found a site of `type_name` at `position` (see
+/// [`can_start`]).
+fn can_found(
+    world: &World,
+    entity: Entity,
+    type_name: &str,
+    position: FixedUVec2,
+) -> Result<(), Refusal> {
+    if !entity_def::of(world, entity)
+        .builder
+        .as_ref()
+        .is_some_and(|builder_def| builder_def.can_build(type_name))
+    {
+        return Err(Refusal::Incapable);
+    }
+    let Some(raised) = world
+        .resource::<ContentRegistry>()
+        .entity(type_name)
+        .filter(|def| def.rise.is_some())
+    else {
+        return Err(Refusal::Incapable);
+    };
+    // A bound tunnel end has its other end already.
+    if tunnels::refuses_raising(world, entity, raised) {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)?;
+    requires_free_to_attend(world, entity)?;
+    if entity_def::of(world, entity).can_move() {
+        return Ok(());
+    }
+    if !reaches_site(world, entity, type_name, position) {
+        return Err(Refusal::OutOfReach);
+    }
+    match in_the_way(world, entity, type_name, position) {
+        InTheWay::InItsWay => Err(Refusal::NoRoom),
+        InTheWay::Clear => Ok(()),
+    }
+}
+
+/// The site `site` that `entity` may join, or why it may not (see
+/// [`can_start`]): an own site still rising, not dying, of a type the builder
+/// raises.
+fn can_join(world: &World, entity: Entity, site: SimulationId) -> Result<Entity, Refusal> {
+    let Some(building) = world.resource::<EntityIndex>().interactable(world, site) else {
+        return Err(Refusal::TargetGone);
+    };
+    if !entity_def::rising(world, building)
+        || entity_def::dying(world, building)
+        || !entity_def::same_owner(world, entity, building)
+    {
+        return Err(Refusal::TargetUnfit);
+    }
+    let raised = &entity_def::of(world, building).name;
+    if !entity_def::of(world, entity)
+        .builder
+        .as_ref()
+        .is_some_and(|builder_def| builder_def.can_build(raised))
+    {
+        return Err(Refusal::Incapable);
+    }
+    orders::requires_operating(world, entity)?;
+    requires_free_to_attend(world, entity)?;
+    if !entity_def::of(world, entity).can_move() {
+        let range = entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE);
+        if !reach::in_reach(
+            world,
+            entity,
+            entity_def::standing_rect(world, building),
+            range,
+        ) {
+            return Err(Refusal::OutOfReach);
+        }
+    }
+    Ok(building)
+}
+
 /// Removes the unfinished `building` from the map, paying nothing back.
 pub(super) fn tear_down_site(world: &mut World, building: Entity) {
     spawn::despawn_entity(world, building, DeathCause::Canceled);
 }
 
 /// Destroys an unfinished site, called by the last builder to walk away from a
-/// site its attendance does not leave standing. What the site cost stays
+/// site it does not leave standing. What the site cost stays
 /// spent: only a cancel aimed at the site pays it back.
-fn abandon_site(world: &mut World, entity: Entity, site: SimulationId) {
+///
+/// Panics for a site that is gone or has risen.
+fn abandon_site(world: &mut World, site: SimulationId) {
     let building = world
         .resource::<EntityIndex>()
         .alive(site)
@@ -486,17 +663,11 @@ fn abandon_site(world: &mut World, entity: Entity, site: SimulationId) {
         entity_def::rising(world, building),
         "the last builder leaves a site still rising"
     );
-    debug_assert_eq!(
-        entity_def::owner(world, building),
-        entity_def::owner(world, entity),
-        "a builder works only its owner's sites"
-    );
     tear_down_site(world, building);
 }
 
 /// Leaves the unfinished `site` standing without a crew, its progress kept,
-/// called by the last builder to walk away from a site its attendance leaves
-/// standing.
+/// called by the last builder to walk away from a site it leaves standing.
 fn halt_site(world: &mut World, site: SimulationId) {
     let building = world
         .resource::<EntityIndex>()
@@ -646,8 +817,7 @@ fn reaches_site(world: &World, entity: Entity, type_name: &str, position: FixedU
         .expect("validated content defines a location");
     let site = CellRect::new(CellPos::from(position), site_def.size());
     let range = entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE);
-    let standing = entity_def::standing_rect(world, entity);
-    entity_def::reaches(world, entity, standing, site, range)
+    reach::in_reach(world, entity, site, range)
 }
 
 /// The cells `entity` marks on the grid, while it stands on it.
@@ -663,7 +833,7 @@ fn mark_on_grid(world: &World, entity: Entity) -> Option<GridMark> {
 /// reaches the site within its build range, or `None` when none will do.
 fn cell_off_site(world: &World, entity: Entity, site: CellRect) -> Option<CellPos> {
     let range = entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE);
-    let around = entity_def::footprint_rect(world, entity);
+    let around = entity_def::standing_rect(world, entity);
     let lifted: Vec<_> = mark_on_grid(world, entity).into_iter().collect();
     let lander = Lander {
         def: entity_def::of(world, entity),
@@ -674,7 +844,7 @@ fn cell_off_site(world: &World, entity: Entity, site: CellRect) -> Option<CellPo
         toward: around,
     };
     landing::walk_goal(world, lander, &lifted, |_, footprint| {
-        !footprint.intersects(site) && entity_def::reaches(world, entity, footprint, site, range)
+        !footprint.intersects(site) && reach::reaches(world, entity, footprint, site, range)
     })
 }
 
@@ -734,17 +904,18 @@ fn join_site(world: &mut World, site: SimulationId, entity: Entity) -> Taken {
         // one that leaves a site to itself leaves this one to itself too.
         RiseAttendance::Halted => {
             let builder = entity_def::simulation_id(world, entity);
-            let taken = founding_attendance(world, entity, builder);
-            let on_crew = matches!(taken, RiseAttendance::Crew { .. });
+            let attendance = founding_attendance(world, entity, builder);
+            let taken = match attendance {
+                RiseAttendance::Crew { .. } => Taken::OnCrew,
+                RiseAttendance::Unattended { .. } => Taken::LeftToItself,
+                RiseAttendance::Halted => unreachable!("a site taken up is attended"),
+            };
             world
                 .entity_mut(building)
                 .get_mut::<RisingComponent>()
                 .expect("checked above")
-                .attendance = taken;
-            match on_crew {
-                true => Taken::OnCrew,
-                false => Taken::LeftToItself,
-            }
+                .attendance = attendance;
+            taken
         }
         RiseAttendance::Unattended { .. } => {
             unreachable!("an unattended site shuts every builder out")
@@ -764,8 +935,7 @@ fn founding_attendance(world: &World, entity: Entity, builder: SimulationId) -> 
     }
 }
 
-/// Drops out of the crew on `site` — the last builder off an unfinished site is
-/// the one that tears it down.
+/// Drops out of the crew on `site`, saying whether it was the last one out.
 ///
 /// The marker stays behind either way: it carries the work raised so far, which is not
 /// the crew's to take away. A site that finished or was destroyed in the meantime is
@@ -783,6 +953,42 @@ fn leave_crew(world: &mut World, site: SimulationId, entity: Entity) -> Departur
 fn enter_site(world: &mut World, entity: Entity, site: Entity) {
     if let Some(presence) = attendance(world, entity).presence() {
         work::enter(world, entity, &presence, site);
+    }
+}
+
+/// Takes `entity` off the crew of the rising `site` before the work is done:
+/// it steps out beside the site as it stands, and the last one out decides
+/// the site's fate by how it attended it: one that stood on or beside the
+/// site leaves it standing for whoever takes it up next; one that worked
+/// inside it takes it down with it, unless the site is not its side's, which
+/// then stands halted for its own; one that was to become the site takes it
+/// down with it, whatever side the site is.
+fn leave_site(world: &mut World, entity: Entity, site: SimulationId) {
+    let departure = leave_crew(world, site, entity);
+    work::leave(world, entity, Beside::Container(site));
+    match departure {
+        Departure::LastOut => {}
+        Departure::OthersRemain | Departure::JobGone => return,
+    }
+    match attendance(world, entity) {
+        BuilderAttendance::Crew(WorkPresence::Present { .. } | WorkPresence::Attached(_)) => {
+            halt_site(world, site)
+        }
+        BuilderAttendance::Crew(WorkPresence::Hidden { .. }) => {
+            let building = world
+                .resource::<EntityIndex>()
+                .alive(site)
+                .expect("the last builder leaves a site that still stands");
+            if entity_def::same_owner(world, entity, building) {
+                abandon_site(world, site)
+            } else {
+                halt_site(world, site)
+            }
+        }
+        BuilderAttendance::Consumed => abandon_site(world, site),
+        BuilderAttendance::Unattended => {
+            unreachable!("an unattended builder is never on a crew")
+        }
     }
 }
 

@@ -6,7 +6,7 @@ use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{NetworkActive, PauseIntent, PendingInput, SpeedIntent, tick};
 use ferrets_content::{
     build::BuilderAttendance,
-    entity_type_def::EntityTypeDef,
+    entity_type_def::{EntityTypeDef, EntityTypeId},
     field::FieldPlacement,
     location::Solidity,
     registry::ContentRegistry,
@@ -41,7 +41,7 @@ use ferrets_simulation::{
     },
     ground,
     input::SYNC_LATENCY,
-    landing,
+    landing, make_way,
     map::Map,
     occupancy::OccupancyClass,
     order::AttackTarget,
@@ -631,6 +631,43 @@ pub fn issue_orders_at(
     }
 }
 
+/// The units that would clear ground a building needs for the local player,
+/// in id order.
+#[derive(Resource, Default)]
+pub struct Yielders(pub Vec<SimulationId>);
+
+/// Notes, while a building is being placed, which units would clear its
+/// ground for the local player (see [`make_way::clears`]).
+pub fn note_yielding(world: &mut World) {
+    let ids: Vec<SimulationId> = match *world.resource::<InputMode>() {
+        InputMode::PlacingBuild(_) => {
+            let local = world.resource::<GameSession>().local_player();
+            world
+                .resource::<EntityIndex>()
+                .alive_iter()
+                .filter(|&(_, &entity)| make_way::clears(world, entity, local))
+                .map(|(&id, _)| id)
+                .collect()
+        }
+        InputMode::Normal | InputMode::PlacingWarp(_) | InputMode::Targeting(_) => Vec::new(),
+    };
+    world.resource_mut::<Yielders>().0 = ids;
+}
+
+/// Whether the placement ghost reads the cells of the entity `id`, of type
+/// `type_id`, as free: the leading builder, which gets out of its own site's
+/// way, and units that clear the ground for the side.
+pub fn ghost_ignores(
+    registry: &ContentRegistry,
+    leading: Option<SimulationId>,
+    yielders: &Yielders,
+    id: SimulationId,
+    type_id: EntityTypeId,
+) -> bool {
+    (Some(id) == leading && gets_out_of_way(registry.def(type_id)))
+        || yielders.0.binary_search(&id).is_ok()
+}
+
 /// The local player's leading selected entity — the one hotkeys and panels act on.
 #[derive(Resource, Default, PartialEq, Eq)]
 pub struct Leading(pub Option<SimulationId>);
@@ -1198,7 +1235,7 @@ pub fn placement_input(
     mut mode: ResMut<InputMode>,
     mut pending: ResMut<PendingInput>,
     mut gizmos: Gizmos,
-    leading: Res<Leading>,
+    (leading, yielders): (Res<Leading>, Res<Yielders>),
     map: Res<Map>,
     registry: Res<ContentRegistry>,
     session: Res<GameSession>,
@@ -1253,15 +1290,12 @@ pub fn placement_input(
     // What the perspective knows of the ground, and the fields the type
     // reads; a type raised over a source snaps to one under the cursor.
     let cursor = CellPos::new(cx, cy);
-    // The builder the order goes to is left out when it gets out of its own
-    // site's way: one that walks steps off where it keeps the site off, one
-    // that leaves the grid is set aside as the site goes up.
     let mut made_out = made_out_footprints(
         &registry,
         sources
             .iter()
             .filter(|(info, ..)| {
-                Some(info.id()) != leading.0 || !gets_out_of_way(registry.def(info.type_id()))
+                !ghost_ignores(&registry, leading.0, &yielders, info.id(), info.type_id())
             })
             .map(|(info, location, visibility, sighted, _, _, seated)| {
                 (info, location, visibility, sighted, seated)

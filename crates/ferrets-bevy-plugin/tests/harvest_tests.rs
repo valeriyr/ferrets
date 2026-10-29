@@ -5,7 +5,11 @@ mod utils;
 use std::collections::BTreeSet;
 
 use bevy::prelude::*;
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_content::{
+    berths::BerthGroup, entity_type_def::EntityTypeDef, location::Solidity,
+    registry::ContentRegistry, resource::DepletionPolicy,
+};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_physics::body;
 use ferrets_simulation::{
@@ -1002,6 +1006,110 @@ fn carrier_waits_in_place_when_way_to_storage_is_shut() {
 }
 
 #[test]
+fn carrier_delivers_only_to_storage_it_can_reach() {
+    let mut app = utils::orders_app();
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    let (mine, mine_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 5;
+    // The walled-in depot lies nearer the mine than the open one.
+    utils::create_owned(&mut app, "depot", 6, 10, 0);
+    wall_in(&mut app, 6, 10, 2);
+    utils::create_owned(&mut app, "depot", 15, 5, 0);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: mine_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 200);
+
+    assert_eq!(
+        utils::gold(app.world()),
+        5,
+        "the load went to the open depot, the walled one never tried"
+    );
+}
+
+#[test]
+fn carrier_delivers_to_storage_it_reaches_from_cell_beside_any_cell_it_stands_on() {
+    // A barge, a storage afloat, rests at (10.5, 5) under the continuous model,
+    // across water cells (10, 5) and (11, 5); the land starts at column 12.
+    // The drudge walks land alone: it reaches the barge only from (12, 5), one
+    // cell from (11, 5) — two from (10, 5), the cell the barge's position
+    // floors into.
+    let mut app = barge_app();
+    let (barge, _) = utils::create_owned(&mut app, "barge", 10, 5, 0);
+    utils::walk_onto(&mut app, barge, utils::part_way("10.5", "5"), 10);
+    let (_, drudge_id) = utils::create_owned(&mut app, "drudge", 14, 5, 0);
+    let (mine, mine_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(16, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 5;
+
+    utils::select(&mut app, drudge_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: mine_id,
+            flush: true,
+        },
+    );
+    // The load is drawn and the drudge walks to (12, 5), the shore cell beside
+    // the barge, banking there on the sixteenth tick: the search keeps the
+    // barge as a storage reached from a cell beside either cell it stands on,
+    // and the walk plans toward those same cells.
+    utils::run_ticks(&mut app, 15);
+    assert_eq!(utils::gold(app.world()), 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::gold(app.world()), 5);
+}
+
+#[test]
+fn carrier_delivers_to_storage_nearest_by_cells_it_stands_on() {
+    // The barge rests at (10.5, 5), across (10, 5) and (11, 5); a depot stands
+    // at (16..17, 5..6), placed first. From the loaded drudge at (13, 5) the
+    // depot is three cells off and so is the barge's floored cell, but the
+    // barge stands on (11, 5), two off: the drudge banks at the barge, from
+    // (12, 5), rather than at the depot, from (14.5, 4.25), a tick later.
+    let mut app = barge_app();
+    utils::create_owned(&mut app, "depot", 16, 5, 0);
+    let (barge, _) = utils::create_owned(&mut app, "barge", 10, 5, 0);
+    utils::walk_onto(&mut app, barge, utils::part_way("10.5", "5"), 10);
+    let (drudge, drudge_id) = utils::create_owned(&mut app, "drudge", 13, 5, 0);
+    load_with_gold(&mut app, drudge);
+    let (mine, mine_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(13, 12), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(mine)
+        .unwrap()
+        .amount = 5;
+
+    utils::select(&mut app, drudge_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: mine_id,
+            flush: true,
+        },
+    );
+    // Off on the fourth tick, at (12, 5) on the fifth, banking on the seventh.
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(utils::gold(app.world()), 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::gold(app.world()), 5);
+    assert_eq!(utils::position_of(app.world(), drudge), utils::pos(12, 5));
+}
+
+#[test]
 fn waiting_carrier_delivers_when_way_to_storage_opens() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
@@ -1084,6 +1192,45 @@ fn carrier_switches_to_nearby_source_when_ordered_one_unreachable() {
 }
 
 #[test]
+fn carrier_looks_for_replacement_source_around_itself() {
+    let mut app = utils::orders_app();
+    let (_, worker_id) = utils::create_owned(&mut app, "worker", 5, 12, 0);
+    utils::create_owned(&mut app, "depot", 2, 8, 0);
+    // The ordered mine stands in the middle of a walled yard, (14,6)..(26,18):
+    // the worker gets no nearer than the yard's wall, at (12,12), eight cells
+    // off. The open mine lies ten cells back from there, beyond the twelve-cell
+    // search around the walled mine but within the one around the worker.
+    let (walled, walled_id) =
+        utils::create_entity(app.world_mut(), "mine", utils::pos(20, 12), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(walled)
+        .unwrap()
+        .amount = 10;
+    wall_in(&mut app, 14, 6, 13);
+    let (open, _) = utils::create_entity(app.world_mut(), "mine", utils::pos(2, 12), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(open)
+        .unwrap()
+        .amount = 5;
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: walled_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 400);
+
+    assert_eq!(
+        utils::gold(app.world()),
+        5,
+        "the load came from the open mine near the worker"
+    );
+}
+
+#[test]
 fn carrier_waits_in_place_when_unreachable_source_is_only_one_around() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
@@ -1149,6 +1296,61 @@ fn waiting_carrier_resumes_when_way_to_source_opens() {
         5,
         "the retry finds the way open and the trip completes"
     );
+}
+
+#[test]
+fn carrier_picks_next_source_only_among_those_it_can_reach() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
+    utils::create_owned(&mut app, "depot", 2, 4, 0);
+    let mine = |app: &mut App, x, y, amount| {
+        let (mine, id) =
+            utils::create_entity(app.world_mut(), "mine", utils::pos(x, y), None).unwrap();
+        app.world_mut()
+            .get_mut::<ResourceSourceComponent>(mine)
+            .unwrap()
+            .amount = amount;
+        (mine, id)
+    };
+    // One load in the ordered mine; past it a walled-in mine, nearer the depot
+    // than an open one further on.
+    let (_, first_id) = mine(&mut app, 8, 5, 5);
+    let (walled, _) = mine(&mut app, 12, 5, 10);
+    wall_in(&mut app, 12, 5, 1);
+    let (_, open_id) = mine(&mut app, 16, 5, 5);
+
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: first_id,
+            flush: true,
+        },
+    );
+    // The first load is banked by the twenty-first tick, and the next source is
+    // the open mine: the walled one is nearer but no cell beside it lies where
+    // the worker walks.
+    utils::run_ticks(&mut app, 21);
+    assert_eq!(utils::gold(app.world()), 5);
+    assert_eq!(
+        app.world()
+            .get::<HarvestComponent>(worker)
+            .and_then(|harvest| harvest.source),
+        Some(open_id)
+    );
+
+    // With the open mine spent, no source it can reach is left: the order ends
+    // rather than waiting on the walled one.
+    utils::run_ticks(&mut app, 379);
+    assert_eq!(utils::gold(app.world()), 10);
+    assert_eq!(
+        app.world()
+            .get::<ResourceSourceComponent>(walled)
+            .unwrap()
+            .amount,
+        10
+    );
+    assert!(utils::order_queue_is_empty(app.world_mut(), worker));
 }
 
 #[test]
@@ -2033,6 +2235,126 @@ fn carrier_destroyed_in_berth_gives_it_back() {
     assert!(entity_def::attached(app.world(), second));
 }
 
+#[test]
+fn roaming_carrier_called_off_steps_out_by_berth_it_holds() {
+    let mut app = utils::orders_app();
+    let (roamer, roamer_id) = utils::create_owned(&mut app, "roamer", 7, 5, 0);
+    let (lode, lode_id) =
+        utils::create_entity(app.world_mut(), "lode", utils::pos(8, 5), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(lode)
+        .unwrap()
+        .amount = 1000;
+    utils::select(&mut app, roamer_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: lode_id,
+            flush: true,
+        },
+    );
+    // Seated on the third tick at the north-west berth, its middle on (8.5, 5.5),
+    // and that same tick it takes the south-east berth at (9.5, 6.5) to cross to
+    // (see `roaming_carrier_crosses_straight_to_berth_of_its_own_pick`). A stop
+    // sent a tick after the order lands on the fourth, before it has moved.
+    utils::run_ticks(&mut app, 1);
+    utils::push_command(&mut app, PlayerCommand::Stop);
+    utils::run_ticks(&mut app, utils::APPLY - 1);
+    assert_eq!(utils::position_of(app.world(), roamer), point("8.0", "5.0"));
+    utils::run_ticks(&mut app, 1);
+
+    // Called off before it has moved, it comes out by the berth it holds, cell
+    // (9, 6): the free cell nearest it beside the lode, (10, 6). Read from where
+    // it still stands, (8, 5), it would come out at (8, 4).
+    assert!(!entity_def::attached(app.world(), roamer));
+    assert_eq!(utils::position_of(app.world(), roamer), utils::pos(10, 6));
+}
+
+#[test]
+fn wide_carrier_called_off_steps_out_beside_every_cell_it_sat_on() {
+    // A 2×2 carrier seated at the slab's west berth, its middle on (10, 11.5),
+    // lies across (9..10, 10..12), half off the slab at (10..12, 10..12). Then
+    // every cell is walled but the carrier's own column, a pocket at
+    // (7..8, 8..9) beside its top corner, and one at (13..14, 10..11) beside
+    // the slab. Called off, it steps out of the cells it sat on into the near
+    // pocket; read as the one cell its corner rounds to, (9, 11), it would
+    // reach no pocket and come out across the slab instead.
+    let mut app = wide_sylph_app(&[("0.0", "1.5")]);
+    let (slab, slab_id) =
+        utils::create_entity(app.world_mut(), "slab", utils::pos(10, 10), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(slab)
+        .unwrap()
+        .amount = 1000;
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "wide_sylph", 5, 10, 0);
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: slab_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 14);
+    assert!(entity_def::attached(app.world(), sylph));
+    assert_eq!(utils::position_of(app.world(), sylph), point("9.0", "10.5"));
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    for (x, y) in [
+        (9, 10),
+        (9, 11),
+        (9, 12),
+        (7, 8),
+        (8, 8),
+        (7, 9),
+        (8, 9),
+        (13, 10),
+        (14, 10),
+        (13, 11),
+        (14, 11),
+    ] {
+        utils::free_cell(&mut app, CellPos::new(x, y));
+    }
+
+    // The stop lands on the third tick after it is sent.
+    utils::push_command(&mut app, PlayerCommand::Stop);
+    utils::run_ticks(&mut app, 2);
+    assert!(entity_def::attached(app.world(), sylph));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::position_of(app.world(), sylph), utils::pos(7, 8));
+}
+
+#[test]
+fn wide_carrier_takes_berth_its_body_sits_nearest() {
+    // A 2×2 carrier arrives from the south-west to stand on (8..9, 13..14),
+    // with two free berths: the first at (11, 10), the second at (12, 11).
+    // Seated, its body would cover (10..11, 9..10) at the first, three cells
+    // off, and (11..12, 10..11) at the second, two off: it takes the second.
+    // By the cells the berths' points lie on, both are three off and the
+    // first would win the tie.
+    let mut app = wide_sylph_app(&[("1.0", "0.0"), ("2.0", "1.0")]);
+    let (slab, slab_id) =
+        utils::create_entity(app.world_mut(), "slab", utils::pos(10, 10), None).unwrap();
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(slab)
+        .unwrap()
+        .amount = 1000;
+    let (sylph, sylph_id) = utils::create_owned(&mut app, "wide_sylph", 4, 16, 0);
+    utils::select(&mut app, sylph_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: slab_id,
+            flush: true,
+        },
+    );
+    // Standing on (8, 13) on the eleventh tick, seated on the twelfth.
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(utils::position_of(app.world(), sylph), utils::pos(8, 13));
+    utils::run_ticks(&mut app, 1);
+    assert!(entity_def::attached(app.world(), sylph));
+    assert_eq!(utils::position_of(app.world(), sylph), utils::pos(11, 10));
+}
+
 //
 // ─── How many may work one source ─────────────────────────────────────────────
 //
@@ -2196,6 +2518,75 @@ fn load_with_gold(app: &mut App, carrier: Entity) {
         .unwrap();
     component.kind = Some("gold".to_string());
     component.amount = 5;
+}
+
+/// The orders content on a continuous-model map whose columns 0 to 11 are
+/// water, with a `barge` — a storage of gold afloat, the orders content's
+/// soldier fitted to take deliveries — and a `drudge`, its worker walking land
+/// alone.
+fn barge_app() -> App {
+    let water: Vec<(u32, u32)> = (0..=11)
+        .flat_map(|x| (0..=20).map(move |y| (x, y)))
+        .collect();
+    utils::dry_orders_app(MovementModel::Continuous, &water, |registry, dry| {
+        let mut barge = registry
+            .entity("soldier")
+            .expect("the orders content declares a soldier")
+            .clone()
+            .with_resource_storage(["gold"]);
+        barge.name = "barge".to_string();
+        registry.register(barge);
+        let mut drudge = utils::in_domain(
+            registry
+                .entity("worker")
+                .expect("the orders content declares a worker")
+                .clone(),
+            dry,
+        );
+        drudge.name = "drudge".to_string();
+        registry.register(drudge);
+    })
+}
+
+/// The orders content with a `wide_sylph` — the sylph on a 2×2 footprint,
+/// seated in the `rim` berths of a gold source — and a 3×3 gold `slab` whose
+/// `rim` berths lie at `points`, one worker a berth.
+fn wide_sylph_app(points: &[(&str, &str)]) -> App {
+    let mut app = utils::orders_app();
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        let sylph = registry
+            .entity("sylph")
+            .expect("the orders content declares a sylph")
+            .clone();
+        let location = sylph.location.expect("the sylph stands");
+        let mut wide = sylph.with_location(
+            location.domain(),
+            CellSize::new(2, 2),
+            location.solidity(),
+            location.occupies(),
+        );
+        wide.name = "wide_sylph".to_string();
+        registry.register(wide);
+        registry.register(
+            EntityTypeDef::new("slab")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_resource_source("gold", DepletionPolicy::Persist)
+                .with_berths([(
+                    "rim",
+                    BerthGroup::new(
+                        points.iter().map(|&(x, y)| utils::berth(x, y)),
+                        points.len(),
+                    ),
+                )]),
+        );
+    }
+    app
 }
 
 /// Walls the `size`-by-`size` footprint at `(x, y)` in on every side with

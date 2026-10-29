@@ -7,7 +7,10 @@
 
 use bevy_ecs::world::World;
 
-use super::{acquire, attack_move};
+use super::{
+    acquire::{self, Pursuit},
+    attack_move,
+};
 use crate::{
     components::{
         entity_stats::StatsComponent,
@@ -88,6 +91,7 @@ pub fn tick(world: &mut World) {
                         entity,
                         entity_def::body_weapon_targets(world, entity),
                         range,
+                        Pursuit::Holds,
                     )
                     && let Some(mut queue) =
                         world.entity_mut(entity).get_mut::<OrderQueueComponent>()

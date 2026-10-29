@@ -4,18 +4,51 @@
 use bevy_ecs::prelude::*;
 use ferrets_geometry::cell_pos::CellPos;
 
-use crate::{components::chase::ChaseState, simulation_id::SimulationId};
+use crate::{
+    components::{chase::ChaseState, patience::Patience},
+    simulation_id::SimulationId,
+};
 use ferrets_content::entity_type_def::EntityTypeId;
 
-/// Per-entity in-flight construction state.
-#[derive(Component, Debug, Default)]
+/// How far a Build order has come.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildStage {
+    /// No site yet: on its way to the ground, or waiting on bodies making way
+    /// off it.
+    Founding(Patience),
+    /// On its way to a site under way, not taken up yet.
+    Joining,
+    /// The site it raised, or an already-started one it took up.
+    Raising(SimulationId),
+}
+
+/// A Build order's construction state on this entity.
+#[derive(Component, Debug)]
 pub struct BuildComponent {
-    /// The building being constructed, once it has been placed on the map or an
-    /// already-started site has been taken up.
-    pub building: Option<SimulationId>,
     /// The last chase round toward the site; identical rounds accumulate
     /// until the chase gives up (see [`ChaseState`]).
     pub last_chase: ChaseState,
+    /// How far the order has come.
+    pub stage: BuildStage,
+}
+
+impl BuildComponent {
+    /// A Build order on its way to join a site, not chasing yet.
+    pub fn joining() -> Self {
+        Self {
+            last_chase: None,
+            stage: BuildStage::Joining,
+        }
+    }
+
+    /// A Build order on its way to found a site, not chasing yet and not
+    /// waited yet.
+    pub fn founding() -> Self {
+        Self {
+            last_chase: None,
+            stage: BuildStage::Founding(Patience::starting()),
+        }
+    }
 }
 
 /// Marks an entity raised over a resource source it took the remaining

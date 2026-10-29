@@ -116,7 +116,10 @@ fn fold(
                     }
                     // Downing your own or an ally's earns no kill; the victim
                     // already counted it as a loss.
-                    if !same_side(world, killer, *owner) {
+                    if !world
+                        .resource::<GameSession>()
+                        .owners_allied(Some(killer), *owner)
+                    {
                         statistics.record_killed(killer, *entity_type);
                     }
                 }
@@ -139,7 +142,10 @@ fn fold(
             }
             if let Some(player) = attacker_owner {
                 // Damage to your own or an ally's is taken but never dealt.
-                if !same_side(world, *player, *target_owner) {
+                if !world
+                    .resource::<GameSession>()
+                    .owners_allied(Some(*player), *target_owner)
+                {
                     statistics.record_damage_dealt(*player, *amount);
                 }
             }
@@ -212,15 +218,6 @@ fn fold(
     }
 }
 
-/// Whether `player` and `other` stand on one side — the same player, or allies.
-/// An unowned `other` is on nobody's side.
-fn same_side(world: &World, player: PlayerId, other: Option<PlayerId>) -> bool {
-    match other {
-        Some(other) => world.resource::<GameSession>().are_allied(player, other),
-        None => false,
-    }
-}
-
 /// Whose kill a death was, or `None` for a death that was no loss.
 ///
 /// A passenger lost with its carrier died to whatever took the carrier down, so
@@ -255,6 +252,8 @@ fn fire_behind(mut cause: DeathCause, deaths: &BTreeMap<SimulationId, DeathCause
             // burned down — is a loss nobody is credited with.
             DeathCause::Decayed => return Some(Loss::Uncredited),
             DeathCause::Depleted
+            // A site called off, or brought down with the builder that was
+            // becoming it: that builder's death, if any, is the loss.
             | DeathCause::Canceled
             | DeathCause::Consumed
             | DeathCause::Overbuilt

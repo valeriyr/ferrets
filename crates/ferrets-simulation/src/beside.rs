@@ -16,6 +16,14 @@ pub enum Beside {
     WentIn,
     /// This footprint.
     Footprint(CellRect),
+    /// The berth it sat at on a job: out of the job's footprint where the
+    /// cells it sat on lie inside it, else out of those cells.
+    Berth {
+        /// The job whose berth it held.
+        job: SimulationId,
+        /// The cells it sat on there.
+        rect: CellRect,
+    },
 }
 
 /// Which of the free cells in the nearest ring a returning body takes first.

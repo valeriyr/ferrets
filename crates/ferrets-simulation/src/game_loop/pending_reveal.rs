@@ -6,6 +6,7 @@ use crate::{
     components::hidden::{self, HiddenComponent, Inside},
     entity_def,
     entity_index::EntityIndex,
+    make_way::{self, Asked},
     spawn::{self, SetDown},
 };
 
@@ -13,8 +14,9 @@ use crate::{
 ///
 /// Each tick, every hidden entity whose marker is [`Inside::Waiting`]
 /// reattempts its return beside what it names; on success the entity is back
-/// on the grid, and the return puts the marker away. Entities are visited in
-/// ascending simulation-id order.
+/// on the grid, and the return puts the marker away. With no cell free, the
+/// own and allied movers that alone keep it off one are asked to make way.
+/// Entities are visited in ascending simulation-id order.
 pub fn process_pending_reveals(world: &mut World) {
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         let Some(marker) = world.entity(entity).get::<HiddenComponent>() else {
@@ -30,8 +32,17 @@ pub fn process_pending_reveals(world: &mut World) {
         hidden::note_last_search(world, entity, searched);
         match spawn::place_back_beside(world, entity, beside, lean) {
             SetDown::Placed => {}
-            // No cell yet: it waits for the next tick.
-            SetDown::NoCell => {}
+            // No cell yet: it waits for the next tick, while what keeps it
+            // off one is asked aside.
+            SetDown::NoCell => match make_way::clear_landing(
+                world,
+                entity_def::owner(world, entity),
+                |world| spawn::beside_lander(world, entity, beside, lean),
+                &[],
+                &[entity],
+            ) {
+                Asked::Leaves | Asked::Boxed => {}
+            },
         }
     }
 }

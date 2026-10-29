@@ -8,12 +8,15 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 
-use super::{acquire, attack};
+use super::{
+    acquire::{self, Pursuit},
+    attack,
+};
 use crate::{
     components::transport::{GarrisonFireComponent, TransporterComponent},
     entity_def,
     entity_index::EntityIndex,
-    impacts::FiredFrom,
+    impacts::{AimedAt, FiredFrom},
     session::GameSession,
     simulation_id::SimulationId,
 };
@@ -82,14 +85,14 @@ fn fire(world: &mut World, holder: Entity, passenger: Entity, passenger_id: Simu
     // acquisition reading runs for: range from its footprint, fog by its owner,
     // and its own fresh attacker preferred — a bunker under fire shoots back.
     // The weapon is the passenger's, so layer reach is judged by the passenger.
-    let valid = fire
-        .target
-        .is_some_and(|id| acquire::qualifies(world, holder, targets, id, stats.range));
+    let valid = fire.target.is_some_and(|id| {
+        acquire::qualifies(world, holder, targets, id, stats.range, Pursuit::Holds)
+    });
     if !valid {
         fire.phase = 0;
         let tick = world.resource::<GameSession>().tick();
         fire.target = if acquire::due(passenger_id, tick) {
-            acquire::find_target(world, holder, targets, stats.range)
+            acquire::find_target(world, holder, targets, stats.range, Pursuit::Holds)
         } else {
             None
         };
@@ -104,15 +107,13 @@ fn fire(world: &mut World, holder: Entity, passenger: Entity, passenger_id: Simu
         .resource::<EntityIndex>()
         .alive(target_id)
         .expect("a qualifying target is alive");
-    let (target_position, _) = entity_def::footprint(world, target);
     let origin = entity_def::footprint_center(world, holder);
     attack::swing(
         world,
         passenger,
         FiredFrom::Body,
         origin,
-        Some(target),
-        target_position,
+        AimedAt::Body(target),
         &stats,
         &mut fire.phase,
     );
