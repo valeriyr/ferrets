@@ -11,7 +11,7 @@ use ferrets_content::{
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldCoverage, FieldDecay, FieldDef, FieldPlacement, FieldVision},
+    field::{FieldCoverage, FieldDecay, FieldDef, FieldPlacement},
     kinds::Kinds,
     location::Solidity,
     pool::Pool,
@@ -2515,7 +2515,8 @@ fn builders_app() -> App {
                 Terrains::Any,
                 utils::GROUND.into(),
                 FieldDecay::Instant,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Blind,
             ),
         );

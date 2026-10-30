@@ -595,7 +595,8 @@ pub fn refresh_minimap(
     }
     // Power, true sight and the veil tint the cells whose coverage the world
     // overlay shows the viewer. Creep and blight paint solid rather than
-    // tinting, which is why they keep their own loops above.
+    // tinting, which is why they keep their own loops above. Smoke and fog
+    // clouds the world overlay draws are left off the minimap.
     let layers = render::shown_fields(&registry);
     let sight = render::CoverageSight {
         session: &session,

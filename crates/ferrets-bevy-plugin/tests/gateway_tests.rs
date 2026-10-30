@@ -12,7 +12,7 @@ use ferrets_content::{
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldDecay, FieldDef, FieldPlacement, FieldVision},
+    field::{FieldAction, FieldDecay, FieldDef, FieldPlacement},
     gateway::{Doors, Joins},
     kinds::Kinds,
     landing::Landing,
@@ -2207,7 +2207,8 @@ fn register(app: &mut App) {
             Terrains::Only(utils::LAND.into()),
             utils::GROUND.into(),
             FieldDecay::Never,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     );

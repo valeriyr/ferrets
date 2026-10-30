@@ -19,6 +19,11 @@
 //! `REFRESH_TIMES=1` times every hierarchy refresh the game runs — on a copy,
 //! after each tick that left the hierarchy dirty — and prints each with its
 //! tick, then the count, total, mean and longest.
+//! `VISIBILITY_TIMES=1` times every tick and, after it, the fog of war
+//! recompute run again on the tick's end state into a scratch grid — the
+//! game's own grid is set aside and put back untouched — and prints the
+//! count, total, mean and longest of each, with the recompute's share of the
+//! tick.
 
 use std::{
     collections::BTreeMap,
@@ -49,9 +54,11 @@ use ferrets_simulation::{
     entity_def,
     entity_index::EntityIndex,
     fields::{self, FieldGrid},
+    game_loop::visibility,
     map::Map,
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
+    visibility::VisibilityGrid,
 };
 
 /// One sampled tick of one entity's life.
@@ -116,11 +123,30 @@ fn replay_forensics() {
     let passives: Option<String> = std::env::var("PASSIVES").ok();
     let mut refreshes: Option<Vec<(u32, Duration)>> =
         std::env::var("REFRESH_TIMES").ok().map(|_| Vec::new());
+    let mut visibility_times: Option<(Vec<Duration>, Vec<Duration>)> =
+        std::env::var("VISIBILITY_TIMES")
+            .ok()
+            .map(|_| (Vec::new(), Vec::new()));
     let mut bore: BTreeMap<SimulationId, Vec<String>> = BTreeMap::new();
 
     let mut tracks: BTreeMap<SimulationId, (String, Vec<Sample>)> = BTreeMap::new();
     for _ in 0..last + 10 {
+        let tick_started = Instant::now();
         ferrets_bevy_plugin::run_tick(app.world_mut());
+        let tick_took = tick_started.elapsed();
+        if let Some((ticks, recomputes)) = &mut visibility_times {
+            let world = app.world_mut();
+            let kept = world
+                .remove_resource::<VisibilityGrid>()
+                .expect("a game in progress has a fog grid");
+            let players = world.resource::<GameSession>().slots().len();
+            world.insert_resource(VisibilityGrid::new(players, kept.width(), kept.height()));
+            let started = Instant::now();
+            visibility::recompute_visibility(world);
+            recomputes.push(started.elapsed());
+            world.insert_resource(kept);
+            ticks.push(tick_took);
+        }
         let world = app.world_mut();
         let tick = world.resource::<GameSession>().tick();
         if let Some(refreshes) = &mut refreshes {
@@ -371,6 +397,24 @@ fn replay_forensics() {
         println!(
             "refreshes: {}, total {total:?}, mean {mean:?}, longest {longest:?}",
             refreshes.len()
+        );
+    }
+    if let Some((ticks, recomputes)) = &visibility_times {
+        let summary = |name: &str, times: &[Duration]| {
+            let total: Duration = times.iter().sum();
+            let longest = times.iter().max().copied().unwrap_or_default();
+            let mean = total / u32::try_from(times.len().max(1)).expect("ticks fit a u32");
+            println!(
+                "{name}: {}, total {total:?}, mean {mean:?}, longest {longest:?}",
+                times.len()
+            );
+            total
+        };
+        let tick_total = summary("ticks", ticks);
+        let recompute_total = summary("visibility recomputes", recomputes);
+        println!(
+            "visibility share of a tick: {:.1}%",
+            100.0 * recompute_total.as_secs_f64() / tick_total.as_secs_f64().max(f64::MIN_POSITIVE)
         );
     }
 

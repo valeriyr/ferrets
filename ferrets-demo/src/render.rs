@@ -743,7 +743,7 @@ fn shape_for(type_name: &str) -> Shape {
         "refinery" => Shape::Refinery,
         "tank" => Shape::Tank { sieged: false },
         "siege_tank" => Shape::Tank { sieged: true },
-        "big_rock" => Shape::Circle,
+        "big_rock" | "standing_stone" => Shape::Circle,
         // The undead hall wears its tier: the necropolis is a square like any
         // first hall, and each form it grows into has one of its own — worn
         // from the moment it starts rising, so a hall never reads as a form it
@@ -3013,13 +3013,16 @@ pub fn spawn_terrain_tiles(
 /// The tint a covered cell is drawn in, by field name: creep and blight are
 /// shown whoever's they are; power where it is the viewed player's own; true
 /// sight and the veil where they are the viewed side's, its allies' included,
-/// as the simulation reads them; and all of them to an observer watching the
-/// whole map. A cell several fields cover wears them layered in this order.
+/// as the simulation reads them; smoke and fog clouds whoever's they are; and
+/// all of them to an observer watching the whole map. A cell several fields
+/// cover wears them layered in this order.
 const CREEP_TINT: Color = Color::srgba(0.55, 0.2, 0.65, 0.5);
 const BLIGHT_TINT: Color = Color::srgba(0.16, 0.16, 0.17, 0.6);
 const POWER_TINT: Color = Color::srgba(0.25, 0.55, 1.0, 0.28);
 const TRUE_SIGHT_TINT: Color = Color::srgba(0.6, 0.9, 1.0, 0.22);
 const VEIL_TINT: Color = Color::srgba(0.75, 0.6, 1.0, 0.3);
+const SMOKE_TINT: Color = Color::srgba(0.62, 0.62, 0.6, 0.55);
+const FOG_CLOUD_TINT: Color = Color::srgba(0.85, 0.88, 0.92, 0.45);
 
 /// Whose coverage of a field the overlay shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3146,6 +3149,8 @@ pub(crate) fn shown_fields(registry: &ContentRegistry) -> Vec<(FieldId, Color, S
         ("power", POWER_TINT, Shown::Own),
         ("true_sight", TRUE_SIGHT_TINT, Shown::Allied),
         ("veil", VEIL_TINT, Shown::Allied),
+        ("smoke", SMOKE_TINT, Shown::Anyone),
+        ("fog_cloud", FOG_CLOUD_TINT, Shown::Anyone),
     ]
     .into_iter()
     .filter_map(|(name, tint, shown)| registry.field(name).map(|field| (field, tint, shown)))

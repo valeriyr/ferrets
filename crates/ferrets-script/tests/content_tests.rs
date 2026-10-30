@@ -23,11 +23,12 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldEffect, FieldGrowth, FieldPlacement,
-        FieldSourceDef, FieldVision,
+        FieldSourceDef, FieldWatch,
     },
     gateway::{Doors, GatewayDef, Joins},
     kinds::{Kind, Kinds},
     landing::Landing,
+    layer::LayerLevel,
     location::Solidity,
     morph::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, PoolCarry,
@@ -46,6 +47,7 @@ use ferrets_content::{
     research::ResearchDef,
     resource::Banking,
     rise::{RisePool, RisePoolInitial},
+    sight_block::SightBlock,
     skills::{
         AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, EntityCastTarget, FromAimTo,
         FromCasterTo, GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach,
@@ -66,8 +68,8 @@ use ferrets_content::{
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_nav_grid::{
-    cliff_crossing::CliffCrossing, layer_level::LayerLevel, layer_mask::LayerMask,
-    terrain_id::TerrainId, terrain_mask::TerrainMask,
+    cliff_crossing::CliffCrossing, layer_mask::LayerMask, terrain_id::TerrainId,
+    terrain_mask::TerrainMask,
 };
 use ferrets_script::{
     content,
@@ -2459,7 +2461,7 @@ fn loads_domain_terrains_as_mask_or_any() {
 #[test]
 fn loads_layer_levels_and_domain_cliff_crossings() {
     let source = r#"
-        local GROUND = define_layer("ground", { level = { from = 1, to = 3 } })
+        local GROUND = define_layer("ground", { level = { from = 1, to = 3 }, relief_blocks = { "ground" } })
         local AIR = define_layer("air", { level = 4 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = LAND, cliff_crossing = "ramp" })
@@ -2469,10 +2471,18 @@ fn loads_layer_levels_and_domain_cliff_crossings() {
     let registry = content::load(&engine(), source).expect("load content");
 
     assert_eq!(
-        registry.layer_level(utils::GROUND),
+        registry.layer_def(utils::GROUND).level(),
         LayerLevel::Range { from: 1, to: 3 }
     );
-    assert_eq!(registry.layer_level(utils::AIR), LayerLevel::At(4));
+    assert_eq!(registry.layer_def(utils::AIR).level(), LayerLevel::At(4));
+    assert_eq!(
+        registry.layer_def(utils::GROUND).relief_blocks(),
+        LayerMask::from(utils::GROUND)
+    );
+    assert_eq!(
+        registry.layer_def(utils::AIR).relief_blocks(),
+        LayerMask::EMPTY
+    );
     let cliff_crossing = |name: &str| {
         registry
             .domain_def(registry.domain(name).expect("defined"))
@@ -2538,9 +2548,56 @@ fn layer_range_without_top_errors() {
 }
 
 #[test]
+fn ranged_layer_without_relief_blocks_errors() {
+    let source = r#"
+        define_layer("ground", { level = { from = 1, to = 3 } })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a ranged layer that does not say whose sight its levels block");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "field 'relief_blocks': error converting Lua nil to Vec<String> (expected table)"
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "layer 'air' is at one level everywhere and has no relief to block sight"
+)]
+fn flat_layer_naming_relief_blocks_panics_on_load() {
+    let source = r#"
+        define_layer("air", { level = 4, relief_blocks = { "air" } })
+    "#;
+    let _ = content::load(&engine(), source);
+}
+
+#[test]
+fn relief_blocks_names_lower_layer() {
+    let source = r#"
+        local SEABED = define_layer("seabed", { level = { from = 0, to = 1 }, relief_blocks = {} })
+        local GROUND = define_layer("ground", {
+            level = { from = 2, to = 4 },
+            relief_blocks = { "ground", "seabed" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let seabed = registry.layer("seabed").expect("seabed is registered");
+    let ground = registry.layer("ground").expect("ground is registered");
+
+    assert_eq!(registry.layer_def(ground).relief_blocks(), ground | seabed);
+    assert_eq!(registry.layer_def(seabed).relief_blocks(), LayerMask::EMPTY);
+}
+
+#[test]
 fn unknown_cliff_crossing_keyword_errors() {
     let source = r#"
-        local GROUND = define_layer("ground", { level = { from = 1, to = 3 } })
+        local GROUND = define_layer("ground", { level = { from = 1, to = 3 }, relief_blocks = { "ground" } })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = LAND, cliff_crossing = "jump" })
     "#;
@@ -4224,8 +4281,21 @@ fn parses_fields_sources_placement_and_effects() {
     );
     assert_eq!(registry.field_def(power).decay(), FieldDecay::Instant);
     assert_eq!(registry.field_def(blight).decay(), FieldDecay::Never);
-    assert_eq!(registry.field_def(creep).vision(), FieldVision::Watched);
-    assert_eq!(registry.field_def(power).vision(), FieldVision::Dark);
+    assert_eq!(
+        registry.field_def(creep).watches(),
+        Some(FieldWatch::new(Affiliation::Own))
+    );
+    assert_eq!(registry.field_def(power).watches(), None);
+    assert_eq!(registry.field_def(power).blocks_sight(), None);
+    let fog_cloud = registry.field("fog_cloud").expect("fog cloud defined");
+    assert_eq!(
+        registry.field_def(fog_cloud).watches(),
+        Some(FieldWatch::new(Affiliation::Allied))
+    );
+    assert_eq!(
+        registry.field_def(fog_cloud).blocks_sight(),
+        Some(SightBlock::new(2, Affiliation::Enemy))
+    );
     assert_eq!(
         registry.field_def(creep).terrains(),
         Terrains::Only(utils::LAND.into())
@@ -4415,17 +4485,23 @@ fn field_effect_without_coverage_errors() {
 }
 
 #[test]
-fn unknown_field_vision_errors() {
+fn unknown_field_watch_affiliation_errors() {
     let source = r#"
         local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
-        define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = "never", vision = "glowing" })
+        define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = "never", watches = { of = "friends" } })
     "#;
-    let error = content::load(&engine(), source).err().expect("bad vision");
-    assert!(
-        matches!(&error, ScriptError::ContentError(message) if message.contains("field vision must be 'dark' or 'watched', found 'glowing'")),
-        "{error:?}"
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a watch naming no side");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "affiliation must be 'own', 'allied', 'enemy', or 'anyone', found 'friends'"
     );
 }
 
@@ -5177,8 +5253,95 @@ fn unknown_morph_interrupted_errors() {
 }
 
 //
-// ─── Concealment and detection ────────────────────────────────────────────────
+// ─── Sight, concealment and detection ─────────────────────────────────────────
 //
+
+#[test]
+fn type_reads_blocks_sight_and_sees_up() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity("rock", {
+            location = { domain = "ground", size = 2, solidity = "solid" },
+            blocks_sight = { height = 1, of = "anyone" },
+        })
+        define_entity("scout", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            stats = { sight_range = 9, sees_up = 1 },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+
+    assert_eq!(
+        registry.entity("rock").unwrap().blocks_sight,
+        Some(SightBlock::new(1, Affiliation::Anyone))
+    );
+    assert_eq!(registry.entity("scout").unwrap().blocks_sight, None);
+    assert_eq!(
+        registry
+            .entity("scout")
+            .unwrap()
+            .base_stat(EntityStatId::SEES_UP),
+        Some(FixedU64::ONE)
+    );
+    assert_eq!(
+        registry
+            .entity("rock")
+            .unwrap()
+            .base_stat(EntityStatId::SEES_UP),
+        None
+    );
+}
+
+#[test]
+fn blocks_sight_without_whose_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity("rock", {
+            location = { domain = "ground", size = 2, solidity = "solid" },
+            blocks_sight = { height = 1 },
+        })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a blocker that does not say whose sight it blocks");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "field 'of': error converting Lua nil to String (expected string or number)"
+    );
+}
+
+#[test]
+fn blocks_sight_without_height_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity("rock", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            blocks_sight = { of = "anyone" },
+        })
+    "#;
+
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a blocker that does not say how high it rises");
+    };
+
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "field 'height': error converting Lua nil to u32 (expected number or string coercible to number)"
+    );
+}
 
 #[test]
 fn type_reads_concealment_and_stands_exposed_unless_declared() {
@@ -6043,8 +6206,9 @@ const FIELDS: &str = r#"
     local LAND = define_terrain("land")
     define_domain("ground", { layer = GROUND, terrains = "any" })
 
-    define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 9 }, vision = "watched" })
+    define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 9 }, watches = { of = "own" } })
     define_field("power", { terrains = LAND, spreads_on = GROUND, decay = "instant" })
+    define_field("fog_cloud", { terrains = "any", spreads_on = GROUND, decay = "instant", watches = { of = "allied" }, blocks_sight = { height = 2, of = "enemy" } })
     define_field("blight", { terrains = LAND, spreads_on = GROUND, decay = "never" })
 
     define_entity("hive", {

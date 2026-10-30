@@ -13,6 +13,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     kinds::Kinds,
+    layer::LayerLevel,
     location::Solidity,
     player_buffs::PlayerBuffDef,
     pool::{Pool, PoolInitial},
@@ -31,7 +32,6 @@ use ferrets_content::{
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
-use ferrets_nav_grid::layer_level::LayerLevel;
 use ferrets_script::{
     ai::{
         AiRuntime,
@@ -947,7 +947,7 @@ fn cell(x: u32, y: u32) -> FixedUVec2 {
 /// `lab` type where a type is needed.
 fn research_content() -> (ContentView, ResearchId) {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground", LayerLevel::At(1));
+    let ground = registry.register_layer("ground", LayerLevel::At(1), &[]);
     registry.register_terrain("land");
     registry.register_domain("ground", DomainDef::new(ground, Terrains::Any, None));
     registry.register_resource("gold");

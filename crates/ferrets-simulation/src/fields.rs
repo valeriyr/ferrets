@@ -124,6 +124,16 @@ impl FieldGrid {
             .map(move |(i, &mask)| (CellPos::new(i as u32 % width, i as u32 / width), mask))
     }
 
+    /// Every cell of `field` some player covers, with its coverage,
+    /// row-major.
+    pub fn covered_cells(
+        &self,
+        field: FieldId,
+    ) -> impl Iterator<Item = (CellPos, PlayerMask)> + '_ {
+        self.cells(field)
+            .filter(|(_, covering)| !covering.is_empty())
+    }
+
     /// Adds `player` to the cover of `pos` in `field`.
     pub(crate) fn cover(&mut self, field: FieldId, pos: CellPos, player: PlayerId) {
         let index = self.index(pos);

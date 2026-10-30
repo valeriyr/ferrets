@@ -6,7 +6,7 @@ use ferrets_nav_grid::{layer_mask::LayerMask, terrain_mask::TerrainMask};
 
 use crate::{
     affiliation::Affiliation, detection::Detection, entity_effect::EntityEffect,
-    requirement::Requirement, terrains::Terrains,
+    requirement::Requirement, sight_block::SightBlock, terrains::Terrains,
 };
 
 /// A handle to a registered field kind, assigned in registration order.
@@ -44,13 +44,26 @@ pub enum FieldDecay {
     Never,
 }
 
-/// What covering a cell does for the sight of the players covering it.
+/// A field's watch over the cells it covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldVision {
-    /// Nothing: a covered cell is as dark as any other.
-    Dark,
-    /// Every covered cell is in sight of the players covering it.
-    Watched,
+pub struct FieldWatch {
+    /// Whom a covered cell is in sight of, judged from the players covering
+    /// it.
+    of: Affiliation,
+}
+
+impl FieldWatch {
+    /// Creates a new `FieldWatch` with the given data.
+    pub fn new(of: Affiliation) -> Self {
+        Self { of }
+    }
+
+    /// Whom a covered cell is in sight of, judged from the players covering
+    /// it.
+    #[inline]
+    pub fn of(&self) -> Affiliation {
+        self.of
+    }
 }
 
 /// One kind of field.
@@ -63,8 +76,10 @@ pub struct FieldDef {
     spreads_on: LayerMask,
     /// What happens to covered cells no source sustains.
     decay: FieldDecay,
-    /// What covering a cell does for the sight of the players covering it.
-    vision: FieldVision,
+    /// Whom the cells it covers are in sight of, if anyone's.
+    watches: Option<FieldWatch>,
+    /// What each cell it covers blocks of the sight across it, if anything.
+    blocks_sight: Option<SightBlock>,
     /// What covering a cell does for the players covering it against the
     /// concealed entities standing there.
     detection: Detection,
@@ -80,7 +95,8 @@ impl FieldDef {
         terrains: Terrains,
         spreads_on: LayerMask,
         decay: FieldDecay,
-        vision: FieldVision,
+        watches: Option<FieldWatch>,
+        blocks_sight: Option<SightBlock>,
         detection: Detection,
     ) -> Self {
         match terrains {
@@ -111,7 +127,8 @@ impl FieldDef {
             terrains,
             spreads_on,
             decay,
-            vision,
+            watches,
+            blocks_sight,
             detection,
         }
     }
@@ -135,10 +152,16 @@ impl FieldDef {
         self.decay
     }
 
-    /// What covering a cell does for the sight of the players covering it.
+    /// Whom the cells it covers are in sight of, if anyone's.
     #[inline]
-    pub fn vision(&self) -> FieldVision {
-        self.vision
+    pub fn watches(&self) -> Option<FieldWatch> {
+        self.watches
+    }
+
+    /// What each cell it covers blocks of the sight across it, if anything.
+    #[inline]
+    pub fn blocks_sight(&self) -> Option<SightBlock> {
+        self.blocks_sight
     }
 
     /// What covering a cell does for the players covering it against the

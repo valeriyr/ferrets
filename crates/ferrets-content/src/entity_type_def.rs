@@ -38,6 +38,7 @@ use crate::{
     },
     rise::{RiseDef, RisePool},
     selection::SelectionDef,
+    sight_block::SightBlock,
     skills::SkillId,
     splash::SplashDef,
     stand::StandingAct,
@@ -129,6 +130,8 @@ pub struct EntityTypeDef {
     /// How instances stand toward a side that is not their own: seen wherever
     /// its sight reaches, or only where its detection reaches as well.
     pub concealment: Concealment,
+    /// What instances block of the sight across them, if anything.
+    pub blocks_sight: Option<SightBlock>,
     /// The fields instances project, and how. Empty means instances project
     /// no field.
     pub field_sources: Vec<FieldSourceDef>,
@@ -223,6 +226,7 @@ impl EntityTypeDef {
             skills: Vec::new(),
             passives: Vec::new(),
             concealment: Concealment::Exposed,
+            blocks_sight: None,
             field_sources: Vec::new(),
             field_placement: Vec::new(),
             field_effects: Vec::new(),
@@ -608,6 +612,13 @@ impl EntityTypeDef {
     /// [`concealment`](Self::concealment)).
     pub fn with_concealment(mut self, concealment: Concealment) -> Self {
         self.concealment = concealment;
+        self
+    }
+
+    /// Sets what instances of this type block of the sight across them (see
+    /// [`blocks_sight`](Self::blocks_sight)).
+    pub fn with_blocks_sight(mut self, blocks_sight: SightBlock) -> Self {
+        self.blocks_sight = Some(blocks_sight);
         self
     }
 

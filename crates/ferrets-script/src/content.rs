@@ -7,7 +7,7 @@ use ferrets_content::{
     concealment::Concealment,
     dying::DeathKind,
     entity_buffs::Interruption,
-    field::{FieldAction, FieldCoverage, FieldVision},
+    field::{FieldAction, FieldCoverage},
     gateway::Doors,
     landing::Landing,
     location::Solidity,
@@ -390,18 +390,6 @@ pub(crate) fn modifier_op(value: &str) -> crate::Result<ModifierOp> {
         &[
             ("flat", ModifierOp::FlatAdd),
             ("percent", ModifierOp::PercentAdd),
-        ],
-    )
-}
-
-/// Maps a field vision name to its enum.
-pub(crate) fn field_vision(value: &str) -> crate::Result<FieldVision> {
-    keyword(
-        "field vision",
-        value,
-        &[
-            ("dark", FieldVision::Dark),
-            ("watched", FieldVision::Watched),
         ],
     )
 }

@@ -8,7 +8,6 @@ use ferrets_geometry::{
 };
 use ferrets_nav_grid::{
     layer_id::LayerId,
-    layer_level::LayerLevel,
     layer_mask::LayerMask,
     mover_shape::MoverShape,
     nav_grid::NavGrid,
@@ -32,7 +31,8 @@ use crate::{
     session::player_id::PlayerId,
 };
 use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, registry::ContentRegistry,
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, layer::LayerLevel,
+    registry::ContentRegistry,
 };
 
 /// The active game map.
@@ -108,7 +108,7 @@ impl Map {
             );
         }
         for (name, layer) in registry.layers() {
-            match registry.layer_level(layer) {
+            match registry.layer_def(layer).level() {
                 LayerLevel::At(level) => {
                     assert!(
                         data.relief(name).is_none(),

@@ -70,7 +70,7 @@ impl ComesFrom {
     pub(crate) fn within(world: &World, entity: Entity, reach: u32) -> Self {
         ComesFrom::Footprint {
             rect: entity_def::standing_rect(world, entity),
-            layer: layer_of(world, entity),
+            layer: entity_def::layer(world, entity),
             reach,
         }
     }
@@ -117,9 +117,9 @@ pub(crate) fn out_of(world: &World, entity: Entity, beside: Beside) -> (CellRect
                 } else {
                     rect
                 };
-                (out_of, layer_of(world, job))
+                (out_of, entity_def::layer(world, job))
             }
-            None => (rect, layer_of(world, entity)),
+            None => (rect, entity_def::layer(world, entity)),
         },
         Beside::Container(id) => {
             let standing = index
@@ -127,12 +127,12 @@ pub(crate) fn out_of(world: &World, entity: Entity, beside: Beside) -> (CellRect
                 .map(|container| standing_container(world, container));
             (
                 entity_def::beside_rect(world, entity, beside),
-                layer_of(world, standing.unwrap_or(entity)),
+                entity_def::layer(world, standing.unwrap_or(entity)),
             )
         }
         Beside::WentIn | Beside::Footprint(_) => (
             entity_def::beside_rect(world, entity, beside),
-            layer_of(world, entity),
+            entity_def::layer(world, entity),
         ),
     }
 }
@@ -683,17 +683,6 @@ fn first_levels(grid: &NavGrid, layer: LayerId, from: ComesFrom) -> Levels {
         },
         ComesFrom::Point(_) => Levels::Any,
     }
-}
-
-/// The layer `entity`'s type stands on.
-///
-/// Panics if `entity` is not a simulation entity, or its type declares no
-/// location.
-fn layer_of(world: &World, entity: Entity) -> LayerId {
-    let location_def = entity_def::of(world, entity)
-        .location
-        .expect("only an entity that stands somewhere sets a body down");
-    entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def).layer
 }
 
 /// `container` when it stands on the map, else the first that stands of what

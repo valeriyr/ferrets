@@ -1,8 +1,8 @@
 //! Fields end-to-end: sources grow and project while standing, coverage
 //! decays by policy, placement reads the grid, effects fold into stats or
 //! disable the entity, a disabled entity is gated at command, at the front of
-//! its queue and mid-order, casts cover and clear, and a watched field is seen
-//! by whoever covers it.
+//! its queue and mid-order, casts cover and clear, and a watching field is
+//! seen by whom its watch names, judged from its coverers.
 
 mod utils;
 
@@ -21,7 +21,7 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
-        FieldId, FieldPlacement, FieldSourceDef, FieldVision,
+        FieldId, FieldPlacement, FieldSourceDef, FieldWatch,
     },
     kinds::Kinds,
     location::Solidity,
@@ -66,7 +66,7 @@ use ferrets_simulation::{
     requirements,
     session::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
-        player_slot::PlayerSlot, player_type::PlayerType,
+        player_mask::PlayerMask, player_slot::PlayerSlot, player_type::PlayerType,
     },
     spawn,
     visibility::{CellVisibility, VisibilityGrid},
@@ -288,7 +288,8 @@ fn field_on_any_terrain_crosses_every_terrain() {
                 Terrains::Any,
                 utils::GROUND.into(),
                 FieldDecay::Instant,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Blind,
             ),
         );
@@ -1806,7 +1807,74 @@ fn ally_sees_through_watched_field_and_enemy_does_not() {
 }
 
 #[test]
-fn field_without_vision_reveals_nothing() {
+fn covered_cells_are_those_someone_covers() {
+    let mut app = field_app();
+    utils::create_owned(&mut app, "flare_post", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+
+    let world = app.world();
+    let flare = world.resource::<ContentRegistry>().field("flare").unwrap();
+    let covered: Vec<(u32, u32, PlayerMask)> = world
+        .resource::<FieldGrid>()
+        .covered_cells(flare)
+        .map(|(cell, covering)| (cell.x, cell.y, covering))
+        .collect();
+
+    // The flare's two-cell diamond around (10, 10), row by row, all of it
+    // player 0's; the grid's other cells, covered by no one, are left out.
+    let own = PlayerMask::of(0);
+    assert_eq!(
+        covered,
+        vec![
+            (10, 8, own),
+            (9, 9, own),
+            (10, 9, own),
+            (11, 9, own),
+            (8, 10, own),
+            (9, 10, own),
+            (10, 10, own),
+            (11, 10, own),
+            (12, 10, own),
+            (9, 11, own),
+            (10, 11, own),
+            (11, 11, own),
+            (10, 12, own),
+        ]
+    );
+}
+
+#[test]
+fn field_watching_for_allies_stamps_each_ally() {
+    let mut app = field_app_with(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, Some(1)),
+        PlayerSlot::occupied(1, PlayerType::Human, None, Some(1)),
+        PlayerSlot::occupied(2, PlayerType::Human, None, Some(2)),
+    ]);
+    utils::create_owned(&mut app, "lantern_post", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The post has no sight of its own; its lantern, two cells out, is
+    // stamped on its owner's and its ally's own grids, never the enemy's.
+    assert_eq!(seen_by(&app, 0, 12, 10), CellVisibility::Visible);
+    assert_eq!(seen_by(&app, 1, 12, 10), CellVisibility::Visible);
+    assert_eq!(seen_by(&app, 2, 12, 10), CellVisibility::Unexplored);
+}
+
+#[test]
+fn field_watching_for_anyone_reveals_to_every_player() {
+    let mut app = field_app();
+    utils::create_owned(&mut app, "flare_post", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The post has no sight of its own; its flare, two cells out, is lit
+    // for the rival who covers none of it as much as for its owner.
+    assert_eq!(seen_by(&app, 0, 12, 10), CellVisibility::Visible);
+    assert_eq!(seen_by(&app, 1, 12, 10), CellVisibility::Visible);
+    assert_eq!(seen_by(&app, 1, 13, 10), CellVisibility::Unexplored);
+}
+
+#[test]
+fn field_watching_nothing_reveals_nothing() {
     let mut app = field_app();
     let Fields { power, .. } = fields(&app);
     utils::place(&mut app, "pylon", 10, 10, 0);
@@ -1860,8 +1928,9 @@ fn modifier(stat: EntityStatId, op: ModifierOp, magnitude: &str) -> EntityModifi
 }
 
 /// App with two rival players and field content: a creep field that grows,
-/// recedes and is watched by whoever spreads it, and a power field that appears
-/// and vanishes at once and watches nothing.
+/// recedes and is watched by whoever spreads it, a power field that appears
+/// and vanishes at once and watches nothing, a lantern watched for its
+/// lighter's side, and a flare watched for anyone.
 fn field_app() -> App {
     field_app_with(utils::human_slots(2))
 }
@@ -1877,7 +1946,8 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 Terrains::Only(utils::LAND.into()),
                 utils::GROUND.into(),
                 FieldDecay::Gradual { cycle: 2 },
-                FieldVision::Watched,
+                Some(FieldWatch::new(Affiliation::Own)),
+                None,
                 Detection::Blind,
             ),
         );
@@ -1887,7 +1957,32 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 Terrains::Only(utils::LAND.into()),
                 utils::GROUND.into(),
                 FieldDecay::Instant,
-                FieldVision::Dark,
+                None,
+                None,
+                Detection::Blind,
+            ),
+        );
+        // A lantern lights its patch for its lighter's side.
+        let lantern = registry.register_field(
+            "lantern",
+            FieldDef::new(
+                Terrains::Any,
+                utils::GROUND.into(),
+                FieldDecay::Instant,
+                Some(FieldWatch::new(Affiliation::Allied)),
+                None,
+                Detection::Blind,
+            ),
+        );
+        // A flare lights its patch for every player, whoever lit it.
+        let flare = registry.register_field(
+            "flare",
+            FieldDef::new(
+                Terrains::Any,
+                utils::GROUND.into(),
+                FieldDecay::Instant,
+                Some(FieldWatch::new(Affiliation::Anyone)),
+                None,
                 Detection::Blind,
             ),
         );
@@ -2294,6 +2389,24 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             building("pylon", 1, 8).with_field_sources([FieldSourceDef::new(
                 power,
                 3,
+                FieldGrowth::Instant,
+                Emission::Nothing,
+                Emission::Nothing,
+            )]),
+        );
+        registry.register(building("lantern_post", 1, 8).with_field_sources([
+            FieldSourceDef::new(
+                lantern,
+                2,
+                FieldGrowth::Instant,
+                Emission::Nothing,
+                Emission::Nothing,
+            ),
+        ]));
+        registry.register(
+            building("flare_post", 1, 8).with_field_sources([FieldSourceDef::new(
+                flare,
+                2,
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Nothing,

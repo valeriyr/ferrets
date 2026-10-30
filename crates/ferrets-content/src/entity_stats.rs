@@ -127,6 +127,9 @@ impl EntityStatId {
     /// Energy points removed each tick, net of regeneration, while the entity
     /// stands. Fractional and zero by default.
     pub const ENERGY_DRAIN: EntityStatId = EntityStatId(34);
+    /// Levels the eyes stand above the level the entity stands at. Whole
+    /// levels, zero by default.
+    pub const SEES_UP: EntityStatId = EntityStatId(35);
 
     /// Creates an entity stat id for the given registration index.
     pub(crate) fn from_index(index: usize) -> Self {
@@ -142,7 +145,7 @@ impl EntityStatId {
 
 /// The built-in entity stats, registered first and in this order, so their
 /// assigned ids equal the [`EntityStatId`] constants above.
-pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 35] = [
+pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 36] = [
     // Current health settles under this ceiling, so a zero would turn any debuff
     // that reached it into an instant kill.
     stats::builtin(EntityStatId::MAX_HEALTH, "max_health", FixedU64::ONE),
@@ -223,6 +226,8 @@ pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 35] = [
     stats::builtin(EntityStatId::LIFETIME, "lifetime", FixedU64::ONE),
     // No floor: a fractional per-tick amount where zero means no drain.
     stats::builtin(EntityStatId::ENERGY_DRAIN, "energy_drain", FixedU64::ZERO),
+    // No floor: zero is the eyes at the level the entity stands at.
+    stats::builtin(EntityStatId::SEES_UP, "sees_up", FixedU64::ZERO),
 ];
 
 // Floors and names are looked up by `EntityStatId::index`, so every entry must sit at

@@ -10,10 +10,7 @@ use ferrets_content::{
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{
-        Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef,
-        FieldVision,
-    },
+    field::{Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef},
     location::Solidity,
     morph::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
@@ -206,7 +203,8 @@ fn stand_app() -> App {
                 Terrains::Only(utils::LAND.into()),
                 utils::GROUND.into(),
                 FieldDecay::Never,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Blind,
             ),
         );

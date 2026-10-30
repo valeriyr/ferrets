@@ -42,6 +42,7 @@ pub mod ruleset;
 pub mod scenario;
 pub mod selection;
 pub mod session;
+mod shadows;
 pub mod simulation_id;
 pub mod skirmish;
 pub mod spawn;

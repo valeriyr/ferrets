@@ -7,6 +7,7 @@ use ferrets_content::{
     domain::{DomainDef, DomainId},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    layer::LayerLevel,
     location::Solidity,
     pool::{Pool, PoolInitial},
     registry::ContentRegistry,
@@ -19,7 +20,6 @@ use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     layer_id::LayerId,
-    layer_level::LayerLevel,
     layer_mask::LayerMask,
     mover_shape::MoverShape,
     nav_grid::NavGrid,
@@ -148,7 +148,7 @@ fn map_serves_mover_shape_per_terrains_and_occupied_layers() {
     // deep water, and a tall walker over land that occupies the air too.
     // Each plans through different cells, so each gets its own abstraction.
     let mut registry = walker_registry();
-    let air = registry.register_layer("air", LayerLevel::At(2));
+    let air = registry.register_layer("air", LayerLevel::At(2), &[]);
     let mut nav_grid = grid(8, 2);
     nav_grid.add_flat_layer(air, 2);
     let mut map = Map::new(
@@ -772,7 +772,7 @@ fn ramp_climbing_two_levels_panics() {
 fn each_ranged_layer_is_checked_on_its_own_relief() {
     // The ground is flat; the highland rises a level at column 2 with no band.
     let mut registry = hill_registry();
-    registry.register_layer("highland", LayerLevel::Range { from: 4, to: 6 });
+    registry.register_layer("highland", LayerLevel::Range { from: 4, to: 6 }, &[]);
     let mut data = hill_data(&[], &[]);
     data.add_relief("highland", 4);
     for y in 0..4 {
@@ -817,7 +817,7 @@ fn each_ranged_layer_takes_its_own_relief() {
     // The ground rises to a plateau at 2 behind a cliff band; the highland
     // over it is flat at 4.
     let mut registry = hill_registry();
-    let highland = registry.register_layer("highland", LayerLevel::Range { from: 4, to: 6 });
+    let highland = registry.register_layer("highland", LayerLevel::Range { from: 4, to: 6 }, &[]);
     let cliff = Slope::Cliff(Direction::East);
     let mut data = hill_data(&[(2, 2), (3, 2)], &[(1, cliff), (2, cliff)]);
     data.add_relief("highland", 4);
@@ -1244,7 +1244,7 @@ fn walker_registry() -> ContentRegistry {
 fn land_registry() -> ContentRegistry {
     let mut registry = ContentRegistry::default();
     assert_eq!(
-        registry.register_layer("ground", LayerLevel::At(1)),
+        registry.register_layer("ground", LayerLevel::At(1), &[]),
         GROUND_LAYER
     );
     assert_eq!(registry.register_terrain("land"), LAND);
@@ -1310,7 +1310,7 @@ fn place_post_with(pools: Vec<(String, PoolInitial)>) -> Map {
 /// A registry whose ground spans levels 1 to 3, over land.
 fn hill_registry() -> ContentRegistry {
     let mut registry = ContentRegistry::default();
-    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
     registry.register_terrain("land");
     registry
 }

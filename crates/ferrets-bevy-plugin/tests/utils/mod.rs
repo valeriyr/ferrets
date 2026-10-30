@@ -24,6 +24,7 @@ use ferrets_content::{
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::FieldId,
     kinds::Kinds,
+    layer::LayerLevel,
     location::Solidity,
     morph::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
@@ -62,8 +63,7 @@ use ferrets_math::{
     FixedI64, FixedU64, facing::Facing, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2,
 };
 use ferrets_nav_grid::{
-    layer_id::LayerId, layer_level::LayerLevel, layer_mask::LayerMask, nav_grid::NavGrid,
-    terrain_id::TerrainId,
+    layer_id::LayerId, layer_mask::LayerMask, nav_grid::NavGrid, terrain_id::TerrainId,
 };
 use ferrets_network::{
     role::Role,
@@ -138,7 +138,7 @@ pub const AIR_DOMAIN: DomainId = DomainId::new(1);
 /// Registers the ground layer, the land terrain and the [`GROUND_DOMAIN`].
 fn register_ground(registry: &mut ContentRegistry) {
     assert_eq!(
-        registry.register_layer(GROUND_LAYER, LayerLevel::At(1)),
+        registry.register_layer(GROUND_LAYER, LayerLevel::At(1), &[]),
         GROUND
     );
     assert_eq!(registry.register_terrain("land"), LAND);
@@ -161,7 +161,10 @@ fn domain_layer(domain: DomainId) -> LayerId {
 
 /// Registers the air layer and the [`AIR_DOMAIN`], after [`register_ground`].
 pub fn register_air(registry: &mut ContentRegistry) {
-    assert_eq!(registry.register_layer(AIR_LAYER, LayerLevel::At(2)), AIR);
+    assert_eq!(
+        registry.register_layer(AIR_LAYER, LayerLevel::At(2), &[]),
+        AIR
+    );
     assert_eq!(
         registry.register_domain("air", DomainDef::new(AIR, Terrains::Any, None)),
         AIR_DOMAIN

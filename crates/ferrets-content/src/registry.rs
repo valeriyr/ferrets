@@ -6,8 +6,8 @@ use bevy_ecs::prelude::*;
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64};
 use ferrets_nav_grid::{
-    cliff_crossing::CliffCrossing, layer_id::LayerId, layer_level::LayerLevel,
-    layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask,
+    cliff_crossing::CliffCrossing, layer_id::LayerId, layer_mask::LayerMask, terrain_id::TerrainId,
+    terrain_mask::TerrainMask,
 };
 
 use crate::{
@@ -28,6 +28,7 @@ use crate::{
     gateway::{Doors, GatewayDef, Joins},
     holder::Holder,
     kinds::{Kind, Kinds},
+    layer::{LayerDef, LayerLevel},
     location::{LocationDef, Solidity},
     morph::{MorphCourse, MorphPlacement, ViaInterrupted},
     network::{NetworkDef, NetworkId},
@@ -72,8 +73,8 @@ pub struct ContentRegistry {
     tags: BTreeSet<String>,
     /// Layer name → handle.
     layers: BTreeMap<String, LayerId>,
-    /// Each layer's levels, indexed by the layer's bit (registration order).
-    layer_levels: Vec<LayerLevel>,
+    /// All layer definitions, indexed by the layer's bit (registration order).
+    layer_defs: Vec<LayerDef>,
     terrains: BTreeMap<String, TerrainId>,
     /// Domain name → handle.
     domains: BTreeMap<String, DomainId>,
@@ -119,7 +120,7 @@ impl Default for ContentRegistry {
             races: BTreeSet::new(),
             tags: BTreeSet::from([tags::BUILDING.to_string(), tags::REMAINS.to_string()]),
             layers: BTreeMap::new(),
-            layer_levels: Vec::new(),
+            layer_defs: Vec::new(),
             terrains: BTreeMap::new(),
             domains: BTreeMap::new(),
             domain_defs: Vec::new(),
@@ -345,16 +346,25 @@ impl ContentRegistry {
         self.tags.contains(tag)
     }
 
-    /// Registers a navigation layer (ground, air, …) at `level` and returns
-    /// its assigned [`LayerId`].
+    /// Registers a navigation layer (ground, air, …) at `level`, its levels
+    /// blocking the sight of viewers on the layers named in `relief_blocks`,
+    /// and returns its assigned [`LayerId`]. `relief_blocks` names the layer
+    /// itself or layers registered before it; an empty list blocks no one.
     ///
     /// Ids are assigned in registration order, so identical content registered
     /// in the same order resolves to identical ids everywhere.
     ///
     /// Panics if `name` is empty, the layer is already registered, its range
-    /// runs downward, it shares a level with a registered layer, or all layer
-    /// ids are already assigned.
-    pub fn register_layer(&mut self, name: impl Into<String>, level: LayerLevel) -> LayerId {
+    /// runs downward, it shares a level with a registered layer, all layer
+    /// ids are already assigned, the layer is at one level and
+    /// `relief_blocks` names any layer, or it names a layer not registered or
+    /// not below it.
+    pub fn register_layer(
+        &mut self,
+        name: impl Into<String>,
+        level: LayerLevel,
+        relief_blocks: &[&str],
+    ) -> LayerId {
         let name = name.into();
         assert!(!name.is_empty(), "layer name must not be empty");
         assert!(
@@ -371,11 +381,11 @@ impl ContentRegistry {
         if let Some((other, _)) = self
             .layers
             .iter()
-            .find(|(_, layer)| self.layer_level(**layer).meets(level))
+            .find(|(_, layer)| self.layer_def(**layer).level().meets(level))
         {
             panic!(
                 "layer '{name}' at {level} shares a level with layer '{other}' at {}",
-                self.layer_level(self.layers[other])
+                self.layer_def(self.layers[other]).level()
             );
         }
 
@@ -386,16 +396,17 @@ impl ContentRegistry {
             u32::BITS
         );
         let id = LayerId::new(1 << bit);
+        let relief_blocks = self.resolve_relief_blocks(&name, id, level, relief_blocks);
         self.layers.insert(name, id);
-        self.layer_levels.push(level);
+        self.layer_defs.push(LayerDef::new(level, relief_blocks));
         id
     }
 
-    /// The levels a registered layer is at.
+    /// Returns the definition of a registered layer.
     ///
     /// Panics if `layer` was not minted by this registry.
-    pub fn layer_level(&self, layer: LayerId) -> LayerLevel {
-        self.layer_levels[layer.trailing_zeros() as usize]
+    pub fn layer_def(&self, layer: LayerId) -> &LayerDef {
+        &self.layer_defs[layer.trailing_zeros() as usize]
     }
 
     /// Returns `true` if `name` is a registered navigation layer.
@@ -1244,7 +1255,7 @@ impl ContentRegistry {
             domain.layer()
         );
         self.validate_terrains(&format!("domain '{name}'"), domain.terrains());
-        let level = self.layer_level(domain.layer());
+        let level = self.layer_def(domain.layer()).level();
         match (level, domain.cliff_crossing()) {
             (LayerLevel::At(_), None)
             | (LayerLevel::Range { .. }, Some(CliffCrossing::Ramp | CliffCrossing::Cross)) => {}
@@ -1469,6 +1480,43 @@ impl ContentRegistry {
         self.layers
             .values()
             .fold(LayerMask::EMPTY, |mask, &id| mask | id)
+    }
+
+    /// The layers `relief_blocks` names for layer `name`, being registered as
+    /// `id` at `level`: its own name, or layers registered before it and below
+    /// it, on a layer spanning levels.
+    fn resolve_relief_blocks(
+        &self,
+        name: &str,
+        id: LayerId,
+        level: LayerLevel,
+        relief_blocks: &[&str],
+    ) -> LayerMask {
+        match level {
+            LayerLevel::At(_) => assert!(
+                relief_blocks.is_empty(),
+                "layer '{name}' is at one level everywhere and has no relief to block sight"
+            ),
+            LayerLevel::Range { .. } => {}
+        }
+        relief_blocks
+            .iter()
+            .fold(LayerMask::EMPTY, |mask, &blocked| {
+                if blocked == name {
+                    return mask | id;
+                }
+                let other = self.layer(blocked).unwrap_or_else(|| {
+                    panic!(
+                        "layer '{name}' blocks the sight of layer '{blocked}', which is not \
+                         registered; register a lower layer first"
+                    )
+                });
+                assert!(
+                    self.layer_def(other).level().below(level),
+                    "layer '{name}' blocks the sight of layer '{blocked}', which is not below it"
+                );
+                mask | other
+            })
     }
 
     /// Checks that the definition has the mandatory location properties.

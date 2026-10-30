@@ -4,12 +4,12 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{
-    domain::DomainDef, entity_type_def::EntityTypeDef, location::Solidity, pool::Pool,
-    registry::ContentRegistry, terrains::Terrains,
+    domain::DomainDef, entity_type_def::EntityTypeDef, layer::LayerLevel, location::Solidity,
+    pool::Pool, registry::ContentRegistry, terrains::Terrains,
 };
 use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_nav_grid::{layer_level::LayerLevel, nav_grid::NavGrid};
+use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
     control_groups::ControlGroups,
     entity_index::EntityIndex,
@@ -40,7 +40,7 @@ const PLAYERS: usize = 1;
 /// and the stores a spawn and its stat fold read.
 pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground", LayerLevel::At(1));
+    let ground = registry.register_layer("ground", LayerLevel::At(1), &[]);
     let land = registry.register_terrain("land");
     let domain = registry.register_domain("ground", DomainDef::new(ground, Terrains::Any, None));
     let unit = pools.into_iter().fold(

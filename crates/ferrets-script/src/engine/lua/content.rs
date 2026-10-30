@@ -21,11 +21,12 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldId, FieldPlacement,
-        FieldSourceDef, FieldVision,
+        FieldSourceDef, FieldWatch,
     },
     gateway::{GatewayDef, Joins},
     holder::Holder,
     kinds::{Kind, Kinds},
+    layer::LayerLevel,
     morph::{MorphCourse, MorphInterrupted, MorphReason, MorphTransition, ViaInterrupted},
     network::NetworkDef,
     player_buffs::PlayerBuffDef,
@@ -40,6 +41,7 @@ use ferrets_content::{
     research::{ResearchDef, ResearchId},
     resource::{Banking, HarvestData},
     rise::{RisePool, RisePoolInitial},
+    sight_block::SightBlock,
     skills::{
         AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, FromAimTo, FromCasterTo,
         Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach, Recipient, SkillCaster,
@@ -55,9 +57,7 @@ use ferrets_content::{
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
-use ferrets_nav_grid::{
-    layer_id::LayerId, layer_level::LayerLevel, layer_mask::LayerMask, terrain_mask::TerrainMask,
-};
+use ferrets_nav_grid::{layer_id::LayerId, layer_mask::LayerMask, terrain_mask::TerrainMask};
 use mlua::{Lua, Table, Value};
 
 use crate::{content, error::ScriptError};
@@ -127,7 +127,19 @@ pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> ml
             let level = required::<Value>(&table, "level")
                 .and_then(|level| parse_layer_level(&level))
                 .map_err(mlua::Error::external)?;
-            Ok(*layers.borrow_mut().register_layer(name, level))
+            // A layer spanning levels says whose sight its relief blocks; a
+            // layer at one level has no relief and need not say.
+            let relief_blocks = match level {
+                LayerLevel::Range { .. } => required::<Vec<String>>(&table, "relief_blocks"),
+                LayerLevel::At(_) => {
+                    optional::<Vec<String>>(&table, "relief_blocks").map(Option::unwrap_or_default)
+                }
+            }
+            .map_err(mlua::Error::external)?;
+            let relief_blocks: Vec<&str> = relief_blocks.iter().map(String::as_str).collect();
+            Ok(*layers
+                .borrow_mut()
+                .register_layer(name, level, &relief_blocks))
         })?,
     )?;
 
@@ -474,6 +486,9 @@ fn build_entity(
     }
     if let Some(concealment) = optional::<String>(table, "concealment")? {
         def = def.with_concealment(content::concealment(&concealment)?);
+    }
+    if let Some(blocks_sight) = parse_blocks_sight(table)? {
+        def = def.with_blocks_sight(blocks_sight);
     }
     if let Some(morphs) = optional::<Vec<Table>>(table, "morphs")? {
         def = def.with_morphs(parse_morphs(morphs, registry)?);
@@ -2044,25 +2059,44 @@ fn parse_joins(gateway: &Table, registry: &ContentRegistry) -> crate::Result<Joi
 
 /// Reads a field definition: the `terrains` its cells lie on — `"any"` or a
 /// terrain mask — the layer mask it `spreads_on`, its `decay` — `"instant"`,
-/// `"never"`, or a `{ cycle = ticks }` table — its `vision` — `"dark"` unless
-/// declared, or `"watched"` to put covered cells in sight of whoever covers
-/// them — and its `detection`, the layer mask of what it reveals, blind unless
-/// declared (a watch's `detection` reads the same).
+/// `"never"`, or a `{ cycle = ticks }` table — whom it `watches`, a
+/// `{ of = affiliation }` table, none unless declared — what it
+/// `blocks_sight`, a `{ height, of }` table, nothing unless declared — and its
+/// `detection`, the layer mask of what it reveals, blind unless declared (a
+/// watch's `detection` reads the same).
 fn parse_field(table: &Table) -> crate::Result<FieldDef> {
     let terrains = parse_terrains(&required::<Value>(table, "terrains")?)?;
     let spreads_on = LayerMask::from(required::<u32>(table, "spreads_on")?);
     let decay = parse_field_decay(required::<Value>(table, "decay")?)?;
-    let vision = match optional::<String>(table, "vision")? {
-        Some(name) => content::field_vision(&name)?,
-        None => FieldVision::Dark,
-    };
+    let watches = optional::<Table>(table, "watches")?
+        .map(|watches| -> crate::Result<FieldWatch> {
+            Ok(FieldWatch::new(content::affiliation(&required::<String>(
+                &watches, "of",
+            )?)?))
+        })
+        .transpose()?;
     Ok(FieldDef::new(
         terrains,
         spreads_on,
         decay,
-        vision,
+        watches,
+        parse_blocks_sight(table)?,
         parse_detection(table)?,
     ))
+}
+
+/// Reads what a declaration `blocks_sight`: a `{ height, of }` table — the
+/// levels its top rises above where it stands, and whose sight it blocks —
+/// nothing unless declared.
+fn parse_blocks_sight(table: &Table) -> crate::Result<Option<SightBlock>> {
+    optional::<Table>(table, "blocks_sight")?
+        .map(|block| {
+            Ok(SightBlock::new(
+                required::<u32>(&block, "height")?,
+                content::affiliation(&required::<String>(&block, "of")?)?,
+            ))
+        })
+        .transpose()
 }
 
 /// Reads a domain: the `layer` its bodies are in, the `terrains` they may be

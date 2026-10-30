@@ -1,31 +1,50 @@
 //! Fog of war end-to-end: sight reveals cells, exploration is sticky, allied
-//! vision is shared, combat waits for vision, and the AI view filters fogged
-//! enemies only when the brain is fog-limited.
+//! vision is shared, relief hides what rises above a viewer's eyes, objects
+//! and fields shadow what lies behind them, combat waits for vision, and the
+//! AI view filters fogged enemies only when the brain is fog-limited.
 
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_bevy_plugin::ai::game_view;
+use ferrets_bevy_plugin::{ai::game_view, map};
 use ferrets_content::{
+    affiliation::Affiliation,
     detection::Detection,
+    domain::DomainDef,
+    entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    field::{Emission, FieldDecay, FieldDef, FieldGrowth, FieldSourceDef, FieldWatch},
+    layer::LayerLevel,
     location::Solidity,
     pool::Pool,
     quantity::Quantity,
     registry::ContentRegistry,
+    sight_block::SightBlock,
     skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, Spot},
+    stats::ModifierOp,
+    terrains::Terrains,
 };
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
+use ferrets_nav_grid::{
+    cliff_crossing::CliffCrossing,
+    nav_grid::NavGrid,
+    slope::{Direction, Slope},
+};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::rally::{RallyPointComponent, RallyTarget},
+    entity_def,
+    map::Map,
+    map_data::MapData,
+    movement_model::MovementModel,
     order::AttackTarget,
     session::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
         player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
+    spawn,
     visibility::{CellVisibility, VisibilityGrid},
     watches::Watches,
 };
@@ -549,6 +568,524 @@ fn run_out_watch_leaves_store() {
 }
 
 //
+// ─── Relief ──────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn relief_hides_higher_ground_from_viewer_below() {
+    let mut app = relief_app(&["ground"]);
+    utils::create_entity(app.world_mut(), "watchman", utils::pos(4, 5), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    // Its eyes at 1, the low ground's level: the low ground shows, the
+    // plateau at 2 stays hidden, its edge (8, 5) and beyond.
+    assert!(visible(&app, 0, 6, 5));
+    assert!(!visible(&app, 0, 8, 5));
+    assert!(!visible(&app, 0, 10, 5));
+}
+
+#[test]
+fn viewer_on_high_ground_sees_low_ground() {
+    let mut app = relief_app(&["ground"]);
+    utils::create_entity(app.world_mut(), "watchman", utils::pos(11, 5), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    // Its eyes at 2: the low ground at 1 shows, the cliff foot (7, 5) too.
+    assert!(visible(&app, 0, 9, 5));
+    assert!(visible(&app, 0, 7, 5));
+    assert!(visible(&app, 0, 5, 5));
+}
+
+#[test]
+fn sees_up_lifts_eyes_over_relief() {
+    let mut app = relief_app(&["ground"]);
+    utils::create_entity(app.world_mut(), "lookout", utils::pos(4, 5), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    // Eyes at 1 + 1 = 2, the plateau's level.
+    assert!(visible(&app, 0, 8, 5));
+    assert!(visible(&app, 0, 10, 5));
+}
+
+#[test]
+fn buffed_sees_up_lifts_eyes_over_relief() {
+    let mut app = relief_app(&["ground"]);
+    let watchman = utils::create_entity(app.world_mut(), "watchman", utils::pos(4, 5), Some(0))
+        .unwrap()
+        .0;
+    let keen = utils::register_entity_buff(
+        &mut app,
+        "keen",
+        EntityStatId::SEES_UP,
+        ModifierOp::FlatAdd,
+        "1",
+        None,
+    );
+    utils::apply_buff(app.world_mut(), watchman, keen);
+    // The fog is stamped before the tick folds the buff into the stat: the
+    // second tick sees with it.
+    utils::run_ticks(&mut app, 2);
+
+    // Eyes at 1 + (0 + 1) = 2, the plateau's level.
+    assert!(visible(&app, 0, 10, 5));
+}
+
+#[test]
+fn relief_blocking_no_one_hides_nothing() {
+    let mut app = relief_app(&[]);
+    utils::create_entity(app.world_mut(), "watchman", utils::pos(4, 5), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    assert!(visible(&app, 0, 8, 5));
+    assert!(visible(&app, 0, 10, 5));
+}
+
+#[test]
+fn relief_hides_its_cells_from_lower_layer_it_names() {
+    let mut app = relief_app(&["deep", "ground"]);
+    utils::create_entity(app.world_mut(), "diver", utils::pos(4, 5), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    // Its eyes at 0, under the ground everywhere: the low ground at 1 is
+    // above them as the plateau is, its own cell included.
+    assert!(!visible(&app, 0, 4, 5));
+    assert!(!visible(&app, 0, 6, 5));
+    assert!(!visible(&app, 0, 10, 5));
+}
+
+#[test]
+fn relief_never_hides_from_lower_layer_it_does_not_name() {
+    let mut app = relief_app(&["ground"]);
+    utils::create_entity(app.world_mut(), "diver", utils::pos(4, 5), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    assert!(visible(&app, 0, 4, 5));
+    assert!(visible(&app, 0, 10, 5));
+}
+
+//
+// ─── Shadows on relief ───────────────────────────────────────────────────────
+//
+
+#[test]
+fn rock_on_plateau_shadows_lookout_below() {
+    let mut app = relief_app(&["ground"]);
+    utils::create_entity(app.world_mut(), "rock", utils::pos(10, 5), None).unwrap();
+    utils::create_entity(app.world_mut(), "lookout", utils::pos(4, 5), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    // Eyes at 1 + 1 = 2 see the plateau at 2; the rock standing on it rises
+    // to 2 + 1 = 3, and hides what lies behind it.
+    assert!(visible(&app, 0, 10, 5));
+    assert!(!visible(&app, 0, 12, 5));
+}
+
+#[test]
+fn smoke_rises_from_level_of_each_cell_it_covers() {
+    let mut app = relief_app(&["ground"]);
+    utils::create_owned(&mut app, "smoke_pot", 5, 8, 0);
+    utils::create_owned(&mut app, "smoke_pot", 10, 5, 0);
+    utils::create_entity(app.world_mut(), "lookout", utils::pos(5, 5), Some(0)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    // Eyes at 1 + 1 = 2. Over low ground the smoke's top is 1 + 1 = 2, not
+    // above them: (5, 10) shows past it. Over the plateau it is 2 + 1 = 3:
+    // (12, 5) lies in its shadow.
+    assert!(visible(&app, 0, 5, 10));
+    assert!(!visible(&app, 0, 12, 5));
+}
+
+#[test]
+fn wide_viewer_across_cliff_sees_from_its_highest_cell() {
+    let mut app = relief_app(&["ground"]);
+    utils::create_entity(app.world_mut(), "wide_strider", utils::pos(7, 5), Some(0))
+        .expect("a strider stands across the cliff");
+    utils::run_ticks(&mut app, 1);
+
+    // Its cells span columns 7 (level 1) and 8 (level 2): its eyes at the
+    // higher, 2, see the plateau.
+    assert!(visible(&app, 0, 11, 5));
+}
+
+//
+// ─── Shadows ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn rock_shadows_wedge_behind_it() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 6, 5);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // Seen from (4.5, 5.5): the rock itself and the cells beside it show,
+    // the wedge behind it widens with distance. The line to (10.5, 3.5) falls
+    // a third of a cell a cell, reaching y 5.0 at x 6: it touches the rock's
+    // corner (6, 5) alone and passes. The line to (9.5, 4.5) is at y 5.2 to
+    // 5.0 across x 6 to 7, inside the rock.
+    for (x, y) in [(6, 5), (7, 4), (7, 6), (10, 3), (10, 7)] {
+        assert!(visible(&app, 0, x, y), "({x}, {y}) is seen");
+    }
+    for (x, y) in [(7, 5), (8, 5), (10, 5), (8, 4), (9, 4), (8, 6), (10, 6)] {
+        assert!(!visible(&app, 0, x, y), "({x}, {y}) lies in the shadow");
+    }
+}
+
+#[test]
+fn object_never_shadows_its_own_cells() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "boulder", 6, 5);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The boulder's far column shows; what lies behind it does not.
+    assert!(visible(&app, 0, 7, 5));
+    assert!(visible(&app, 0, 7, 6));
+    assert!(!visible(&app, 0, 8, 5));
+    assert!(!visible(&app, 0, 8, 6));
+    assert!(!visible(&app, 0, 9, 5));
+}
+
+#[test]
+fn line_brushing_rock_corner_passes() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 5, 5);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // From (4.5, 5.5) to (6.5, 7.5) the line touches the rock's corner
+    // (5, 6) and never enters it.
+    assert!(visible(&app, 0, 6, 7));
+}
+
+#[test]
+fn rocks_meeting_at_corner_close_line_between_them() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 5, 5);
+    place_unowned(&mut app, "rock", 4, 6);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The same line passes through the corner (5, 6) the two rocks share.
+    assert!(!visible(&app, 0, 6, 7));
+}
+
+#[test]
+fn rocks_meeting_at_corner_close_rising_line_between_them() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 4, 4);
+    place_unowned(&mut app, "rock", 5, 5);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // From (4.5, 5.5) to (5.5, 4.5) the line passes through the corner (5, 5)
+    // the two rocks share, the other diagonal from the line above.
+    assert!(!visible(&app, 0, 5, 4));
+}
+
+#[test]
+fn sees_up_lifts_eyes_over_rock() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 6, 5);
+    utils::create_owned(&mut app, "tall_eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The rock's top at 1 + 1 = 2, the eyes at 1 + 1 = 2: not below it.
+    assert!(visible(&app, 0, 8, 5));
+}
+
+#[test]
+fn wide_viewer_sees_from_corner_its_cells_share() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 7, 4);
+    utils::create_owned(&mut app, "wide_eye", 3, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // Seen from (5, 6), the corner of its four cells; the rock spans x 7 to 8,
+    // y 4 to 5. The line to (10.5, 4.5) is at y 5.45 to 5.18 across the
+    // rock's columns, below it; the line to (10.5, 3.5) is at y 5.09 to 4.64,
+    // into it.
+    for (x, y) in [(10, 4), (8, 5), (10, 5)] {
+        assert!(visible(&app, 0, x, y), "({x}, {y}) is seen");
+    }
+    for (x, y) in [(8, 4), (9, 4), (8, 3), (9, 3), (10, 3)] {
+        assert!(!visible(&app, 0, x, y), "({x}, {y}) lies in the shadow");
+    }
+}
+
+#[test]
+fn rock_shadows_wedge_west_of_viewer() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 8, 5);
+    utils::create_owned(&mut app, "eye", 10, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The first wedge mirrored: seen from (10.5, 5.5), the rock two cells
+    // west.
+    for (x, y) in [(8, 5), (7, 4), (7, 6), (4, 3), (4, 7)] {
+        assert!(visible(&app, 0, x, y), "({x}, {y}) is seen");
+    }
+    for (x, y) in [(7, 5), (6, 5), (4, 5), (6, 4), (5, 4), (6, 6), (4, 6)] {
+        assert!(!visible(&app, 0, x, y), "({x}, {y}) lies in the shadow");
+    }
+}
+
+#[test]
+fn rock_shadows_wedge_north_of_viewer() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 5, 8);
+    utils::create_owned(&mut app, "eye", 5, 10, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The first wedge turned a quarter: seen from (5.5, 10.5), the rock two
+    // cells north.
+    for (x, y) in [(5, 8), (4, 7), (6, 7), (3, 4), (7, 4)] {
+        assert!(visible(&app, 0, x, y), "({x}, {y}) is seen");
+    }
+    for (x, y) in [(5, 7), (5, 6), (5, 4), (4, 6), (4, 5), (6, 6), (6, 4)] {
+        assert!(!visible(&app, 0, x, y), "({x}, {y}) lies in the shadow");
+    }
+}
+
+#[test]
+fn rock_shadows_boulder_behind_it() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 6, 5);
+    place_unowned(&mut app, "boulder", 8, 5);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The rock hides the boulder's near cells; the boulder never hides its
+    // own, but another object's cells are not its own.
+    assert!(!visible(&app, 0, 8, 5));
+    assert!(!visible(&app, 0, 8, 6));
+    assert!(!visible(&app, 0, 9, 5));
+}
+
+#[test]
+fn rock_near_edge_of_sight_shadows_cell_behind_it() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 11, 5);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // Seven cells out and eight: the rock one cell inside the eye's sight of
+    // eight, the cell it hides on its edge.
+    assert!(visible(&app, 0, 11, 5));
+    assert!(!visible(&app, 0, 12, 5));
+}
+
+#[test]
+fn tall_viewer_shadowed_at_west_edge_of_its_sight() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 9, 5);
+    utils::create_owned(&mut app, "column", 10, 4, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // Seen from (10.5, 6.0), the middle of cells (10, 4) to (10, 7), with a
+    // sight of one: the line to (9.5, 4.5) is at y 5.25 at x 10, crossing the
+    // rock in the sight's west column.
+    assert!(visible(&app, 0, 9, 6));
+    assert!(!visible(&app, 0, 9, 4));
+}
+
+#[test]
+fn tall_viewer_shadowed_at_east_edge_of_its_sight() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 11, 5);
+    utils::create_owned(&mut app, "column", 10, 4, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The same, mirrored: the line to (11.5, 4.5) crosses the rock in the
+    // sight's east column.
+    assert!(visible(&app, 0, 11, 6));
+    assert!(!visible(&app, 0, 11, 4));
+}
+
+#[test]
+fn field_blocks_cells_of_object_it_covers() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "boulder", 8, 4);
+    utils::create_owned(&mut app, "smoke_pot", 8, 7, 1);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The smoke reaches the boulder's cell (8, 5): the boulder never hides
+    // its own (9, 5), but the smoke on its cell does.
+    assert!(!visible(&app, 0, 9, 5));
+}
+
+#[test]
+fn boundless_sight_reaches_no_further_than_map() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "far_eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // Two billion cells of sight, held to the map's 32 + 32: every corner
+    // shows, and the pass walks a square reaching 64 cells round the eye
+    // rather than two billion.
+    for (x, y) in [(0, 0), (31, 0), (0, 31), (31, 31)] {
+        assert!(visible(&app, 0, x, y), "({x}, {y}) is seen");
+    }
+}
+
+#[test]
+fn dying_rock_shadows_until_gone() {
+    let mut app = shadow_app();
+    let cairn = utils::create_entity(app.world_mut(), "cairn", utils::pos(6, 5), None)
+        .unwrap()
+        .0;
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+    spawn::destroy_entity(app.world_mut(), cairn);
+    utils::run_ticks(&mut app, 2);
+
+    // Its body stands through ten ticks of dying, and blocks while it does.
+    assert!(entity_def::dying(app.world(), cairn));
+    assert!(!visible(&app, 0, 8, 5));
+
+    // Fifteen more ticks, past its ten of dying: the body is gone, and so is
+    // its shadow.
+    utils::run_ticks(&mut app, 15);
+    utils::assert_despawned(app.world_mut(), cairn);
+    assert!(visible(&app, 0, 8, 5));
+}
+
+#[test]
+fn field_blocking_enemies_shadows_enemy_sight() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "screen_pot", 10, 5, 1);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The screen covers (8, 5) to (12, 5) along the row and blocks player
+    // 1's enemies.
+    assert!(visible(&app, 0, 8, 5));
+    assert!(!visible(&app, 0, 12, 5));
+}
+
+#[test]
+fn field_blocking_enemies_never_shadows_its_coverers_sight() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "screen_pot", 10, 5, 1);
+    utils::create_owned(&mut app, "eye", 4, 5, 1);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(visible(&app, 1, 12, 5));
+}
+
+#[test]
+fn ward_shadows_enemy_sight() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "ward", 6, 5, 1);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(!visible(&app, 0, 8, 5));
+}
+
+#[test]
+fn ward_never_shadows_its_owners_sight() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "ward", 6, 5, 0);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    assert!(visible(&app, 0, 8, 5));
+}
+
+#[test]
+fn smoke_shows_only_its_near_edge_from_outside() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "smoke_pot", 10, 5, 1);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The smoke covers (8, 5) to (12, 5) along the row.
+    assert!(visible(&app, 0, 8, 5));
+    assert!(!visible(&app, 0, 9, 5));
+    assert!(!visible(&app, 0, 12, 5));
+}
+
+#[test]
+fn smoke_shows_only_neighbors_from_inside() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "smoke_pot", 8, 5, 1);
+    utils::create_owned(&mut app, "eye", 9, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The smoke covers (6, 5) to (10, 5) along the row, the eye's own cell
+    // among them, and a cell around each of its row's neighbors.
+    assert!(visible(&app, 0, 8, 5));
+    assert!(visible(&app, 0, 10, 5));
+    assert!(visible(&app, 0, 9, 6));
+    assert!(!visible(&app, 0, 7, 5));
+    assert!(!visible(&app, 0, 11, 5));
+    // A diagonal neighbor stays hidden: the line to (10, 6) passes the corner
+    // (10, 6) its two smoked orthogonal neighbors share.
+    assert!(!visible(&app, 0, 10, 6));
+}
+
+#[test]
+fn flier_sees_over_smoke_on_ground() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "smoke_pot", 10, 5, 1);
+    utils::create_owned(&mut app, "flier", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The smoke's top on the ground at 1 + 1 = 2, the flier's eyes at 2.
+    assert!(visible(&app, 0, 12, 5));
+}
+
+#[test]
+fn haze_spread_on_air_blinds_flier() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "haze_pot", 10, 5, 1);
+    utils::create_owned(&mut app, "flier", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // On the air the haze's top is at 2 + 1 = 3, above the flier's eyes.
+    assert!(visible(&app, 0, 8, 5));
+    assert!(!visible(&app, 0, 12, 5));
+}
+
+#[test]
+fn watching_field_reveals_what_shadow_hides() {
+    let mut app = shadow_app();
+    place_unowned(&mut app, "rock", 6, 5);
+    utils::create_owned(&mut app, "flare_post", 10, 5, 0);
+    utils::create_owned(&mut app, "eye", 4, 5, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // The flare covers (8, 5) to (12, 5) along the row; (7, 5) it leaves to
+    // the rock's shadow.
+    assert!(visible(&app, 0, 9, 5));
+    assert!(!visible(&app, 0, 7, 5));
+}
+
+//
+// ─── Field watches ───────────────────────────────────────────────────────────
+//
+
+#[test]
+fn field_watch_reveals_each_patch_to_its_own_coverer() {
+    let mut app = shadow_app();
+    utils::create_owned(&mut app, "lamp", 10, 10, 0);
+    utils::create_owned(&mut app, "lamp", 13, 10, 1);
+    utils::run_ticks(&mut app, 1);
+
+    // Each glow reaches two cells: player 0's alone covers (8, 10), player
+    // 1's alone (15, 10), and both cover (11, 10) and (12, 10). Neither lamp
+    // sees of its own, and the two players are enemies.
+    assert!(visible(&app, 0, 8, 10));
+    assert!(!visible(&app, 1, 8, 10));
+    assert!(visible(&app, 1, 15, 10));
+    assert!(!visible(&app, 0, 15, 10));
+    assert!(visible(&app, 0, 12, 10));
+    assert!(visible(&app, 1, 11, 10));
+}
+
+//
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
 
@@ -750,4 +1287,280 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
     app.world_mut().resource::<ContentRegistry>().validate();
     utils::start_game(&mut app);
     app
+}
+
+/// One human on a 16×16 land map: the ground spans levels 1 to 3, low at 1
+/// to column 7 and a plateau at 2 from column 8, a cliff band rising east
+/// across columns 7 and 8; under it a `deep` layer flat at 0. The ground's
+/// relief blocks the sight of the layers `ground_relief_blocks` names.
+///
+/// - `watchman` is a static 1×1 ground body seeing 8 cells, and `lookout` the
+///   same seeing one level up;
+/// - `diver` is a static 1×1 body on the deep layer seeing 8 cells;
+/// - `wide_strider` is a 2×2 mover striding cliffs, seeing 8 cells;
+/// - `rock` is a static 1×1 ground body blocking everyone's sight one level
+///   above where it stands, and `smoke_pot` a static 1×1 one spreading
+///   `smoke` a cell around it, blocking everyone's sight one level above each
+///   cell it covers.
+fn relief_app(ground_relief_blocks: &[&str]) -> App {
+    let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    let mut registry = ContentRegistry::default();
+    let deep = registry.register_layer("deep", LayerLevel::At(0), &[]);
+    let ground = registry.register_layer(
+        "ground",
+        LayerLevel::Range { from: 1, to: 3 },
+        ground_relief_blocks,
+    );
+    registry.register_terrain("land");
+    let walking = registry.register_domain(
+        "walking",
+        DomainDef::new(ground, Terrains::Any, Some(CliffCrossing::Ramp)),
+    );
+    let striding = registry.register_domain(
+        "striding",
+        DomainDef::new(ground, Terrains::Any, Some(CliffCrossing::Cross)),
+    );
+    let delving = registry.register_domain("delving", DomainDef::new(deep, Terrains::Any, None));
+    for (name, domain, layer, sees_up) in [
+        ("watchman", walking, ground, FixedU64::ZERO),
+        ("lookout", walking, ground, FixedU64::ONE),
+        ("diver", delving, deep, FixedU64::ZERO),
+    ] {
+        registry.register(
+            EntityTypeDef::new(name)
+                .with_location(domain, CellSize::ONE, Solidity::Solid, layer)
+                .with_pool(Pool::health(20))
+                .with_sight_range(8)
+                .with_stat(EntityStatId::SEES_UP, sees_up),
+        );
+    }
+    registry.register(
+        EntityTypeDef::new("wide_strider")
+            .with_location(striding, CellSize::new(2, 2), Solidity::Solid, ground)
+            .with_movement(
+                utils::fixed("0.5"),
+                utils::fixed("1"),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            )
+            .with_pool(Pool::health(20))
+            .with_sight_range(8),
+    );
+    registry.register(
+        EntityTypeDef::new("rock")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(20))
+            .with_blocks_sight(SightBlock::new(1, Affiliation::Anyone)),
+    );
+    let smoke = registry.register_field(
+        "smoke",
+        FieldDef::new(
+            Terrains::Any,
+            ground.into(),
+            FieldDecay::Instant,
+            None,
+            Some(SightBlock::new(1, Affiliation::Anyone)),
+            Detection::Blind,
+        ),
+    );
+    registry.register(
+        EntityTypeDef::new("smoke_pot")
+            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(20))
+            .with_field_sources([FieldSourceDef::new(
+                smoke,
+                1,
+                FieldGrowth::Instant,
+                Emission::Nothing,
+                Emission::Nothing,
+            )]),
+    );
+    registry.validate();
+
+    let mut data = MapData::new("relief", Projection::Isometric, 16, 16, "land");
+    data.add_relief("ground", 1);
+    for y in 0..16 {
+        for x in 8..16 {
+            data.set_cell_level("ground", (x, y), 2);
+        }
+        for x in [7, 8] {
+            data.set_slope("ground", (x, y), Slope::Cliff(Direction::East));
+        }
+    }
+    let live = Map::from_data(&data, &registry);
+    app.insert_resource(registry);
+    map::install_map(app.world_mut(), live);
+    utils::start_game(&mut app);
+    app
+}
+
+/// Two hostile humans on a 32×32 land map, the ground flat at 1 and the air
+/// at 2:
+///
+/// - `eye` is a static 1×1 ground body seeing 8 cells, `tall_eye` the same
+///   seeing one level up, `wide_eye` a static 2×2 one, `column` a static 1×4
+///   one seeing a cell around it, `far_eye` a 1×1 one seeing two billion
+///   cells, and `flier` a static 1×1 body on the air;
+/// - `rock` is a static 1×1 body blocking everyone's sight one level above
+///   it, `boulder` a 2×2 one, and `ward` a 1×1 one blocking enemies only;
+///   `cairn` blocks one level up through ten ticks of dying;
+/// - `smoke_pot` spreads `smoke` two cells around it, blocking everyone's
+///   sight one level above the ground, `haze_pot` spreads `haze`, the same
+///   on the ground and the air, `screen_pot` a `screen` blocking only its
+///   coverers' enemies, `flare_post` a `flare` watched for anyone, and `lamp`
+///   a `glow` watched for whoever covers it.
+fn shadow_app() -> App {
+    let mut app = utils::make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    {
+        let mut grid = NavGrid::new(32, 32, |_| utils::LAND);
+        grid.add_flat_layer(utils::GROUND, 1);
+        grid.add_flat_layer(utils::AIR, 2);
+        map::install_map(
+            app.world_mut(),
+            Map::new(
+                "test",
+                Projection::Isometric,
+                MovementModel::Cell,
+                grid,
+                vec![],
+            ),
+        );
+    }
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        utils::register_air(&mut registry);
+        let body = |name: &str, domain, layer, side| {
+            EntityTypeDef::new(name)
+                .with_location(domain, CellSize::new(side, side), Solidity::Solid, layer)
+                .with_pool(Pool::health(50))
+        };
+        for (name, side, sees_up) in [
+            ("eye", 1, FixedU64::ZERO),
+            ("tall_eye", 1, FixedU64::ONE),
+            ("wide_eye", 2, FixedU64::ZERO),
+        ] {
+            registry.register(
+                body(name, utils::GROUND_DOMAIN, utils::GROUND, side)
+                    .with_sight_range(8)
+                    .with_stat(EntityStatId::SEES_UP, sees_up),
+            );
+        }
+        registry.register(
+            EntityTypeDef::new("column")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(1, 4),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(50))
+                .with_sight_range(1),
+        );
+        registry.register(
+            body("far_eye", utils::GROUND_DOMAIN, utils::GROUND, 1).with_sight_range(2_000_000_000),
+        );
+        registry.register(body("flier", utils::AIR_DOMAIN, utils::AIR, 1).with_sight_range(8));
+        for (name, side, of) in [
+            ("rock", 1, Affiliation::Anyone),
+            ("boulder", 2, Affiliation::Anyone),
+            ("ward", 1, Affiliation::Enemy),
+        ] {
+            registry.register(
+                body(name, utils::GROUND_DOMAIN, utils::GROUND, side)
+                    .with_blocks_sight(SightBlock::new(1, of)),
+            );
+        }
+        registry.register(
+            body("cairn", utils::GROUND_DOMAIN, utils::GROUND, 1)
+                .with_dying(10, [])
+                .with_blocks_sight(SightBlock::new(1, Affiliation::Anyone)),
+        );
+        let smoke = registry.register_field(
+            "smoke",
+            FieldDef::new(
+                Terrains::Any,
+                utils::GROUND.into(),
+                FieldDecay::Instant,
+                None,
+                Some(SightBlock::new(1, Affiliation::Anyone)),
+                Detection::Blind,
+            ),
+        );
+        let haze = registry.register_field(
+            "haze",
+            FieldDef::new(
+                Terrains::Any,
+                utils::GROUND | utils::AIR,
+                FieldDecay::Instant,
+                None,
+                Some(SightBlock::new(1, Affiliation::Anyone)),
+                Detection::Blind,
+            ),
+        );
+        let flare = registry.register_field(
+            "flare",
+            FieldDef::new(
+                Terrains::Any,
+                utils::GROUND.into(),
+                FieldDecay::Instant,
+                Some(FieldWatch::new(Affiliation::Anyone)),
+                None,
+                Detection::Blind,
+            ),
+        );
+        let screen = registry.register_field(
+            "screen",
+            FieldDef::new(
+                Terrains::Any,
+                utils::GROUND.into(),
+                FieldDecay::Instant,
+                None,
+                Some(SightBlock::new(1, Affiliation::Enemy)),
+                Detection::Blind,
+            ),
+        );
+        let glow = registry.register_field(
+            "glow",
+            FieldDef::new(
+                Terrains::Any,
+                utils::GROUND.into(),
+                FieldDecay::Instant,
+                Some(FieldWatch::new(Affiliation::Own)),
+                None,
+                Detection::Blind,
+            ),
+        );
+        for (name, field) in [
+            ("smoke_pot", smoke),
+            ("haze_pot", haze),
+            ("screen_pot", screen),
+            ("flare_post", flare),
+            ("lamp", glow),
+        ] {
+            registry.register(
+                body(name, utils::GROUND_DOMAIN, utils::GROUND, 1).with_field_sources([
+                    FieldSourceDef::new(
+                        field,
+                        2,
+                        FieldGrowth::Instant,
+                        Emission::Nothing,
+                        Emission::Nothing,
+                    ),
+                ]),
+            );
+        }
+    }
+    app.world_mut().resource::<ContentRegistry>().validate();
+    utils::start_game(&mut app);
+    app
+}
+
+/// Places an unowned `type_name` anchored at `(x, y)`.
+fn place_unowned(app: &mut App, type_name: &str, x: u32, y: u32) {
+    utils::create_entity(app.world_mut(), type_name, utils::pos(x, y), None)
+        .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"));
 }

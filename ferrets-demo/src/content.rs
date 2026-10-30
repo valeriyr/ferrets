@@ -13,9 +13,9 @@ use ferrets_script::{content, engine::lua::LuaEngine};
 /// over them. Fractional stats are decimal strings so they parse
 /// straight to fixed-point (no `f64`).
 pub const CONTENT: &str = r#"
-    -- The ground spans three levels: low ground, plateaus and mountains.
-    -- Fliers are over all of them.
-    local GROUND = define_layer("ground", { level = { from = 1, to = 3 } })
+    -- The ground spans three levels: low ground, plateaus and mountains; a
+    -- soldier below a level does not see onto it. Fliers are over all of them.
+    local GROUND = define_layer("ground", { level = { from = 1, to = 3 }, relief_blocks = { "ground" } })
     local AIR = define_layer("air", { level = 4 })
 
     -- The ground is land, shallow water at the sea's coast and a river's
@@ -65,7 +65,7 @@ pub const CONTENT: &str = r#"
     -- it spreads on the ground alone, so nothing in the air answers to it.
     -- Power is there while its pylon stands and gone the tick it falls, for
     -- whatever stands or flies in it.
-    define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 10 }, vision = "watched" })
+    define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 10 }, watches = { of = "own" } })
     define_field("power", { terrains = LAND, spreads_on = GROUND | AIR, decay = "instant" })
     -- Blight is the ground the undead build on: it spreads from every
     -- structure they raise, heals what stands on it, and recedes slowly once
@@ -81,6 +81,26 @@ pub const CONTENT: &str = r#"
     -- gone the tick it moves on, seeing nothing, detecting nothing; what it
     -- does for those inside is theirs to declare.
     define_field("veil", { terrains = "any", spreads_on = GROUND | AIR, decay = "instant" })
+    -- Smoke from a grenade hangs a level above the ground it covers: whoever
+    -- stands below its top sees its near edge and nothing behind it, whatever
+    -- side they are on; a flier looks down over it. Nothing sustains it, so it
+    -- thins ring by ring, two seconds a ring.
+    define_field("smoke", {
+        terrains = "any",
+        spreads_on = GROUND,
+        decay = { cycle = 40 },
+        blocks_sight = { height = 1, of = "anyone" },
+    })
+    -- A fog cloud a shaman calls down: its side sees every cell of it, while
+    -- an enemy, on the ground or in the air, sees nothing through it. It
+    -- lifts ring by ring, three seconds a ring.
+    define_field("fog_cloud", {
+        terrains = "any",
+        spreads_on = GROUND | AIR,
+        decay = { cycle = 60 },
+        watches = { of = "allied" },
+        blocks_sight = { height = 2, of = "enemy" },
+    })
 
     -- What a structure that will not stand on creep declares, and what the
     -- elves add to it: neither the swarm's ground nor the undead's.
@@ -118,6 +138,13 @@ pub const CONTENT: &str = r#"
         location = { domain = "ground", size = 1, solidity = "passable" },
         tags = { "remains" },
         stats = { lifetime = 600 },
+    })
+
+    -- A standing stone: neutral, unbreakable, and two levels tall, so it
+    -- hides what lies behind it from everyone on the ground around it.
+    define_entity("standing_stone", {
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
+        blocks_sight = { height = 2, of = "anyone" },
     })
 
     -- Projectile kinds. Each is registered by name so the renderer can draw an
@@ -997,6 +1024,14 @@ pub const CONTENT: &str = r#"
         selection = { priority = 10 },
     })
 
+    -- The shaman's fog cloud: called down on any cell, seen or not, it hangs
+    -- four cells around it.
+    define_skill("fog_cloud", {
+        caster = "entity",
+        cooldown = 400,
+        cost = { energy = "40" },
+        effect = { field = { at = "position", field = "fog_cloud", radius = 4, action = "cover" } },
+    })
     -- Orc support: a shaman that mends one allied unit at a time from its energy
     -- pool. The heal takes a target, so casting is button-then-click.
     define_entity("shaman", {
@@ -1011,7 +1046,7 @@ pub const CONTENT: &str = r#"
         pools = { health = { maximum = 35 }, energy = { maximum = 80, regen = "0.2", initial = { share = "0.25" } } },
         dying = FALLS,
         tags = { "biological" },
-        skills = { "second_wind", "withering" },
+        skills = { "second_wind", "withering", "fog_cloud" },
         passives = { "spent" },
         price = { gold = 120 },
         train_time = 80,
@@ -1215,7 +1250,7 @@ pub const CONTENT: &str = r#"
         selection = { priority = 1 },
     })
 
-    -- Drones spew a patch of creep on any cell they can see, which lets the
+    -- Drones spew a patch of creep on any cell, seen or not, which lets the
     -- swarm plant a tumor away from home. The patch has nothing sustaining it,
     -- so it recedes unless a tumor takes root on it in time.
     define_skill("spew_creep", {
@@ -2061,7 +2096,9 @@ pub const CONTENT: &str = r#"
         stats = {
             speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
             damage = 9, attack_range = 1, acquire_range = 6, attack_period = 5, damage_point = 2,
-            sight_range = 9,
+            -- A scout that looks a level up: onto a plateau from the low
+            -- ground below it, though not past a standing stone.
+            sight_range = 9, sees_up = 1,
             supply_cost = 1,
             cargo_size = 1,
         },
@@ -2473,6 +2510,14 @@ pub const CONTENT: &str = r#"
         berths = { rim = { points = rim(2, 2), slots = 1 } },
     })
 
+    -- The marine's smoke grenade: thrown at any cell, seen or not, it smokes
+    -- the cells three around it. It costs nothing but the twenty
+    -- seconds until the next.
+    define_skill("smoke_grenade", {
+        caster = "entity",
+        cooldown = 400,
+        effect = { field = { at = "position", field = "smoke", radius = 3, action = "cover" } },
+    })
     define_entity("marine", {
         race = "terran",
         location = { domain = "ground", size = 1, solidity = "solid" },
@@ -2491,6 +2536,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND | AIR },
         price = { gold = 60 },
         train_time = 45,
+        skills = { "smoke_grenade" },
         passives = { "combat_drugs" },
     })
 

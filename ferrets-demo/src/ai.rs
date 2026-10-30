@@ -561,8 +561,14 @@ const ORC_AI: &str = r#"
 
             -- A tower is hardened only while another watcher stands: the gun
             -- that answers a flier costs the tower its detection, and the side
-            -- keeps one watcher.
-            if #watch_towers >= 2 and #guard_towers == 0 then
+            -- keeps one watcher. A tower part way through hardening is still
+            -- a watch tower, busy with its change, so none is hardened while
+            -- one is.
+            local hardening = false
+            for _, t in ipairs(watch_towers) do
+                if not t.idle then hardening = true end
+            end
+            if #watch_towers >= 2 and #guard_towers == 0 and not hardening then
                 for _, t in ipairs(watch_towers) do
                     if not t.rising and morph_one(commands, budget, t, "guard_tower") then
                         break

@@ -8,6 +8,7 @@ use ferrets_content::{
     attack::AttackDef,
     domain::{DomainDef, DomainId},
     entity_type_def::EntityTypeDef,
+    layer::LayerLevel,
     location::Solidity,
     registry::ContentRegistry,
     targeting,
@@ -15,7 +16,7 @@ use ferrets_content::{
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
-use ferrets_nav_grid::{layer_level::LayerLevel, layer_mask::LayerMask};
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 //
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -240,8 +241,8 @@ fn keep() -> EntityTypeDef {
 /// the test helpers' layer and domain handles name them.
 fn layered_registry() -> ContentRegistry {
     let mut registry = utils::ground_registry();
-    let water = registry.register_layer("water", LayerLevel::At(2));
-    let air = registry.register_layer("air", LayerLevel::At(3));
+    let water = registry.register_layer("water", LayerLevel::At(2), &[]);
+    let air = registry.register_layer("air", LayerLevel::At(3), &[]);
     assert_eq!((water, air), (utils::WATER, utils::AIR));
     assert_eq!(
         registry.register_domain("water", DomainDef::new(water, Terrains::Any, None)),

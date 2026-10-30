@@ -32,7 +32,8 @@
 //! plateau with no ramp, and a mesa between P0 and P2 standing straight from
 //! low ground, its cliff too tall even for the stilt walker — and `>`/`^`/`v`/`<`
 //! the ramps, each rising the way it points. Each corner also has a small tree
-//! grove. The mines and groves are neutral map placements; the fortress and
+//! grove, and a standing stone out toward the rivers. The mines,
+//! groves and stones are neutral map placements; the fortress and
 //! its ships belong to the boss slot; each lobby slot's base is spawned by
 //! the game for its occupant. The camera opens framed on the local player's
 //! start point.
@@ -158,6 +159,10 @@ const TREES: &[(u32, u32)] = &[
     (85, 17),
 ];
 
+/// Standing stone anchors (2×2, sight-blocking): one on the open low ground of
+/// each quadrant, out toward the rivers and clear of its base.
+const STANDING_STONES: [(u32, u32); 4] = [(36, 28), (60, 60), (36, 86), (60, 8)];
+
 /// Looks up a map this game knows by name. The session names its map — like
 /// scenarios, maps are content the game must already have — and the scene
 /// spawner and replay playback resolve the name here.
@@ -241,6 +246,15 @@ pub fn data() -> MapData {
                 "health".to_string(),
                 PoolInitial::Share(FixedU64::lit("0.5")),
             )],
+        });
+    }
+    for &cell in &STANDING_STONES {
+        data.add_placement(Placement {
+            type_name: "standing_stone".to_string(),
+            cell,
+            owner: None,
+            amount: None,
+            pools: Vec::new(),
         });
     }
 

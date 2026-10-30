@@ -33,6 +33,7 @@ use crate::{
     movement_model::{self, MovementModel},
     occupancy::{GridMark, OccupancyClass},
     order::Order,
+    regions,
     session::player_id::PlayerId,
     simulation_id::SimulationId,
 };
@@ -55,7 +56,7 @@ use ferrets_content::{
     turret::TurretStats,
     warp::WarperDef,
 };
-use ferrets_nav_grid::{layer_mask::LayerMask, mover_shape::MoverShape};
+use ferrets_nav_grid::{layer_id::LayerId, layer_mask::LayerMask, mover_shape::MoverShape};
 
 /// Returns the [`SimulationId`] `entity` was spawned with.
 ///
@@ -800,6 +801,34 @@ pub fn footprint_rect(world: &World, entity: Entity) -> CellRect {
 pub fn footprint_rect_of(world: &World, def: &EntityTypeDef, entity: Entity) -> CellRect {
     let (position, size) = footprint_of(world, def, entity);
     OccupancyClass::of(def).footprint_rect(position, size)
+}
+
+/// The layer `entity`'s domain puts its body in.
+///
+/// Panics if `entity` is not a simulation entity, or its type declares no location.
+pub fn layer(world: &World, entity: Entity) -> LayerId {
+    let location = of(world, entity)
+        .location
+        .expect("validated content stands somewhere");
+    world
+        .resource::<ContentRegistry>()
+        .domain_def(location.domain())
+        .layer()
+}
+
+/// The level `entity` stands at: the highest of its layer under the cells it
+/// occupies (see [`occupied_rect`]).
+///
+/// Panics if `entity` is not a simulation entity, its type declares no
+/// location, or a cell it occupies lies off the map — an anchor keeps a
+/// footprint on the map.
+pub fn level(world: &World, entity: Entity) -> u32 {
+    regions::highest_level(
+        world.resource::<Map>().nav_grid(),
+        layer(world, entity),
+        occupied_rect(world, entity),
+    )
+    .expect("an anchor keeps a footprint on the map")
 }
 
 /// The cells `entity`'s footprint occupies: anchored at the cell its position

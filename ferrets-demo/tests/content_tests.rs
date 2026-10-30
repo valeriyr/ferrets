@@ -17,7 +17,7 @@ use ferrets_content::{
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldCoverage, FieldDef, FieldPlacement, FieldSide, FieldVision},
+    field::{FieldAction, FieldCoverage, FieldDef, FieldPlacement, FieldSide, FieldWatch},
     kinds::{Kind, Kinds},
     landing::Landing,
     location::Solidity,
@@ -34,6 +34,7 @@ use ferrets_content::{
     requirement::{Bound, Requirement, Threshold},
     resource::Banking,
     rise::{RisePool, RisePoolInitial},
+    sight_block::SightBlock,
     skills::{
         EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, Recipient, SkillCaster,
         SummonAt, SummonPlacement, Whom,
@@ -731,6 +732,118 @@ fn swarmling_grows_into_ravager_inside_cocoon() {
 }
 
 #[test]
+fn ground_levels_block_ground_sight_alone() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let ground = registry
+        .layer(map::GROUND)
+        .expect("ground layer is registered");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+
+    assert_eq!(
+        registry.layer_def(ground).relief_blocks(),
+        LayerMask::from(ground)
+    );
+    assert_eq!(registry.layer_def(air).relief_blocks(), LayerMask::EMPTY);
+}
+
+#[test]
+fn standing_stones_block_sight_and_huntress_sees_one_level_up() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let blocks_sight = |name: &str| {
+        registry
+            .entity(name)
+            .expect("the type is registered")
+            .blocks_sight
+    };
+
+    assert_eq!(
+        blocks_sight("standing_stone"),
+        Some(SightBlock::new(2, Affiliation::Anyone))
+    );
+    // Groves leave the view open, so the map stays easy to read.
+    assert_eq!(blocks_sight("tree"), None);
+    // A level up: onto a plateau, short of a stone's top.
+    let huntress = registry.entity("huntress").expect("huntress is registered");
+    assert_eq!(
+        huntress.base_stat(EntityStatId::SEES_UP),
+        Some(FixedU64::ONE)
+    );
+}
+
+#[test]
+fn standing_stones_stand_on_land_map_places_them_on() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let data = map::data();
+    let live = Map::from_data(&data, &registry);
+
+    let stones: Vec<_> = data
+        .placements()
+        .iter()
+        .filter(|placement| placement.type_name == "standing_stone")
+        .collect();
+    // The rivers cross at (48, 48): a stone stands in each quarter they
+    // leave.
+    let quadrants: std::collections::BTreeSet<(bool, bool)> = stones
+        .iter()
+        .map(|stone| (stone.cell.0 < 48, stone.cell.1 < 48))
+        .collect();
+    assert_eq!(stones.len(), 4);
+    assert_eq!(quadrants.len(), 4, "one stone a quadrant");
+    for stone in stones {
+        let anchor = CellPos::new(stone.cell.0, stone.cell.1);
+        assert!(
+            live.nav_grid()
+                .fits(anchor, shape_of(&registry, "standing_stone")),
+            "the stone at ({}, {}) stands on open land",
+            anchor.x,
+            anchor.y
+        );
+    }
+}
+
+#[test]
+fn smoke_blocks_everyone_and_fog_cloud_blinds_enemies_alone() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let ground = registry
+        .layer(map::GROUND)
+        .expect("ground layer is registered");
+    let air = registry.layer(map::AIR).expect("air layer is registered");
+    let field =
+        |name: &str| registry.field_def(registry.field(name).expect("the field is registered"));
+
+    let smoke = field("smoke");
+    assert_eq!(smoke.spreads_on(), LayerMask::from(ground));
+    assert_eq!(smoke.watches(), None);
+    assert_eq!(
+        smoke.blocks_sight(),
+        Some(SightBlock::new(1, Affiliation::Anyone))
+    );
+    let fog_cloud = field("fog_cloud");
+    assert_eq!(fog_cloud.spreads_on(), ground | air);
+    assert_eq!(
+        fog_cloud.watches(),
+        Some(FieldWatch::new(Affiliation::Allied))
+    );
+    assert_eq!(
+        fog_cloud.blocks_sight(),
+        Some(SightBlock::new(2, Affiliation::Enemy))
+    );
+
+    // The marine throws the smoke and the shaman calls the fog.
+    for (caster, skill) in [("marine", "smoke_grenade"), ("shaman", "fog_cloud")] {
+        let skill = registry.skill(skill).expect("the skill is registered");
+        assert!(
+            registry
+                .entity(caster)
+                .expect("the caster is registered")
+                .skills
+                .contains(&skill),
+            "{caster} carries it"
+        );
+    }
+}
+
+#[test]
 fn swarm_and_undead_ground_spreads_on_ground_alone() {
     // Creep and blight are ground for walkers to stand and build on; what
     // flies over them answers to neither. Power, the veil and true sight are
@@ -759,8 +872,11 @@ fn creep_watches_for_its_spreader_and_power_does_not() {
     let creep = registry.field("creep").expect("creep field is registered");
     let power = registry.field("power").expect("power field is registered");
 
-    assert_eq!(registry.field_def(creep).vision(), FieldVision::Watched);
-    assert_eq!(registry.field_def(power).vision(), FieldVision::Dark);
+    assert_eq!(
+        registry.field_def(creep).watches(),
+        Some(FieldWatch::new(Affiliation::Own))
+    );
+    assert_eq!(registry.field_def(power).watches(), None);
     // The tumor leaves the watching to its creep.
     let tumor = registry.entity("tumor").expect("tumor is registered");
     assert_eq!(
@@ -2050,7 +2166,7 @@ fn haunted_mine_seats_five_acolytes_in_star() {
 //
 
 #[test]
-fn true_sight_is_dark_and_reveals_ground_and_air() {
+fn true_sight_watches_nothing_and_reveals_ground_and_air() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let ground = registry
         .layer(map::GROUND)
@@ -2060,12 +2176,13 @@ fn true_sight_is_dark_and_reveals_ground_and_air() {
     // A detector sees by its own eyes; the field only says what hides under
     // it is seen. Over any cell, so the sea shelters no cloaked flier.
     let true_sight = field_def(&registry, "true_sight");
-    assert_eq!(true_sight.vision(), FieldVision::Dark);
+    assert_eq!(true_sight.watches(), None);
     assert_eq!(true_sight.detection(), Detection::Reveals(ground | air));
     assert_eq!(true_sight.terrains(), Terrains::Any);
 
-    // Nothing else detects: creep watches, the veil hides, the rest are dark.
-    for field in ["creep", "power", "blight", "veil"] {
+    // Nothing else detects: creep watches, the veil hides, smoke and fog
+    // clouds block sight, the rest watch nothing.
+    for field in ["creep", "power", "blight", "veil", "smoke", "fog_cloud"] {
         assert_eq!(
             field_def(&registry, field).detection(),
             Detection::Blind,

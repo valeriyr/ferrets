@@ -15,11 +15,11 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldPlacement, FieldSourceDef,
-        FieldVision,
     },
     gateway::{Doors, Joins},
     kinds::Kinds,
     landing::Landing,
+    layer::LayerLevel,
     location::Solidity,
     morph::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
@@ -44,7 +44,6 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     layer_id::LayerId,
-    layer_level::LayerLevel,
     slope::{Direction, Slope},
 };
 use ferrets_simulation::{
@@ -1355,11 +1354,11 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
-    let air = registry.register_layer("air", LayerLevel::At(4));
+    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
+    let air = registry.register_layer("air", LayerLevel::At(4), &[]);
     registry.register_terrain("land");
     let aloft = registry.register_domain("aloft", DomainDef::new(air, Terrains::Any, None));
-    let deep = registry.register_layer("deep", LayerLevel::At(0));
+    let deep = registry.register_layer("deep", LayerLevel::At(0), &[]);
     let delving = registry.register_domain("delving", DomainDef::new(deep, Terrains::Any, None));
     let walking = registry.register_domain(
         "walking",
@@ -1704,8 +1703,8 @@ fn mover(name: &str, domain: DomainId, ground: LayerId, size: u32) -> EntityType
 fn nest_app() -> App {
     let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 2 });
-    let air = registry.register_layer("air", LayerLevel::At(3));
+    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 2 }, &[]);
+    let air = registry.register_layer("air", LayerLevel::At(3), &[]);
     registry.register_terrain("land");
     let aloft = registry.register_domain("aloft", DomainDef::new(air, Terrains::Any, None));
     let walking = registry.register_domain(
@@ -1722,7 +1721,8 @@ fn nest_app() -> App {
             Terrains::Any,
             ground.into(),
             FieldDecay::Instant,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     );

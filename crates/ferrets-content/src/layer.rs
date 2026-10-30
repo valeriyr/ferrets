@@ -1,6 +1,40 @@
-//! Where a layer is on the vertical scale.
+//! The layer vocabulary: where a layer is on the vertical scale and the
+//! viewers its relief blocks the sight of.
 
 use std::fmt::Display;
+
+use ferrets_nav_grid::layer_mask::LayerMask;
+
+/// One layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerDef {
+    /// The levels the layer is at.
+    level: LayerLevel,
+    /// The layers whose viewers its levels block the sight of.
+    relief_blocks: LayerMask,
+}
+
+impl LayerDef {
+    /// Creates a new `LayerDef` with the given data.
+    pub fn new(level: LayerLevel, relief_blocks: LayerMask) -> Self {
+        Self {
+            level,
+            relief_blocks,
+        }
+    }
+
+    /// The levels the layer is at.
+    #[inline]
+    pub fn level(&self) -> LayerLevel {
+        self.level
+    }
+
+    /// The layers whose viewers its levels block the sight of.
+    #[inline]
+    pub fn relief_blocks(&self) -> LayerMask {
+        self.relief_blocks
+    }
+}
 
 /// The levels a layer is at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,6 +58,11 @@ impl LayerLevel {
             Self::At(at) => at == level,
             Self::Range { from, to } => (from..=to).contains(&level),
         }
+    }
+
+    /// Whether every level of `self` is below every level of `other`.
+    pub fn below(self, other: Self) -> bool {
+        self.span().1 < other.span().0
     }
 
     /// Whether the two share a level.

@@ -4,4 +4,5 @@
 pub mod cell_pos;
 pub mod cell_rect;
 pub mod cell_size;
+pub mod grid_line;
 pub mod projection;

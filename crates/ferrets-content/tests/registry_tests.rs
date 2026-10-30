@@ -26,11 +26,12 @@ use ferrets_content::{
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
-        FieldId, FieldPlacement, FieldSourceDef, FieldVision,
+        FieldId, FieldPlacement, FieldSourceDef, FieldWatch,
     },
     gateway::{Doors, Joins},
     kinds::{Kind, Kinds},
     landing::Landing,
+    layer::LayerLevel,
     location::Solidity,
     morph::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
@@ -50,6 +51,7 @@ use ferrets_content::{
     research::{ResearchDef, ResearcherDef},
     resource::{Banking, DepletionPolicy, HarvestData},
     rise::{RisePool, RisePoolInitial},
+    sight_block::SightBlock,
     skills::{
         AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, FromAimTo, FromCasterTo,
         GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach, Recipient,
@@ -68,8 +70,8 @@ use ferrets_content::{
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_nav_grid::{
-    cliff_crossing::CliffCrossing, layer_id::LayerId, layer_level::LayerLevel,
-    layer_mask::LayerMask, terrain_id::TerrainId, terrain_mask::TerrainMask,
+    cliff_crossing::CliffCrossing, layer_id::LayerId, layer_mask::LayerMask, terrain_id::TerrainId,
+    terrain_mask::TerrainMask,
 };
 
 //
@@ -585,7 +587,7 @@ fn validate_rejects_overbuilding_source_of_another_kind() {
 fn validate_rejects_overbuilding_source_on_other_layers() {
     let mut registry = utils::ground_registry();
     registry.register_resource("gold");
-    let air = registry.register_layer("air", LayerLevel::At(2));
+    let air = registry.register_layer("air", LayerLevel::At(2), &[]);
     let aloft = registry.register_domain("aloft", DomainDef::new(air, Terrains::Any, None));
     registry.register(
         utils::standing("mine", utils::GROUND_DOMAIN)
@@ -1250,15 +1252,15 @@ fn register_layer_assigns_ids_in_registration_order() {
     let mut registry = ContentRegistry::default();
 
     assert_eq!(
-        registry.register_layer("ground", LayerLevel::At(1)),
+        registry.register_layer("ground", LayerLevel::At(1), &[]),
         LayerId::new(1)
     );
     assert_eq!(
-        registry.register_layer("air", LayerLevel::At(2)),
+        registry.register_layer("air", LayerLevel::At(2), &[]),
         LayerId::new(2)
     );
     assert_eq!(
-        registry.register_layer("water", LayerLevel::At(3)),
+        registry.register_layer("water", LayerLevel::At(3), &[]),
         LayerId::new(4)
     );
 }
@@ -1267,16 +1269,16 @@ fn register_layer_assigns_ids_in_registration_order() {
 fn registered_layer_round_trips_with_its_level() {
     let mut registry = ContentRegistry::default();
 
-    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
-    let air = registry.register_layer("air", LayerLevel::At(4));
+    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
+    let air = registry.register_layer("air", LayerLevel::At(4), &[]);
 
     assert_eq!(registry.layer("ground"), Some(ground));
     assert!(registry.has_layer("ground"));
     assert_eq!(
-        registry.layer_level(ground),
+        registry.layer_def(ground).level(),
         LayerLevel::Range { from: 1, to: 3 }
     );
-    assert_eq!(registry.layer_level(air), LayerLevel::At(4));
+    assert_eq!(registry.layer_def(air).level(), LayerLevel::At(4));
     assert_eq!(registry.layer("water"), None);
     assert!(!registry.has_layer("water"));
 }
@@ -1285,56 +1287,115 @@ fn registered_layer_round_trips_with_its_level() {
 #[should_panic(expected = "layer 'ground' is already registered")]
 fn re_registered_layer_panics() {
     let mut registry = ContentRegistry::default();
-    registry.register_layer("ground", LayerLevel::At(1));
-    registry.register_layer("ground", LayerLevel::At(2));
+    registry.register_layer("ground", LayerLevel::At(1), &[]);
+    registry.register_layer("ground", LayerLevel::At(2), &[]);
 }
 
 #[test]
 #[should_panic(expected = "layer 'air' at 3 shares a level with layer 'ground' at 1..=3")]
 fn layer_sharing_level_panics() {
     let mut registry = ContentRegistry::default();
-    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
-    registry.register_layer("air", LayerLevel::At(3));
+    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
+    registry.register_layer("air", LayerLevel::At(3), &[]);
 }
 
 #[test]
 #[should_panic(expected = "layer 'ground' at 1..=3 shares a level with layer 'air' at 2")]
 fn layer_range_over_registered_level_panics() {
     let mut registry = ContentRegistry::default();
-    registry.register_layer("air", LayerLevel::At(2));
-    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    registry.register_layer("air", LayerLevel::At(2), &[]);
+    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
 }
 
 #[test]
 #[should_panic(expected = "layer 'highland' at 3..=5 shares a level with layer 'ground' at 1..=3")]
 fn layer_ranges_overlapping_panics() {
     let mut registry = ContentRegistry::default();
-    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
-    registry.register_layer("highland", LayerLevel::Range { from: 3, to: 5 });
+    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
+    registry.register_layer("highland", LayerLevel::Range { from: 3, to: 5 }, &[]);
 }
 
 #[test]
 fn adjacent_layer_ranges_register() {
     let mut registry = ContentRegistry::default();
-    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
-    let highland = registry.register_layer("highland", LayerLevel::Range { from: 4, to: 6 });
+    registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
+    let highland = registry.register_layer("highland", LayerLevel::Range { from: 4, to: 6 }, &[]);
 
     assert_eq!(
-        registry.layer_level(highland),
+        registry.layer_def(highland).level(),
         LayerLevel::Range { from: 4, to: 6 }
     );
 }
 
 #[test]
+fn relief_blocks_resolves_its_own_and_lower_layers() {
+    let mut registry = ContentRegistry::default();
+    let seabed =
+        registry.register_layer("seabed", LayerLevel::Range { from: 0, to: 1 }, &["seabed"]);
+    let ground = registry.register_layer(
+        "ground",
+        LayerLevel::Range { from: 2, to: 4 },
+        &["ground", "seabed"],
+    );
+    let air = registry.register_layer("air", LayerLevel::At(5), &[]);
+
+    assert_eq!(
+        registry.layer_def(seabed).relief_blocks(),
+        LayerMask::from(seabed)
+    );
+    assert_eq!(
+        registry.layer_def(ground).relief_blocks(),
+        LayerMask::from(ground) | seabed
+    );
+    assert_eq!(registry.layer_def(air).relief_blocks(), LayerMask::EMPTY);
+}
+
+#[test]
+fn ranged_layer_may_block_no_one() {
+    let mut registry = ContentRegistry::default();
+    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
+
+    assert_eq!(registry.layer_def(ground).relief_blocks(), LayerMask::EMPTY);
+}
+
+#[test]
+#[should_panic(
+    expected = "layer 'air' is at one level everywhere and has no relief to block sight"
+)]
+fn flat_layer_blocking_sight_panics() {
+    ContentRegistry::default().register_layer("air", LayerLevel::At(4), &["air"]);
+}
+
+#[test]
+#[should_panic(
+    expected = "layer 'ground' blocks the sight of layer 'seabed', which is not registered; register a lower layer first"
+)]
+fn relief_blocks_naming_unregistered_layer_panics() {
+    ContentRegistry::default().register_layer(
+        "ground",
+        LayerLevel::Range { from: 2, to: 4 },
+        &["seabed"],
+    );
+}
+
+#[test]
+#[should_panic(expected = "layer 'ground' blocks the sight of layer 'air', which is not below it")]
+fn relief_blocks_naming_higher_layer_panics() {
+    let mut registry = ContentRegistry::default();
+    registry.register_layer("air", LayerLevel::At(5), &[]);
+    registry.register_layer("ground", LayerLevel::Range { from: 2, to: 4 }, &["air"]);
+}
+
+#[test]
 #[should_panic(expected = "layer 'ground' spans levels 3 to 1, which run downward")]
 fn layer_range_running_downward_panics() {
-    ContentRegistry::default().register_layer("ground", LayerLevel::Range { from: 3, to: 1 });
+    ContentRegistry::default().register_layer("ground", LayerLevel::Range { from: 3, to: 1 }, &[]);
 }
 
 #[test]
 #[should_panic(expected = "layer name must not be empty")]
 fn empty_layer_name_panics() {
-    ContentRegistry::default().register_layer("", LayerLevel::At(1));
+    ContentRegistry::default().register_layer("", LayerLevel::At(1), &[]);
 }
 
 #[test]
@@ -1342,7 +1403,7 @@ fn empty_layer_name_panics() {
 fn register_layer_rejects_exhausted_ids() {
     let mut registry = ContentRegistry::default();
     for n in 0..=32 {
-        registry.register_layer(format!("layer_{n}"), LayerLevel::At(n));
+        registry.register_layer(format!("layer_{n}"), LayerLevel::At(n), &[]);
     }
 }
 
@@ -1352,7 +1413,7 @@ fn register_layer_rejects_exhausted_ids() {
 )]
 fn domain_over_layer_spanning_levels_without_cliff_crossing_panics() {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
     registry.register_terrain("land");
     registry.register_domain("striding", DomainDef::new(ground, Terrains::Any, None));
 }
@@ -1363,7 +1424,7 @@ fn domain_over_layer_spanning_levels_without_cliff_crossing_panics() {
 )]
 fn domain_over_layer_at_one_level_with_cliff_crossing_panics() {
     let mut registry = ContentRegistry::default();
-    let air = registry.register_layer("air", LayerLevel::At(4));
+    let air = registry.register_layer("air", LayerLevel::At(4), &[]);
     registry.register_terrain("land");
     registry.register_domain(
         "aloft",
@@ -1374,7 +1435,7 @@ fn domain_over_layer_at_one_level_with_cliff_crossing_panics() {
 #[test]
 fn domain_keeps_its_cliff_crossing() {
     let mut registry = ContentRegistry::default();
-    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 });
+    let ground = registry.register_layer("ground", LayerLevel::Range { from: 1, to: 3 }, &[]);
     registry.register_terrain("land");
     let striding = registry.register_domain(
         "striding",
@@ -1411,7 +1472,7 @@ fn register_rejects_occupied_mask_mixing_in_unregistered_layer() {
 )]
 fn register_rejects_occupied_mask_leaving_out_domain_layer() {
     let mut registry = utils::ground_registry();
-    let air = registry.register_layer("air", LayerLevel::At(2));
+    let air = registry.register_layer("air", LayerLevel::At(2), &[]);
     registry.register(EntityTypeDef::new("gryphon").with_location(
         utils::GROUND_DOMAIN,
         CellSize::ONE,
@@ -5809,7 +5870,7 @@ fn register_accepts_field_sources_placement_and_effects() {
         registry.field_def(creep).decay(),
         FieldDecay::Gradual { cycle: 4 }
     );
-    assert_eq!(registry.field_def(creep).vision(), FieldVision::Dark);
+    assert_eq!(registry.field_def(creep).watches(), None);
     assert_eq!(registry.field_ids().collect::<Vec<_>>(), vec![creep]);
 }
 
@@ -5824,7 +5885,8 @@ fn register_rejects_standing_act_on_foreign_field() {
             Terrains::Any,
             utils::GROUND.into(),
             FieldDecay::Never,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     );
@@ -5867,31 +5929,41 @@ fn register_accepts_standing_act_on_registered_field() {
 }
 
 #[test]
-fn register_keeps_field_vision() {
+fn register_keeps_what_field_watches_and_blocks() {
     let mut registry = utils::ground_registry();
-    let watched = registry.register_field(
-        "creep",
+    let fog = registry.register_field(
+        "fog_cloud",
         FieldDef::new(
             Terrains::Any,
             utils::GROUND.into(),
-            FieldDecay::Never,
-            FieldVision::Watched,
+            FieldDecay::Instant,
+            Some(FieldWatch::new(Affiliation::Allied)),
+            Some(SightBlock::new(2, Affiliation::Enemy)),
             Detection::Blind,
         ),
     );
-    let dark = registry.register_field(
+    let power = registry.register_field(
         "power",
         FieldDef::new(
             Terrains::Any,
             utils::GROUND.into(),
             FieldDecay::Instant,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     );
 
-    assert_eq!(registry.field_def(watched).vision(), FieldVision::Watched);
-    assert_eq!(registry.field_def(dark).vision(), FieldVision::Dark);
+    assert_eq!(
+        registry.field_def(fog).watches(),
+        Some(FieldWatch::new(Affiliation::Allied))
+    );
+    assert_eq!(
+        registry.field_def(fog).blocks_sight(),
+        Some(SightBlock::new(2, Affiliation::Enemy))
+    );
+    assert_eq!(registry.field_def(power).watches(), None);
+    assert_eq!(registry.field_def(power).blocks_sight(), None);
 }
 
 #[test]
@@ -5911,7 +5983,8 @@ fn register_rejects_field_on_unregistered_terrain() {
             Terrains::Only(TerrainMask::from(TerrainId::new(2))),
             utils::GROUND.into(),
             FieldDecay::Instant,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     );
@@ -5975,7 +6048,8 @@ fn field_spreading_on_no_layer_panics() {
         Terrains::Any,
         LayerMask::EMPTY,
         FieldDecay::Instant,
-        FieldVision::Dark,
+        None,
+        None,
         Detection::Blind,
     );
 }
@@ -5989,7 +6063,8 @@ fn register_rejects_field_spreading_on_unregistered_layer() {
             Terrains::Any,
             utils::WATER.into(),
             FieldDecay::Instant,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     );
@@ -6024,7 +6099,8 @@ fn register_accepts_effect_of_field_spreading_on_its_layer_among_others() {
             Terrains::Any,
             utils::GROUND | utils::WATER,
             FieldDecay::Instant,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     );
@@ -6101,7 +6177,8 @@ fn field_rejects_zero_decay_cycle() {
         Terrains::Any,
         utils::GROUND.into(),
         FieldDecay::Gradual { cycle: 0 },
-        FieldVision::Dark,
+        None,
+        None,
         Detection::Blind,
     );
 }
@@ -7136,7 +7213,8 @@ fn register_keeps_field_detection() {
             Terrains::Any,
             utils::GROUND.into(),
             FieldDecay::Instant,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Reveals(utils::GROUND.into()),
         ),
     );
@@ -7153,7 +7231,8 @@ fn field_on_no_terrain_panics() {
         Terrains::Only(TerrainMask::EMPTY),
         utils::GROUND.into(),
         FieldDecay::Instant,
-        FieldVision::Dark,
+        None,
+        None,
         Detection::Blind,
     );
 }
@@ -7165,7 +7244,8 @@ fn field_rejects_detection_revealing_no_layer() {
         Terrains::Any,
         utils::GROUND.into(),
         FieldDecay::Instant,
-        FieldVision::Dark,
+        None,
+        None,
         Detection::Reveals(LayerMask::EMPTY),
     );
 }
@@ -7179,7 +7259,8 @@ fn register_rejects_field_detecting_unregistered_layer() {
             Terrains::Any,
             utils::GROUND.into(),
             FieldDecay::Instant,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Reveals(utils::WATER.into()),
         ),
     );
@@ -7951,7 +8032,8 @@ fn creep_field(registry: &mut ContentRegistry) -> FieldId {
             Terrains::Any,
             utils::GROUND.into(),
             FieldDecay::Gradual { cycle: 4 },
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     )
@@ -7961,7 +8043,7 @@ fn creep_field(registry: &mut ContentRegistry) -> FieldId {
 /// [`utils::WATER_DOMAIN`] on it.
 fn water_registry() -> ContentRegistry {
     let mut registry = utils::ground_registry();
-    let water = registry.register_layer("water", LayerLevel::At(2));
+    let water = registry.register_layer("water", LayerLevel::At(2), &[]);
     assert_eq!(
         registry.register_domain("water", DomainDef::new(water, Terrains::Any, None)),
         utils::WATER_DOMAIN
@@ -7973,7 +8055,7 @@ fn water_registry() -> ContentRegistry {
 /// registered into `registry` with that layer.
 fn tide_field(registry: &mut ContentRegistry) -> FieldId {
     assert_eq!(
-        registry.register_layer("water", LayerLevel::At(2)),
+        registry.register_layer("water", LayerLevel::At(2), &[]),
         utils::WATER
     );
     registry.register_field(
@@ -7982,7 +8064,8 @@ fn tide_field(registry: &mut ContentRegistry) -> FieldId {
             Terrains::Any,
             utils::WATER.into(),
             FieldDecay::Instant,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     )
@@ -8275,7 +8358,8 @@ fn register_power(registry: &mut ContentRegistry) -> FieldId {
             Terrains::Any,
             utils::GROUND.into(),
             FieldDecay::Instant,
-            FieldVision::Dark,
+            None,
+            None,
             Detection::Blind,
         ),
     )

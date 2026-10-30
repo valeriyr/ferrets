@@ -12,7 +12,7 @@ use ferrets_content::{
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{
         Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldPlacement,
-        FieldSourceDef, FieldVision,
+        FieldSourceDef,
     },
     kinds::Kinds,
     landing::Landing,
@@ -1447,7 +1447,8 @@ fn app() -> App {
                 Terrains::Only(utils::LAND.into()),
                 utils::GROUND.into(),
                 FieldDecay::Never,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Blind,
             ),
         );
@@ -1916,7 +1917,8 @@ fn app() -> App {
                 Terrains::Only(utils::LAND.into()),
                 utils::GROUND.into(),
                 FieldDecay::Instant,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Blind,
             ),
         );

@@ -21,7 +21,6 @@ use ferrets_content::{
     entity_type_def::EntityTypeDef,
     field::{
         Emission, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldSourceDef,
-        FieldVision,
     },
     kinds::Kinds,
     location::Solidity,
@@ -1628,7 +1627,8 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 Terrains::Any,
                 utils::GROUND | utils::AIR,
                 FieldDecay::Instant,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Reveals(LayerMask::EMPTY | utils::GROUND | air),
             ),
         );
@@ -1638,7 +1638,8 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 Terrains::Any,
                 utils::GROUND | utils::AIR,
                 FieldDecay::Instant,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Reveals(utils::GROUND.into()),
             ),
         );
@@ -1648,7 +1649,8 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 Terrains::Any,
                 utils::GROUND | utils::AIR,
                 FieldDecay::Instant,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Reveals(air.into()),
             ),
         );
@@ -1658,7 +1660,8 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 Terrains::Any,
                 utils::GROUND | utils::AIR,
                 FieldDecay::Instant,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Blind,
             ),
         );

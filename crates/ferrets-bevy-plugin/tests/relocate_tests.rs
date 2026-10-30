@@ -9,7 +9,7 @@ use ferrets_content::{
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldDecay, FieldDef, FieldPlacement, FieldVision},
+    field::{FieldAction, FieldDecay, FieldDef, FieldPlacement},
     kinds::Kinds,
     landing::Landing,
     location::Solidity,
@@ -1052,7 +1052,8 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                 Terrains::Only(utils::LAND.into()),
                 utils::GROUND.into(),
                 FieldDecay::Never,
-                FieldVision::Dark,
+                None,
+                None,
                 Detection::Blind,
             ),
         );
