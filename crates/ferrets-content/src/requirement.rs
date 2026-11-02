@@ -3,8 +3,11 @@
 //! as a buff is borne.
 
 use ferrets_math::FixedU64;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
-use crate::{entity_stats::EntityStatId, research::ResearchId};
+use crate::{
+    coverage::Coverage, entity_stats::EntityStatId, research::ResearchId, terrains::Terrains,
+};
 
 /// Whom a requirement is asked of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +114,16 @@ pub enum Requirement {
     IdleFor(u32),
     /// No hit has landed on the acting entity for this many ticks, or ever.
     UnhurtFor(u32),
+    /// The acting entity stands on the map, on one of these layers, with as
+    /// much of its footprint on these terrains as the coverage asks for.
+    Over {
+        /// The terrains asked for.
+        terrains: Terrains,
+        /// How much of the footprint must lie on them.
+        coverage: Coverage,
+        /// The layers asked for: the actor's domain layer is one of them.
+        layers: LayerMask,
+    },
 }
 
 impl Requirement {
@@ -137,7 +150,8 @@ impl Requirement {
             | Requirement::Risen
             | Requirement::Idle
             | Requirement::IdleFor(_)
-            | Requirement::UnhurtFor(_) => Scope::Actor,
+            | Requirement::UnhurtFor(_)
+            | Requirement::Over { .. } => Scope::Actor,
         }
     }
 
@@ -146,6 +160,48 @@ impl Requirement {
         let mut out = Vec::new();
         self.collect_leaves(&mut out);
         out
+    }
+
+    /// The leaves this requirement cannot be met without: under `all` nodes,
+    /// never under `any` or `unless`.
+    pub fn must_hold(&self) -> Vec<&Requirement> {
+        match self {
+            Requirement::All(items) => items.iter().flat_map(Requirement::must_hold).collect(),
+            Requirement::Any(_) | Requirement::Unless(_) => Vec::new(),
+            Requirement::Over { .. }
+            | Requirement::EntityType(_)
+            | Requirement::Tag(_)
+            | Requirement::Research(_)
+            | Requirement::Annexed(_)
+            | Requirement::Health(_)
+            | Requirement::Energy(_)
+            | Requirement::Stat { .. }
+            | Requirement::Risen
+            | Requirement::Idle
+            | Requirement::IdleFor(_)
+            | Requirement::UnhurtFor(_) => vec![self],
+        }
+    }
+
+    /// Whether any leaf under this requirement reads its actor's idleness:
+    /// `idle` or `idle_for`, under any node.
+    pub fn reads_idleness(&self) -> bool {
+        self.leaves().into_iter().any(|leaf| match leaf {
+            Requirement::Idle | Requirement::IdleFor(_) => true,
+            Requirement::All(_)
+            | Requirement::Any(_)
+            | Requirement::Unless(_)
+            | Requirement::EntityType(_)
+            | Requirement::Tag(_)
+            | Requirement::Research(_)
+            | Requirement::Annexed(_)
+            | Requirement::Health(_)
+            | Requirement::Energy(_)
+            | Requirement::Stat { .. }
+            | Requirement::Risen
+            | Requirement::UnhurtFor(_)
+            | Requirement::Over { .. } => false,
+        })
     }
 
     fn collect_leaves<'a>(&'a self, out: &mut Vec<&'a Requirement>) {
@@ -166,7 +222,8 @@ impl Requirement {
             | Requirement::Risen
             | Requirement::Idle
             | Requirement::IdleFor(_)
-            | Requirement::UnhurtFor(_) => out.push(self),
+            | Requirement::UnhurtFor(_)
+            | Requirement::Over { .. } => out.push(self),
         }
     }
 }

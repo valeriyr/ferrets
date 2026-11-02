@@ -217,7 +217,7 @@ fn rising_entity_burns_like_any_other() {
 fn passive_held_while_risen_waits_until_risen() {
     let (mut app, _) = app();
     let (beacon, _) = utils::create_crewed_rising(&mut app, "beacon", 5, 5, 0);
-    let finished = buff_id(&app, "finished");
+    let finished = utils::entity_buff_id(&app, "finished");
     assert!(!entity_def::bears(app.world(), beacon, finished));
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), beacon, finished));
@@ -231,7 +231,7 @@ fn passive_held_while_risen_waits_until_risen() {
 fn passive_held_unless_risen_lasts_while_rising() {
     let (mut app, _) = app();
     let (beacon, _) = utils::create_crewed_rising(&mut app, "beacon", 5, 5, 0);
-    let scaffold = buff_id(&app, "scaffold");
+    let scaffold = utils::entity_buff_id(&app, "scaffold");
     assert!(entity_def::bears(app.world(), beacon, scaffold));
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), beacon, scaffold));
@@ -245,7 +245,7 @@ fn passive_held_unless_risen_lasts_while_rising() {
 fn rising_entity_keeps_passive_its_requirement_admits() {
     let (mut app, _) = app();
     let (seedling, _) = utils::create_crewed_rising(&mut app, "seedling", 5, 5, 0);
-    let hardy = buff_id(&app, "hardy");
+    let hardy = utils::entity_buff_id(&app, "hardy");
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::bears(app.world(), seedling, hardy));
 }
@@ -272,7 +272,7 @@ fn ownerless_bearer_meets_no_player_leaf() {
 
     // `lit` holds while the owner has a standing shed: the owned lantern
     // bears it once a shed stands, the stray never.
-    let lit = buff_id(&app, "lit");
+    let lit = utils::entity_buff_id(&app, "lit");
     assert!(!entity_def::bears(app.world(), lantern, lit));
     utils::create_owned(&mut app, "shed", 12, 12, 0);
     utils::run_ticks(&mut app, 1);
@@ -333,7 +333,7 @@ fn conceal_from_passive_lands_same_tick_as_its_buff() {
     // Idle from the first tick: the refit fits shadowmeld, and the
     // concealment marker that runs after it reads the buff the same tick.
     utils::run_ticks(&mut app, 1);
-    let shadowmeld = buff_id(&app, "shadowmeld");
+    let shadowmeld = utils::entity_buff_id(&app, "shadowmeld");
     assert!(entity_def::bears(app.world(), huntress, shadowmeld));
     assert!(app.world().get::<ConcealedComponent>(huntress).is_some());
 }
@@ -349,7 +349,7 @@ fn borne_passive_is_not_applied_again() {
     // stack draining 1 a tick, 40 − 3 = 37 after three ticks (a stack a tick
     // would have taken 1 + 2 + 3 = 6).
     utils::run_ticks(&mut app, 3);
-    let embers = buff_id(&app, "embers");
+    let embers = utils::entity_buff_id(&app, "embers");
     let stacks = app
         .world()
         .get::<BuffsComponent>(kiln)
@@ -365,7 +365,7 @@ fn borne_passive_is_not_applied_again() {
 fn disabled_building_still_burns() {
     let (mut app, on_fire) = app();
     let (shed, _) = utils::create_owned(&mut app, "shed", 5, 5, 0);
-    let stunned = buff_id(&app, "stunned");
+    let stunned = utils::entity_buff_id(&app, "stunned");
     utils::apply_buff(app.world_mut(), shed, stunned);
     utils::run_ticks(&mut app, 1);
     utils::wound(&mut app, shed, "60");
@@ -394,7 +394,7 @@ fn change_of_form_drops_old_passives_and_fits_new_ones() {
     assert!(entity_def::bears(
         app.world(),
         sapling,
-        buff_id(&app, "hardy")
+        utils::entity_buff_id(&app, "hardy")
     ));
 }
 
@@ -402,7 +402,7 @@ fn change_of_form_drops_old_passives_and_fits_new_ones() {
 fn new_form_passives_are_fitted_on_landing_tick_from_its_folded_stats() {
     let (mut app, _) = app();
     let (sapling, _) = utils::create_owned(&mut app, "sapling", 5, 5, 0);
-    let bark = buff_id(&app, "bark");
+    let bark = utils::entity_buff_id(&app, "bark");
     utils::apply_buff(app.world_mut(), sapling, bark);
     utils::run_ticks(&mut app, 1);
 
@@ -417,12 +417,12 @@ fn new_form_passives_are_fitted_on_landing_tick_from_its_folded_stats() {
     assert!(entity_def::bears(
         app.world(),
         sapling,
-        buff_id(&app, "hardy")
+        utils::entity_buff_id(&app, "hardy")
     ));
     assert!(entity_def::bears(
         app.world(),
         sapling,
-        buff_id(&app, "watchful")
+        utils::entity_buff_id(&app, "watchful")
     ));
     // Folded the same tick: 0 armor, +1 from each.
     assert_eq!(
@@ -436,7 +436,7 @@ fn old_form_passive_does_not_fit_new_form_passives() {
     let (mut app, _) = app();
     let (sapling, _) = utils::create_owned(&mut app, "sapling", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    let lookout = buff_id(&app, "lookout");
+    let lookout = utils::entity_buff_id(&app, "lookout");
     assert!(entity_def::bears(app.world(), sapling, lookout));
 
     // The sapling's `lookout` would lift the oak's sight of 1 to 3, past the 2
@@ -449,7 +449,7 @@ fn old_form_passive_does_not_fit_new_form_passives() {
     assert!(!entity_def::bears(
         app.world(),
         sapling,
-        buff_id(&app, "watchful")
+        utils::entity_buff_id(&app, "watchful")
     ));
 }
 
@@ -515,7 +515,7 @@ fn concealment_of_new_form_passive_holds_on_landing_tick() {
     assert!(entity_def::bears(
         app.world(),
         sapling,
-        buff_id(&app, "camouflage")
+        utils::entity_buff_id(&app, "camouflage")
     ));
     assert!(app.world().get::<ConcealedComponent>(sapling).is_some());
 }
@@ -571,7 +571,7 @@ fn new_entity_starts_full_of_effective_maximum() {
 fn change_of_form_carries_share_of_effective_maximum() {
     let (mut app, on_fire) = app();
     let (sapling, _) = utils::create_owned(&mut app, "sapling", 5, 5, 0);
-    let grown = buff_id(&app, "grown");
+    let grown = utils::entity_buff_id(&app, "grown");
     utils::apply_buff(app.world_mut(), sapling, grown);
     utils::run_ticks(&mut app, 1);
 
@@ -629,7 +629,7 @@ fn refreshed_passive_outlives_change_of_form() {
     utils::run_ticks(&mut app, 1);
     utils::wound(&mut app, sapling, "60");
     utils::run_ticks(&mut app, 1);
-    let smolder = buff_id(&app, "smolder");
+    let smolder = utils::entity_buff_id(&app, "smolder");
     assert!(entity_def::bears(app.world(), sapling, smolder));
 
     // `smolder` refreshes on a second application, so the cast replaces the
@@ -653,7 +653,7 @@ fn interim_form_drops_old_passives() {
 
     // Into the seedling on the way to the grove: still under the line, but
     // the seedling names no fire, only `hardy`.
-    let hardy = buff_id(&app, "hardy");
+    let hardy = utils::entity_buff_id(&app, "hardy");
     utils::order_morph(&mut app, sapling, "grove");
     utils::run_ticks(&mut app, SEEDLING_STANDS);
     assert_eq!(entity_def::type_name(app.world(), sapling), "seedling");
@@ -668,7 +668,7 @@ fn interim_form_drops_old_passives() {
     assert!(entity_def::bears(
         app.world(),
         sapling,
-        buff_id(&app, "watchful")
+        utils::entity_buff_id(&app, "watchful")
     ));
 }
 
@@ -711,7 +711,7 @@ fn energy_line_passive_reads_energy_pool() {
     utils::run_ticks(&mut app, 1);
 
     // `spent` holds under a quarter of 40 energy: 9 < 10 after spending 31.
-    let spent = buff_id(&app, "spent");
+    let spent = utils::entity_buff_id(&app, "spent");
     assert!(!entity_def::bears(app.world(), troll, spent));
     assert_eq!(
         pools::spend(app.world_mut(), troll, PoolId::ENERGY, utils::fixed("31")),
@@ -1123,12 +1123,4 @@ fn while_buff(requirement: Requirement, effects: Vec<EntityEffect>) -> EntityBuf
         stack_rule: StackRule::Ignore,
         interrupted_by: Vec::new(),
     }
-}
-
-/// The id of the fixture's buff `name`.
-fn buff_id(app: &App, name: &str) -> EntityBuffId {
-    app.world()
-        .resource::<ContentRegistry>()
-        .entity_buff(name)
-        .expect("the fixture registers the buff")
 }

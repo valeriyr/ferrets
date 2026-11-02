@@ -16,6 +16,7 @@ use ferrets_content::{
     build::BuilderAttendance,
     concealment::Concealment,
     cost::Cost,
+    coverage::Coverage,
     detection::Detection,
     domain::{DomainDef, DomainId},
     dying::{Bequest, DeathKind, DyingDef, LeftBy},
@@ -25,8 +26,8 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{
-        Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth,
-        FieldId, FieldPlacement, FieldSourceDef, FieldWatch,
+        Emission, FieldAction, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldId,
+        FieldPlacement, FieldSourceDef, FieldWatch,
     },
     gateway::{Doors, Joins},
     kinds::{Kind, Kinds},
@@ -4019,6 +4020,404 @@ fn validate_rejects_unhurt_for_zero() {
 
 #[test]
 #[should_panic(
+    expected = "entity type 'knight' requires standing over no terrain at all; name one or \"any\""
+)]
+fn validate_rejects_over_no_terrain() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Over {
+            terrains: Terrains::Only(TerrainMask::EMPTY),
+            coverage: Coverage::Every,
+            layers: utils::GROUND.into(),
+        }]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'knight' names unregistered terrains 0b10")]
+fn validate_rejects_over_unregistered_terrain() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Over {
+            terrains: Terrains::Only(TerrainMask::from(0b10)),
+            coverage: Coverage::Any,
+            layers: utils::GROUND.into(),
+        }]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' requires standing on no layer at all; name the layers"
+)]
+fn validate_rejects_over_no_layer() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Over {
+            terrains: Terrains::Any,
+            coverage: Coverage::Every,
+            layers: LayerMask::EMPTY,
+        }]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'knight' requires standing on unregistered layers 0b10")]
+fn validate_rejects_over_unregistered_layer() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Over {
+            terrains: Terrains::Any,
+            coverage: Coverage::Every,
+            layers: LayerMask::from(0b10),
+        }]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' never stands where its passive 'wading' asks: over 0b10 on layers 0b1"
+)]
+fn validate_rejects_passive_over_terrain_its_domain_never_takes() {
+    let (mut registry, dry, water) = dry_registry();
+    let wading = registry.register_entity_buff("wading", conceal_while(over_water(water)));
+    registry.register(dry_knight(dry).with_passives([wading]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' never stands where its skill 'soar' asks: over 0b11 on layers 0b10"
+)]
+fn validate_rejects_skill_over_layer_its_domain_never_stands_on() {
+    let (mut registry, _, _) = dry_registry();
+    let air = registry.register_layer("air", LayerLevel::At(5), &[]);
+    let lift = registry.register_entity_buff(
+        "lift",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::For(10),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    let soar = registry.register_skill(
+        "soar",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::ApplyBuff {
+                    buff: lift,
+                    on: Recipient::Caster,
+                },
+            },
+            requires: vec![Requirement::Over {
+                terrains: Terrains::Any,
+                coverage: Coverage::Every,
+                layers: air.into(),
+            }],
+        },
+    );
+    registry.register(utils::standing("knight", utils::GROUND_DOMAIN).with_skills([soar]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' never stands where its change into 'sentry' asks: over 0b10 on layers 0b1"
+)]
+fn validate_rejects_change_over_terrain_its_domain_never_takes() {
+    let (mut registry, dry, water) = dry_registry();
+    let mut sentry = dry_knight(dry);
+    sentry.name = "sentry".to_string();
+    registry.register(sentry);
+    registry.register(dry_knight(dry).with_morphs([MorphTransition::new(
+        "sentry",
+        MorphCourse::direct(MorphInterrupted::Reverts),
+        Quantity::Constant(20),
+        MorphPlacement::Reserve,
+        MorphCancel::Committed,
+        MorphReason::Change,
+        Vec::new(),
+        [over_water(water)],
+        [],
+    )]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' never stands where its passive 'wading' asks: over 0b10 on layers 0b1"
+)]
+fn validate_rejects_over_its_domain_never_takes_inside_all() {
+    let (mut registry, dry, water) = dry_registry();
+    let wading = registry.register_entity_buff(
+        "wading",
+        conceal_while(Requirement::All(vec![Requirement::Idle, over_water(water)])),
+    );
+    registry.register(dry_knight(dry).with_passives([wading]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' never stands where its effect of field 'creep' asks: over 0b10 on layers 0b1"
+)]
+fn validate_rejects_field_effect_over_terrain_its_domain_never_takes() {
+    let (mut registry, dry, water) = dry_registry();
+    let creep = registry.register_field(
+        "creep",
+        FieldDef::new(
+            Terrains::Any,
+            utils::GROUND.into(),
+            FieldDecay::Never,
+            None,
+            None,
+            Detection::Blind,
+        ),
+    );
+    registry.register(dry_knight(dry).with_field_effects([FieldEffect::new(
+        creep,
+        Affiliation::Anyone,
+        Coverage::Any,
+        vec![EntityEffect::Conceal],
+        Vec::new(),
+        Some(over_water(water)),
+    )]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' never stands where its buff 'wet' its skill 'splash' puts on it asks: over 0b10 on layers 0b1"
+)]
+fn validate_rejects_self_buff_over_terrain_its_domain_never_takes() {
+    let (mut registry, dry, water) = dry_registry();
+    let wet = registry.register_entity_buff("wet", conceal_while(over_water(water)));
+    let splash = registry.register_skill("splash", self_buff_skill(wet, Vec::new()));
+    registry.register(dry_knight(dry).with_skills([splash]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'rest' asks whether its caster is idle, which its own cast order decides"
+)]
+fn validate_rejects_idle_in_skill_requirements() {
+    let mut registry = utils::ground_registry();
+    let calm = registry.register_entity_buff(
+        "calm",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::For(10),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.register_skill(
+        "rest",
+        self_buff_skill(calm, vec![Requirement::All(vec![Requirement::IdleFor(40)])]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'rest' asks whether its caster is idle, which its own cast order decides"
+)]
+fn validate_rejects_bare_idle_in_skill_requirements() {
+    let mut registry = utils::ground_registry();
+    let calm = registry.register_entity_buff(
+        "calm",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::For(10),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.register_skill("rest", self_buff_skill(calm, vec![Requirement::Idle]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'rest' puts on its caster a buff held on its idleness, which its own cast order decides; a transient cast leaves it as it was"
+)]
+fn validate_rejects_ordered_self_buff_held_while_idle() {
+    let mut registry = utils::ground_registry();
+    let calm = registry.register_entity_buff("calm", conceal_while(Requirement::IdleFor(40)));
+    registry.register_skill("rest", self_buff_skill(calm, Vec::new()));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'rest' puts on its caster a buff held on its idleness, which its own cast order decides; a transient cast leaves it as it was"
+)]
+fn validate_rejects_ordered_self_buff_held_unless_idle() {
+    let mut registry = utils::ground_registry();
+    let astir = registry.register_entity_buff(
+        "astir",
+        conceal_while(Requirement::Unless(Box::new(Requirement::Idle))),
+    );
+    registry.register_skill("rest", self_buff_skill(astir, Vec::new()));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "skill 'rest' asks whether its caster is idle, which its own cast order decides"
+)]
+fn validate_rejects_unless_idle_in_skill_requirements() {
+    let mut registry = utils::ground_registry();
+    let calm = registry.register_entity_buff(
+        "calm",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::For(10),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    registry.register_skill(
+        "rest",
+        self_buff_skill(
+            calm,
+            vec![Requirement::Unless(Box::new(Requirement::IdleFor(40)))],
+        ),
+    );
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_transient_cast_asking_idle() {
+    let mut registry = utils::ground_registry();
+    let calm = registry.register_entity_buff("calm", conceal_while(Requirement::Idle));
+    let mut rest = self_buff_skill(calm, vec![Requirement::IdleFor(40)]);
+    let SkillCaster::Entity { casting, .. } = &mut rest.caster else {
+        unreachable!("self_buff_skill is cast by an entity");
+    };
+    *casting = Casting::Transient;
+    registry.register_skill("rest", rest);
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' asks whether it is idle to change into 'sentry', which its own change decides"
+)]
+fn validate_rejects_idle_in_change_requirements() {
+    let (mut registry, dry, _) = dry_registry();
+    let mut sentry = dry_knight(dry);
+    sentry.name = "sentry".to_string();
+    registry.register(sentry);
+    registry.register(dry_knight(dry).with_morphs([MorphTransition::new(
+        "sentry",
+        MorphCourse::direct(MorphInterrupted::Reverts),
+        Quantity::Constant(20),
+        MorphPlacement::Reserve,
+        MorphCancel::Committed,
+        MorphReason::Change,
+        Vec::new(),
+        [Requirement::Idle],
+        [],
+    )]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' asks whether it is idle to change into 'sentry', which its own change decides"
+)]
+fn validate_rejects_unless_idle_in_change_requirements() {
+    let (mut registry, dry, _) = dry_registry();
+    let mut sentry = dry_knight(dry);
+    sentry.name = "sentry".to_string();
+    registry.register(sentry);
+    registry.register(dry_knight(dry).with_morphs([MorphTransition::new(
+        "sentry",
+        MorphCourse::direct(MorphInterrupted::Reverts),
+        Quantity::Constant(20),
+        MorphPlacement::Reserve,
+        MorphCancel::Committed,
+        MorphReason::Change,
+        Vec::new(),
+        [Requirement::Unless(Box::new(Requirement::Idle))],
+        [],
+    )]));
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_target_buff_over_terrain_its_caster_never_takes() {
+    let (mut registry, dry, water) = dry_registry();
+    // The knight never stands at sea, but `wet` is for whom it casts it on.
+    let wet = registry.register_entity_buff("wet", conceal_while(over_water(water)));
+    let splash = registry.register_skill(
+        "splash",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::ApplyBuff {
+                    buff: wet,
+                    on: Recipient::Standing {
+                        whom: Whom {
+                            side: Affiliation::Anyone,
+                            kinds: Kinds::Any,
+                        },
+                        reach: Reach::Wherever,
+                    },
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register(dry_knight(dry).with_skills([splash]));
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_unreachable_over_under_any_or_unless() {
+    let (mut registry, dry, water) = dry_registry();
+    // Either branch may hold, and a negation holds where the leaf does not:
+    // neither asks the knight to stand at sea.
+    let wary = registry.register_entity_buff(
+        "wary",
+        conceal_while(Requirement::Any(vec![over_water(water), Requirement::Idle])),
+    );
+    let ashore = registry.register_entity_buff(
+        "ashore",
+        conceal_while(Requirement::Unless(Box::new(over_water(water)))),
+    );
+    registry.register(dry_knight(dry).with_passives([wary, ashore]));
+    registry.validate();
+}
+
+#[test]
+fn validate_accepts_over_registered_terrains_and_layers() {
+    let mut registry = utils::ground_registry();
+    let land = registry.terrain("land").expect("land registered");
+    registry.register(
+        utils::standing("knight", utils::GROUND_DOMAIN).with_requires([Requirement::Over {
+            terrains: Terrains::Only(land.into()),
+            coverage: Coverage::Any,
+            layers: utils::GROUND.into(),
+        }]),
+    );
+    registry.validate();
+}
+
+#[test]
+#[should_panic(
     expected = "entity buff 'swollen' holds while it judges 'max_health', which its own modifiers move"
 )]
 fn validate_rejects_while_buff_moving_stat_it_is_judged_on() {
@@ -4197,7 +4596,7 @@ fn validate_rejects_passive_and_field_effect_feeding_each_other() {
             .with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
-                FieldCoverage::Any,
+                Coverage::Any,
                 vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
                     modifiers: vec![EntityModifier {
                         stat: EntityStatId::MAX_HEALTH,
@@ -4535,7 +4934,7 @@ fn register_rejects_field_effect_on_pool_maximum_without_shift() {
             .with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
-                FieldCoverage::Every,
+                Coverage::Every,
                 Vec::new(),
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     EntityModifier {
@@ -4562,7 +4961,7 @@ fn register_rejects_field_effect_moving_stat_it_holds_while_judging() {
             .with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
-                FieldCoverage::Every,
+                Coverage::Every,
                 Vec::new(),
                 vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
                     modifiers: vec![EntityModifier {
@@ -5844,12 +6243,12 @@ fn register_accepts_field_sources_placement_and_effects() {
             .with_field_placement([FieldPlacement::Requires {
                 field: creep,
                 of: Affiliation::Anyone,
-                coverage: FieldCoverage::Every,
+                coverage: Coverage::Every,
             }])
             .with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
-                FieldCoverage::Any,
+                Coverage::Any,
                 vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
                     modifiers: vec![EntityModifier {
                         stat: EntityStatId::MAX_HEALTH,
@@ -6020,7 +6419,7 @@ fn register_rejects_effect_of_foreign_field() {
         utils::standing("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             creep,
             Affiliation::Own,
-            FieldCoverage::Every,
+            Coverage::Every,
             Vec::new(),
             vec![EntityEffect::Disable],
             None,
@@ -6081,7 +6480,7 @@ fn register_rejects_effect_of_field_off_its_layer() {
         utils::standing("crawler", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             tide,
             Affiliation::Own,
-            FieldCoverage::Every,
+            Coverage::Every,
             Vec::new(),
             vec![EntityEffect::Disable],
             None,
@@ -6108,7 +6507,7 @@ fn register_accepts_effect_of_field_spreading_on_its_layer_among_others() {
         utils::standing("wader", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             shoal,
             Affiliation::Own,
-            FieldCoverage::Every,
+            Coverage::Every,
             Vec::new(),
             vec![EntityEffect::Disable],
             None,
@@ -6263,7 +6662,7 @@ fn register_rejects_field_effect_with_no_side() {
         utils::standing("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             creep,
             Affiliation::Anyone,
-            FieldCoverage::Any,
+            Coverage::Any,
             Vec::new(),
             Vec::new(),
             None,
@@ -6280,7 +6679,7 @@ fn register_rejects_field_effect_with_no_modifiers() {
         utils::standing("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             creep,
             Affiliation::Anyone,
-            FieldCoverage::Any,
+            Coverage::Any,
             vec![EntityEffect::Modifiers(EntityModifiers::Stats(Vec::new()))],
             Vec::new(),
             None,
@@ -6301,7 +6700,7 @@ fn register_rejects_field_effect_on_stat_type_lacks() {
             .with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
-                FieldCoverage::Every,
+                Coverage::Every,
                 Vec::new(),
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     EntityModifier {
@@ -6325,7 +6724,7 @@ fn register_accepts_field_effect_on_rate_its_pool_carries() {
             .with_field_effects([FieldEffect::new(
                 creep,
                 Affiliation::Anyone,
-                FieldCoverage::Every,
+                Coverage::Every,
                 Vec::new(),
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     EntityModifier {
@@ -8370,7 +8769,7 @@ fn powered(power: FieldId) -> FieldPlacement {
     FieldPlacement::Requires {
         field: power,
         of: Affiliation::Own,
-        coverage: FieldCoverage::Every,
+        coverage: Coverage::Every,
     }
 }
 
@@ -8412,4 +8811,57 @@ fn register_summon(
             requires: Vec::new(),
         },
     );
+}
+
+/// [`utils::ground_registry`] with a `water` terrain and a `dry` domain on the
+/// ground layer over land alone.
+fn dry_registry() -> (ContentRegistry, DomainId, TerrainId) {
+    let mut registry = utils::ground_registry();
+    let land = registry.terrain("land").expect("land registered");
+    let water = registry.register_terrain("water");
+    let dry = registry.register_domain(
+        "dry",
+        DomainDef::new(utils::GROUND, Terrains::Only(land.into()), None),
+    );
+    (registry, dry, water)
+}
+
+/// A one-cell solid `knight` in the `dry` domain, on the ground layer.
+fn dry_knight(dry: DomainId) -> EntityTypeDef {
+    EntityTypeDef::new("knight").with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+}
+
+/// Standing on the ground layer with every cell on `water`.
+fn over_water(water: TerrainId) -> Requirement {
+    Requirement::Over {
+        terrains: Terrains::Only(water.into()),
+        coverage: Coverage::Every,
+        layers: utils::GROUND.into(),
+    }
+}
+
+/// A buff concealing its bearer while `requirement` holds.
+fn conceal_while(requirement: Requirement) -> EntityBuffDef {
+    EntityBuffDef {
+        effects: vec![EntityEffect::Conceal],
+        lasting: Lasting::While(requirement),
+        stack_rule: StackRule::Ignore,
+        interrupted_by: Vec::new(),
+    }
+}
+
+/// A free, instant skill putting `buff` on its caster, asking `requires`.
+fn self_buff_skill(buff: EntityBuffId, requires: Vec<Requirement>) -> SkillDef {
+    SkillDef {
+        cooldown: 1,
+        caster: SkillCaster::Entity {
+            costs: Vec::new(),
+            casting: Casting::Instant,
+            effect: EntityCastEffect::ApplyBuff {
+                buff,
+                on: Recipient::Caster,
+            },
+        },
+        requires,
+    }
 }

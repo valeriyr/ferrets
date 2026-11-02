@@ -3,9 +3,10 @@
 //!
 //! An entity's cast is an order like any other — queued, canceled and
 //! replaced like a walk — which walks the caster into the skill's reach first
-//! when it declares one, and lands where it stands when it does not. A
-//! player's cast has no caster to send anywhere, so it happens where the
-//! command arrives.
+//! when it declares one, and lands where it stands when it does not; a
+//! transient cast is no order, and lands as the command arrives, beside
+//! whatever the caster is doing. A player's cast has no caster to send
+//! anywhere, so it happens where the command arrives.
 //!
 //! The order half is called by [`super::orders`] as part of the shared order
 //! lifecycle.
@@ -68,28 +69,13 @@ use crate::{
 /// Whether `entity` may start this Cast: it operates, its type declares the
 /// skill, and the requirements its owner must meet are met.
 ///
-/// Whether the aim is still there and whether the cost can be paid are
-/// settled once casting starts, a walk later — as they are for an attack. The
-/// cooldown is asked at the order's issue instead, so a skill pressed early
-/// costs the caster nothing it was already doing.
+/// The requirements are judged again once casting starts, a walk later, and
+/// as the cast lands when it pays then; whether the aim is still there and
+/// whether the cost can be paid are settled once casting starts. The cooldown
+/// is judged as the cast is ordered (see [`judge_issue`]).
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let (skill, _) = order.cast_params().expect("Cast order must have a skill");
-    orders::requires_operating(world, entity)?;
-    if !entity_def::of(world, entity).skills.contains(&skill) {
-        return Err(Refusal::Incapable);
-    }
-    let def = world
-        .resource::<ContentRegistry>()
-        .skill_def(skill)
-        .expect("a declared skill id comes from the registry");
-    let owner = entity_def::owner(world, entity);
-    match owner {
-        Some(player) if requirements::met(world, player, Some(entity), &def.requires) => Ok(()),
-        Some(_) => Err(Refusal::Incapable),
-        // Nobody's entity answers to nobody's research, so a cast it was
-        // somehow given is one it cannot start.
-        None => Err(Refusal::Incapable),
-    }
+    startable(world, entity, skill)
 }
 
 /// Called once when a Cast order becomes the front `New` entry.
@@ -147,7 +133,8 @@ pub fn survives_soft_cancel() -> bool {
 /// the effect lands on the tick its point names, and the caster stands through
 /// the rest of its period before the order finishes. Until it lands, a tick
 /// its aim cannot be held — gone, no longer seen, or out of reach once casting
-/// has started — cuts the cast short; a caster that stops operating has its
+/// has started, or, until casting starts, an aim the buff it applies would not
+/// hold on — cuts the cast short; a caster that stops operating has its
 /// cast canceled by the order loop before this runs.
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let (skill, target) = order.cast_params().expect("Cast order must have a skill");
@@ -168,9 +155,14 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     match state.stage {
         CastStage::Working => {
             let started = state.phase > 0;
-            let Ok(aim) = aim(world, player, entity, skill, target) else {
+            let Ok(aim) = resolve(world, player, entity, skill, target) else {
                 return cut_short(world, entity, skill, state.paid);
             };
+            // Whether the buff would hold is judged until the cast begins;
+            // once begun, a cast paid at its start is not judged again.
+            if !started && holds(world, skill, aim).is_err() {
+                return cut_short(world, entity, skill, state.paid);
+            }
             // Closing on the aim is the work before casting starts. A skill
             // that declares no reach lands from wherever the caster stands, so
             // there is nothing to close on and nothing to turn toward.
@@ -286,13 +278,112 @@ pub fn by_player(
     player_skills::cast(world, player, skill, cooldown);
 }
 
-/// Whether the caster has this skill ready and is in a state to cast at all.
-pub(super) fn ready(world: &World, caster: Entity, skill: SkillId) -> bool {
-    let has_skill = world
-        .entity(caster)
-        .get::<SkillsComponent>()
-        .is_some_and(|skills| skills.ready(skill));
-    has_skill && orders::requires_operating(world, caster).is_ok()
+/// Judges `caster`'s cast of `skill` for `player` as it is ordered, before
+/// anything the caster was doing is canceled: the skill's requirements, the
+/// caster able to start it, a summon of a bound tunnel end, the cooldown, and
+/// the aim where it is whole already — the caster itself, or the picked
+/// target of a transient cast or of a caster that cannot walk, which must lie
+/// within its reach from where the caster stands. Any other aim is judged as
+/// the cast's order runs.
+///
+/// Panics when `skill` is not cast by an entity.
+pub fn judge_issue(
+    world: &World,
+    player: PlayerId,
+    caster: Entity,
+    skill: SkillId,
+    aiming: Aiming,
+) -> Result<(), CastRefusal> {
+    let registry = world.resource::<ContentRegistry>();
+    let def = registry
+        .skill_def(skill)
+        .expect("a skill id comes from the registry");
+    let (casting, effect) = match &def.caster {
+        SkillCaster::Entity {
+            casting, effect, ..
+        } => (casting, effect),
+        SkillCaster::Player { .. } => panic!("judge_issue is asked of a skill an entity casts"),
+    };
+    if !requirements::met(world, player, Some(caster), &def.requires) {
+        return Err(CastRefusal::Unmet);
+    }
+    startable(world, caster, skill).map_err(CastRefusal::Caster)?;
+    match effect {
+        EntityCastEffect::Summon { entity_type, .. } => {
+            if tunnels::refuses_raising(world, caster, registry.def(*entity_type)) {
+                return Err(CastRefusal::Bound);
+            }
+        }
+        EntityCastEffect::ApplyBuff { .. }
+        | EntityCastEffect::RemoveBuff { .. }
+        | EntityCastEffect::Damage { .. }
+        | EntityCastEffect::Heal { .. }
+        | EntityCastEffect::Field { .. }
+        | EntityCastEffect::Watch { .. }
+        | EntityCastEffect::Relocate { .. } => {}
+    }
+    if !ready(world, caster, skill) {
+        return Err(CastRefusal::CoolingDown);
+    }
+    let target = match effect.target() {
+        EntityCastTarget::Caster => None,
+        EntityCastTarget::Position { .. }
+        | EntityCastTarget::Standing { .. }
+        | EntityCastTarget::Fallen { .. } => match (casting, aiming) {
+            (Casting::Transient, Aiming::Picked(target)) => target,
+            // A caster that cannot walk casts from where it stands, as a
+            // transient cast does.
+            (Casting::Instant | Casting::Delayed { .. }, Aiming::Picked(target)) => {
+                match entity_def::of(world, caster).can_move() {
+                    true => return Ok(()),
+                    false => target,
+                }
+            }
+            (Casting::Transient | Casting::Instant | Casting::Delayed { .. }, Aiming::Unpicked) => {
+                return Ok(());
+            }
+        },
+    };
+    let aim = aim(world, player, caster, skill, target).map_err(CastRefusal::Aim)?;
+    match reaches_aim(world, caster, skill, aim) {
+        true => Ok(()),
+        false => Err(CastRefusal::OutOfReach),
+    }
+}
+
+/// Lands `caster`'s transient cast of `skill` at `target` here and now,
+/// without an order: judged, paid and carried out as an instant cast lands.
+///
+/// Panics when `skill` is not cast transient by an entity, or its aim was not
+/// judged first (see [`judge_issue`]).
+pub(super) fn transient(
+    world: &mut World,
+    player: PlayerId,
+    caster: Entity,
+    skill: SkillId,
+    target: Option<SkillTarget>,
+) -> CastLanding {
+    let def = world
+        .resource::<ContentRegistry>()
+        .skill_def(skill)
+        .expect("a skill id comes from the registry")
+        .clone();
+    match &def.caster {
+        SkillCaster::Entity {
+            casting: Casting::Transient,
+            ..
+        } => {}
+        SkillCaster::Entity {
+            casting: Casting::Instant | Casting::Delayed { .. },
+            ..
+        }
+        | SkillCaster::Player { .. } => {
+            panic!("transient is asked of a skill an entity casts transient")
+        }
+    }
+    let aim = aim(world, player, caster, skill, target)
+        .expect("a transient cast's aim is judged before it lands");
+    land(world, player, caster, skill, &def, aim, Paid::Nothing)
 }
 
 /// Why a cast cannot take what it was aimed at.
@@ -312,14 +403,44 @@ pub enum AimRefusal {
     /// The entity cannot take what the cast does to it: a buff modifying a
     /// stat it lacks, or a heal without a health pool.
     Uncarried,
+    /// The entity does not meet the requirement the applied buff is held
+    /// `While`.
+    Unheld,
     /// The cell is where the cast would set bodies down, and the caster's side
     /// does not see it as the cast's landing asks.
     LandingUnseen,
 }
 
+/// Why a cast is refused as it is ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastRefusal {
+    /// The skill's requirements are unmet.
+    Unmet,
+    /// The caster cannot start the cast: the order gate's refusal.
+    Caster(Refusal),
+    /// It summons an end of the caster's tunnel, which has its other end
+    /// already.
+    Bound,
+    /// The skill is cooling down.
+    CoolingDown,
+    /// Its aim refuses it.
+    Aim(AimRefusal),
+    /// It is cast from where its caster stands, and its aim lies out of reach.
+    OutOfReach,
+}
+
+/// How much of a cast's aim is chosen when its order is judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aiming {
+    /// None yet: the player has still to pick a target.
+    Unpicked,
+    /// Picked: this target, or none for a cast on its caster.
+    Picked(Option<SkillTarget>),
+}
+
 /// Resolves what `caster`'s cast of `skill` acts on when aimed at `target`, or
-/// why it cannot take it — an entity that cannot carry the buff the cast
-/// applies included.
+/// why it cannot take it — an entity that cannot carry or hold the buff the
+/// cast applies included.
 ///
 /// Fog applies to every named aim: what a player cannot see, it cannot name.
 /// Panics when `skill` is not cast by an entity.
@@ -330,83 +451,17 @@ pub fn aim(
     skill: SkillId,
     target: Option<SkillTarget>,
 ) -> Result<CastAim, AimRefusal> {
-    let def = world
-        .resource::<ContentRegistry>()
-        .skill_def(skill)
-        .expect("a skill id comes from the registry");
-    let SkillCaster::Entity { effect, .. } = &def.caster else {
-        panic!("aim is asked of a skill an entity casts");
-    };
-    match effect.target() {
-        EntityCastTarget::Caster => {
-            takes(world, caster, effect)?;
-            Ok(CastAim::Entity(caster))
-        }
-        EntityCastTarget::Position { .. } => {
-            let Some(SkillTarget::Position(position)) = target else {
-                return Err(AimRefusal::Unaimed);
-            };
-            let cell = CellPos::from(position);
-            if !world.resource::<Map>().contains(cell) {
-                return Err(AimRefusal::OffMap);
-            }
-            match lands_at_aim(effect) {
-                Some(landing)
-                    if !landing::sees(
-                        world,
-                        player,
-                        landing,
-                        CellRect::new(cell, CellSize::ONE),
-                    ) =>
-                {
-                    Err(AimRefusal::LandingUnseen)
-                }
-                Some(_) | None => Ok(CastAim::Cell(cell)),
-            }
-        }
-        EntityCastTarget::Fallen { kinds, .. } => {
-            let Some(SkillTarget::Entity(id)) = target else {
-                return Err(AimRefusal::Unaimed);
-            };
-            // Anyone's body serves: what fell there stopped belonging to
-            // anybody when it fell.
-            let remains =
-                visibility::remains_interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
-            if !names(world, remains, kinds) {
-                return Err(AimRefusal::WrongKind);
-            }
-            Ok(CastAim::Remains(remains))
-        }
-        EntityCastTarget::Standing {
-            whom: Whom { side, kinds },
-            ..
-        } => {
-            let Some(SkillTarget::Entity(id)) = target else {
-                return Err(AimRefusal::Unaimed);
-            };
-            let target =
-                visibility::interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
-            let session = world.resource::<GameSession>();
-            let caster_owner = entity_def::owner(world, caster);
-            let target_owner = entity_def::owner(world, target);
-            if !owner::admits(session, *side, caster_owner, target_owner) {
-                return Err(AimRefusal::WrongSide);
-            }
-            if !names(world, target, kinds) {
-                return Err(AimRefusal::WrongKind);
-            }
-            takes(world, target, effect)?;
-            Ok(CastAim::Entity(target))
-        }
-    }
+    let aim = resolve(world, player, caster, skill, target)?;
+    holds(world, skill, aim)?;
+    Ok(aim)
 }
 
 /// Whether `caster` reaches `aim` with `skill` from where it can get to: any
 /// aim, for a cast declaring no reach or a caster that walks into it; for one
-/// that cannot walk, an aim within the reach of every cell it stands on, as
-/// the cast order measures it.
+/// that cannot walk, or a transient cast, which never walks, an aim within
+/// the reach of every cell it stands on, as the cast order measures it.
 ///
-/// Panics when `skill` is not a registered skill.
+/// Panics when `skill` is not cast by an entity.
 pub fn reaches_aim(world: &World, caster: Entity, skill: SkillId, aim: CastAim) -> bool {
     let def = world
         .resource::<ContentRegistry>()
@@ -415,10 +470,17 @@ pub fn reaches_aim(world: &World, caster: Entity, skill: SkillId, aim: CastAim) 
     let Some(range) = reach_of(world, caster, def) else {
         return true;
     };
-    if entity_def::of(world, caster).can_move() {
-        return true;
+    let walks = match &def.caster {
+        SkillCaster::Entity { casting, .. } => match casting {
+            Casting::Transient => false,
+            Casting::Instant | Casting::Delayed { .. } => entity_def::of(world, caster).can_move(),
+        },
+        SkillCaster::Player { .. } => panic!("reaches_aim is asked of a skill an entity casts"),
+    };
+    match walks {
+        true => true,
+        false => reach::in_reach(world, caster, aimed_standing_rect(world, aim), range),
     }
-    reach::in_reach(world, caster, aimed_standing_rect(world, aim), range)
 }
 
 /// Where a resolved entity cast lands.
@@ -453,18 +515,20 @@ enum CastPlan {
 enum CastStart {
     /// It started, having paid as this says.
     Started(Paid),
-    /// It was refused: nothing it would do at its aim, or a cost it could not
-    /// pay. Nothing was paid, and its order ends.
+    /// It was refused: requirements its caster no longer meets, nothing it
+    /// would do at its aim, or a cost it could not pay. Nothing was paid, and
+    /// its order ends.
     Refused,
 }
 
 /// What came of a cast at its point.
-enum CastLanding {
+pub(super) enum CastLanding {
     /// It landed: judged, paid and carried out.
     Landed,
-    /// It was refused: no ground for what it would set down, nothing to move,
-    /// or a cost it could not pay. What it paid at its start was given back as
-    /// its terms say.
+    /// It was refused: for a cast that had paid nothing, requirements its
+    /// caster no longer meets or a buff its aim would not hold; no ground for
+    /// what it would set down, nothing to move, or a cost it could not pay.
+    /// What it paid at its start was given back as its terms say.
     Refused,
 }
 
@@ -479,6 +543,7 @@ enum CastLanding {
 fn casting(world: &World, caster: Entity, def: &SkillDef) -> (u32, u32) {
     match &def.caster {
         SkillCaster::Entity { casting, .. } => match casting {
+            Casting::Transient => unreachable!("a transient cast never becomes an order"),
             Casting::Instant => (1, 1),
             Casting::Delayed { point, period, .. } => (
                 entity_def::quantity_ticks(world, caster, *point),
@@ -509,9 +574,10 @@ fn reach_of(world: &World, caster: Entity, def: &SkillDef) -> Option<u32> {
     }
 }
 
-/// Starts the casting of `skill` at `aim`: a cast that pays at its start is
-/// judged — what it would do there, its cost — paid, and put on cooldown here,
-/// or refused; one that pays when it lands owes nothing yet.
+/// Starts the casting of `skill` at `aim`: refused when the caster no longer
+/// meets the skill's requirements; a cast that pays at its start is judged —
+/// what it would do there, its cost — paid, and put on cooldown here, or
+/// refused; one that pays when it lands owes nothing yet.
 fn start(
     world: &mut World,
     player: PlayerId,
@@ -528,7 +594,11 @@ fn start(
     else {
         unreachable!("a type declares entity casts only, so only one is cast from one")
     };
+    if !requirements::met(world, player, Some(caster), &def.requires) {
+        return CastStart::Refused;
+    }
     let refund = match casting {
+        Casting::Transient => unreachable!("a transient cast lands without starting"),
         Casting::Instant
         | Casting::Delayed {
             pays: PaymentPoint::AtLanding,
@@ -550,8 +620,10 @@ fn start(
 }
 
 /// Lands `skill` from `caster` at `aim`, here and now: a cast that has paid
-/// nothing yet is judged and paid as it lands; one that paid at its start is
-/// judged again, and a refused landing gives back what its terms say.
+/// nothing yet is refused when the caster no longer meets the skill's
+/// requirements or the buff it applies would not hold on its aim, and
+/// otherwise judged and paid as it lands; one that paid at its start has its
+/// effect judged again, and a refused landing gives back what its terms say.
 fn land(
     world: &mut World,
     player: PlayerId,
@@ -564,6 +636,16 @@ fn land(
     let SkillCaster::Entity { costs, effect, .. } = &def.caster else {
         unreachable!("a type declares entity casts only, so only one is cast from one")
     };
+    match paid {
+        Paid::Nothing => {
+            if !requirements::met(world, player, Some(caster), &def.requires)
+                || holds(world, skill, aim).is_err()
+            {
+                return CastLanding::Refused;
+            }
+        }
+        Paid::AtStart { .. } => {}
+    }
     let Some(plan) = judge(world, player, caster, effect, aim) else {
         give_back(world, caster, skill, paid);
         return CastLanding::Refused;
@@ -655,6 +737,85 @@ fn give_back(world: &mut World, caster: Entity, skill: SkillId, paid: Paid) {
     entity_skills::reset_cooldown(world, caster, skill);
 }
 
+/// What `caster`'s cast of `skill` acts on when aimed at `target`, or why it
+/// cannot take it, whether the buff it applies would hold there aside.
+fn resolve(
+    world: &World,
+    player: PlayerId,
+    caster: Entity,
+    skill: SkillId,
+    target: Option<SkillTarget>,
+) -> Result<CastAim, AimRefusal> {
+    let effect = world
+        .resource::<ContentRegistry>()
+        .skill_def(skill)
+        .expect("a skill id comes from the registry")
+        .entity_effect()
+        .expect("resolve is asked of a skill an entity casts");
+    match effect.target() {
+        EntityCastTarget::Caster => {
+            takes(world, caster, effect)?;
+            Ok(CastAim::Entity(caster))
+        }
+        EntityCastTarget::Position { .. } => {
+            let Some(SkillTarget::Position(position)) = target else {
+                return Err(AimRefusal::Unaimed);
+            };
+            let cell = CellPos::from(position);
+            if !world.resource::<Map>().contains(cell) {
+                return Err(AimRefusal::OffMap);
+            }
+            match lands_at_aim(effect) {
+                Some(landing)
+                    if !landing::sees(
+                        world,
+                        player,
+                        landing,
+                        CellRect::new(cell, CellSize::ONE),
+                    ) =>
+                {
+                    Err(AimRefusal::LandingUnseen)
+                }
+                Some(_) | None => Ok(CastAim::Cell(cell)),
+            }
+        }
+        EntityCastTarget::Fallen { kinds, .. } => {
+            let Some(SkillTarget::Entity(id)) = target else {
+                return Err(AimRefusal::Unaimed);
+            };
+            // Anyone's body serves: what fell there stopped belonging to
+            // anybody when it fell.
+            let remains =
+                visibility::remains_interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
+            if !names(world, remains, kinds) {
+                return Err(AimRefusal::WrongKind);
+            }
+            Ok(CastAim::Remains(remains))
+        }
+        EntityCastTarget::Standing {
+            whom: Whom { side, kinds },
+            ..
+        } => {
+            let Some(SkillTarget::Entity(id)) = target else {
+                return Err(AimRefusal::Unaimed);
+            };
+            let target =
+                visibility::interactable_to(world, player, id).ok_or(AimRefusal::Unseen)?;
+            let session = world.resource::<GameSession>();
+            let caster_owner = entity_def::owner(world, caster);
+            let target_owner = entity_def::owner(world, target);
+            if !owner::admits(session, *side, caster_owner, target_owner) {
+                return Err(AimRefusal::WrongSide);
+            }
+            if !names(world, target, kinds) {
+                return Err(AimRefusal::WrongKind);
+            }
+            takes(world, target, effect)?;
+            Ok(CastAim::Entity(target))
+        }
+    }
+}
+
 /// Whether `entity` can take what `effect` does to it: a buff it carries, a
 /// heal when it has health, or any other effect.
 fn takes(world: &World, entity: Entity, effect: &EntityCastEffect) -> Result<(), AimRefusal> {
@@ -679,6 +840,34 @@ fn takes(world: &World, entity: Entity, effect: &EntityCastEffect) -> Result<(),
         | EntityCastEffect::Watch { .. }
         | EntityCastEffect::Summon { .. }
         | EntityCastEffect::Relocate { .. } => Ok(()),
+    }
+}
+
+/// Whether the buff `skill` applies would hold on `aim`: a buff held `While`
+/// a requirement holds on a recipient that meets it, read for the recipient's
+/// owner. Any other effect holds.
+fn holds(world: &World, skill: SkillId, aim: CastAim) -> Result<(), AimRefusal> {
+    let registry = world.resource::<ContentRegistry>();
+    let Some(buff) = registry
+        .skill_def(skill)
+        .expect("a skill id comes from the registry")
+        .entity_effect()
+        .expect("holds is asked of a skill an entity casts")
+        .applied_buff()
+    else {
+        return Ok(());
+    };
+    let recipient = match aim {
+        CastAim::Entity(recipient) => recipient,
+        CastAim::Cell(_) | CastAim::Remains(_) => return Ok(()),
+    };
+    let Some(requirement) = registry.entity_buff_def(buff).lasts_while() else {
+        return Ok(());
+    };
+    let owner = entity_def::owner(world, recipient);
+    match requirements::met_by(world, owner, recipient, requirement) {
+        true => Ok(()),
+        false => Err(AimRefusal::Unheld),
     }
 }
 
@@ -1203,13 +1392,31 @@ fn perform(
             }
         }
         CastPlan::Relocate { moves } => {
-            // Every other body moved is given somewhere new to be, as by a
-            // new command. The caster carries on with what it queued behind
-            // its own cast, which starts from where the cast set it down.
-            for &(entity, _) in &moves {
-                if entity != caster {
-                    orders::drop_all(world, entity, CancelPolicy::Soft);
+            // Every body moved is given somewhere new to be, as by a new
+            // command — but the caster of a cast made through an order, which
+            // is inside its own cast and carries on with what it queued
+            // behind it, from where the cast set it down.
+            let moved = moves.iter().map(|&(entity, _)| entity);
+            let dropped: Vec<Entity> = match world
+                .resource::<ContentRegistry>()
+                .skill_def(skill)
+                .expect("a skill id comes from the registry")
+                .caster
+            {
+                SkillCaster::Entity {
+                    casting: Casting::Transient,
+                    ..
+                } => moved.collect(),
+                SkillCaster::Entity {
+                    casting: Casting::Instant | Casting::Delayed { .. },
+                    ..
+                } => moved.filter(|&entity| entity != caster).collect(),
+                SkillCaster::Player { .. } => {
+                    unreachable!("a type declares entity casts only, so only one is cast from one")
                 }
+            };
+            for entity in dropped {
+                orders::drop_all(world, entity, CancelPolicy::Soft);
             }
             spawn::relocate(world, &moves);
         }
@@ -1321,4 +1528,33 @@ fn aimed_footprint(world: &World, aim: CastAim) -> (FixedUVec2, CellSize) {
         CastAim::Entity(target) | CastAim::Remains(target) => entity_def::footprint(world, target),
         CastAim::Cell(cell) => (FixedUVec2::from(cell), CellSize::ONE),
     }
+}
+
+/// Whether `entity` may start casting `skill`: it operates, its type declares
+/// the skill, and the requirements its owner must meet are met.
+fn startable(world: &World, entity: Entity, skill: SkillId) -> Result<(), Refusal> {
+    orders::requires_operating(world, entity)?;
+    if !entity_def::of(world, entity).skills.contains(&skill) {
+        return Err(Refusal::Incapable);
+    }
+    let def = world
+        .resource::<ContentRegistry>()
+        .skill_def(skill)
+        .expect("a declared skill id comes from the registry");
+    let owner = entity_def::owner(world, entity);
+    match owner {
+        Some(player) if requirements::met(world, player, Some(entity), &def.requires) => Ok(()),
+        Some(_) => Err(Refusal::Incapable),
+        // Nobody's entity answers to nobody's research, so a cast it was
+        // somehow given is one it cannot start.
+        None => Err(Refusal::Incapable),
+    }
+}
+
+/// Whether `caster`'s `skill` has cooled down.
+fn ready(world: &World, caster: Entity, skill: SkillId) -> bool {
+    world
+        .entity(caster)
+        .get::<SkillsComponent>()
+        .is_some_and(|skills| skills.ready(skill))
 }

@@ -6,6 +6,7 @@ mod utils;
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 use ferrets_bevy_plugin::PendingInput;
 use ferrets_content::{
+    coverage::Coverage,
     entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
     entity_modifiers::EntityModifiers,
@@ -22,8 +23,10 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
+    skills::{Casting, EntityCastEffect, Recipient, SkillCaster, SkillDef},
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
+    terrains::Terrains,
 };
 use ferrets_demo::{
     hud::{self, SelectionText, SupplyText},
@@ -32,7 +35,9 @@ use ferrets_demo::{
 };
 use ferrets_geometry::cell_size::CellSize;
 use ferrets_math::FixedU64;
+use ferrets_nav_grid::{layer_mask::LayerMask, terrain_mask::TerrainMask};
 use ferrets_simulation::{
+    beside::Lean,
     command::{PlayerCommand, SelectMode, SkillTarget},
     components::{
         entity_skills::SkillsComponent,
@@ -74,8 +79,73 @@ fn panel_names_own_pick_and_reports_its_health() {
     let shown = panel_text(&mut app);
     assert!(shown.contains("Grunt"), "the pick is named: {shown:?}");
     assert!(
-        shown.contains("HP "),
+        shown.contains("Health: "),
         "a pick in sight reports its health: {shown:?}"
+    );
+}
+
+#[test]
+fn panel_names_ground_under_pick() {
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    spawn_panel(&mut app);
+    let (_, grunt) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a grunt");
+    utils::select(&mut app, grunt, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let shown = panel_text(&mut app);
+    assert_eq!(
+        panel_field(&shown, "Terrain"),
+        Some("Terrain: Land"),
+        "{shown:?}"
+    );
+
+    // The sea's top rows are deep water.
+    let (_, naga) = utils::create_entity(app.world_mut(), "naga", utils::at_cell(5, 5), Some(0))
+        .expect("the demo content defines a naga");
+    utils::select(&mut app, naga, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let shown = panel_text(&mut app);
+    assert_eq!(
+        panel_field(&shown, "Terrain"),
+        Some("Terrain: Deep Water"),
+        "{shown:?}"
+    );
+
+    // A 2×2 stilt walker over row 11, the sea's last shallow row, and row
+    // 12, the land below it: both terrains, in name order.
+    let (_, walker) = utils::create_entity(
+        app.world_mut(),
+        "stilt_walker",
+        utils::at_cell(5, 11),
+        Some(0),
+    )
+    .expect("the demo content defines a stilt walker");
+    utils::select(&mut app, walker, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let shown = panel_text(&mut app);
+    assert_eq!(
+        panel_field(&shown, "Terrain"),
+        Some("Terrain: Land, Shallow Water"),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn panel_lines_label_each_field() {
+    let mut app = utils::demo_map_app(MovementModel::Cell);
+    spawn_panel(&mut app);
+    let (_, grunt) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a grunt");
+    utils::select(&mut app, grunt, SelectMode::Replace);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    // The name, then its vitals, then where it stands and how: each field
+    // labeled, fields on a line set apart by a bar.
+    assert_eq!(
+        panel_text(&mut app),
+        "Grunt #1\nHealth: 60/60 | Attack: 10 | Speed: 0.30\nTerrain: Land | Stance: Defend"
     );
 }
 
@@ -93,7 +163,7 @@ fn panel_reports_energy_against_its_maximum() {
     // regeneration still read 15.
     let shown = panel_text(&mut app);
     assert!(
-        shown.contains("energy 15/60"),
+        shown.contains("Energy: 15/60"),
         "the energy reads against its maximum: {shown:?}"
     );
 }
@@ -126,13 +196,13 @@ fn panel_names_rising_entity_by_what_brought_it_in() {
                 payer: 0,
                 ready_at: 0,
             },
-            "warping in",
+            "Warping in",
         ),
         (
             RiseOrigin::Summoned {
                 skill: raise_burrow,
             },
-            "summoning",
+            "Summoning",
         ),
     ] {
         app.world_mut()
@@ -156,8 +226,9 @@ fn panel_names_rising_entity_and_buff_outage_as_simulation_judges_them() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     let shown = panel_text(&mut app);
-    assert!(
-        shown.contains("under construction"),
+    assert_eq!(
+        panel_field(&shown, "Status"),
+        Some("Status: Under construction"),
         "a rising entity reads under construction: {shown:?}"
     );
 
@@ -179,9 +250,15 @@ fn panel_names_rising_entity_and_buff_outage_as_simulation_judges_them() {
         Bearing::Borne
     );
     let shown = panel_text(&mut app);
-    assert!(
-        shown.contains("disabled"),
+    assert_eq!(
+        panel_field(&shown, "Status"),
+        Some("Status: Disabled"),
         "a buff outage reads disabled: {shown:?}"
+    );
+    assert_eq!(
+        panel_field(&shown, "Buffs"),
+        Some("Buffs: Stunned"),
+        "{shown:?}"
     );
 }
 
@@ -245,7 +322,7 @@ fn panel_names_pick_simulation_holds_disabled() {
 
     let shown = panel_text(&mut app);
     assert!(
-        shown.contains("disabled"),
+        shown.contains("Disabled"),
         "an unpowered gateway reads disabled: {shown:?}"
     );
 }
@@ -269,7 +346,7 @@ fn panel_withholds_live_values_once_rival_pick_leaves_sight() {
     app.world_mut()
         .entity_mut(entity)
         .insert(Sighted(Sighting::Seen));
-    assert!(panel_text(&mut app).contains("HP "));
+    assert!(panel_text(&mut app).contains("Health: "));
 
     app.world_mut()
         .entity_mut(entity)
@@ -277,15 +354,15 @@ fn panel_withholds_live_values_once_rival_pick_leaves_sight() {
 
     let shown = panel_text(&mut app);
     assert!(
-        shown.contains("out of sight"),
+        shown.contains("Out of sight"),
         "the panel says the side has lost it: {shown:?}"
     );
     assert!(
-        !shown.contains("HP "),
+        !shown.contains("Health: "),
         "health is not read off an entity the side cannot see: {shown:?}"
     );
     assert!(
-        !shown.contains("speed"),
+        !shown.contains("Speed"),
         "nor is anything else live: {shown:?}"
     );
 }
@@ -310,8 +387,8 @@ fn glimpsed_rival_pick_withholds_live_values_too() {
         .insert(Sighted(Sighting::Glimpsed));
 
     let shown = panel_text(&mut app);
-    assert!(shown.contains("out of sight"), "{shown:?}");
-    assert!(!shown.contains("HP "), "{shown:?}");
+    assert!(shown.contains("Out of sight"), "{shown:?}");
+    assert!(!shown.contains("Health: "), "{shown:?}");
 }
 
 #[test]
@@ -333,11 +410,11 @@ fn panel_reports_own_pick_that_carries_no_sighting() {
 
     let shown = panel_text(&mut app);
     assert!(
-        shown.contains("HP "),
+        shown.contains("Health: "),
         "a side reads its own wherever they are: {shown:?}"
     );
     assert!(
-        !shown.contains("out of sight"),
+        !shown.contains("Out of sight"),
         "and is never told it has lost them: {shown:?}"
     );
 }
@@ -351,14 +428,14 @@ fn panel_keeps_own_pick_that_goes_off_map() {
             .expect("the demo content defines a grunt");
     utils::select(&mut app, grunt, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert!(panel_text(&mut app).contains("HP "));
+    assert!(panel_text(&mut app).contains("Health: "));
 
     // Into a mine or aboard a wagon, the pick stays a pick: its side reads it
     // where it is.
     spawn::hide_entity(app.world_mut(), entity, Inside::Nothing);
     let shown = panel_text(&mut app);
     assert!(
-        shown.contains("HP "),
+        shown.contains("Health: "),
         "a side reads its own off the map too: {shown:?}"
     );
 }
@@ -651,7 +728,7 @@ fn hovered_card_button_names_its_price_or_what_it_lacks() {
 
     // A factory with no tech lab docked and no siege tech: the tank's button
     // is grayed and says what either branch would take; the wraith's is live
-    // and says what it costs — 150 gold, 100 wood and 90 ticks, 4.5 s.
+    // and says what it costs — 150 gold, 100 wood and 90 ticks, 4.5 Seconds.
     let (_, factory) =
         utils::create_entity(app.world_mut(), "factory", utils::at_cell(20, 20), Some(0))
             .expect("the demo content defines a factory");
@@ -669,7 +746,7 @@ fn hovered_card_button_names_its_price_or_what_it_lacks() {
     assert_eq!(
         hover_each::<hud::TrainButton>(&mut app),
         vec![
-            "150 gold, 100 wood, 4.5 s".to_string(),
+            "150 Gold, 100 Wood, 4.5 Seconds".to_string(),
             "Needs (a Tech Lab docked or Siege Tech)".to_string(),
         ]
     );
@@ -696,9 +773,9 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
         .expect("the command card system runs");
     hover_only::<hud::SkillButton>(&mut app);
 
-    // Battle focus: 30 energy, and 80 ticks of cooldown, 4.0 s.
+    // Battle focus: 30 energy, and 80 ticks of cooldown, 4 Seconds.
     recolor_card(&mut app);
-    assert_eq!(hint_text(&mut app), "30 energy, 4.0 s cooldown");
+    assert_eq!(hint_text(&mut app), "30 Energy, 4 Seconds Cooldown");
 
     let battle_focus = app
         .world()
@@ -743,6 +820,13 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
     );
     recolor_card(&mut app);
     assert_eq!(hint_text(&mut app), "Switched off");
+    // Switched off while cooling down: the caster's state is named first.
+    app.world_mut()
+        .get_mut::<SkillsComponent>(archer)
+        .unwrap()
+        .start_cooldown(battle_focus, 80);
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "Switched off");
 
     // Led by something that knows no battle focus, or by nothing at all.
     let (_, grunt_id) =
@@ -754,6 +838,24 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
     app.world_mut().insert_resource(Leading(None));
     recolor_card(&mut app);
     assert_eq!(hint_text(&mut app), "Nothing selected can cast it");
+}
+
+#[test]
+fn hovered_skill_names_ground_it_needs() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let (_, naga_id) =
+        utils::create_entity(app.world_mut(), "naga", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a naga");
+    app.world_mut().insert_resource(Leading(Some(naga_id)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::SkillButton>(&mut app);
+
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "Needs standing on Deep Water (Ground)");
 }
 
 #[test]
@@ -798,6 +900,108 @@ fn armed_skill_names_why_it_refuses_hovered_target() {
 }
 
 #[test]
+fn hovered_aim_past_transient_reach_reads_out_of_reach() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    let (_, huntress_id) =
+        utils::create_entity(app.world_mut(), "huntress", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines a huntress");
+    // A second huntress sees round the far cell, so the landing is sighted.
+    utils::create_entity(app.world_mut(), "huntress", utils::at_cell(32, 20), Some(0))
+        .expect("the demo content defines a huntress");
+    utils::run_ticks(&mut app, 1);
+    let dash = app
+        .world()
+        .resource::<ContentRegistry>()
+        .skill("dash")
+        .expect("the demo content defines dash");
+    app.world_mut().insert_resource(Leading(Some(huntress_id)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    app.world_mut()
+        .insert_resource(InputMode::Targeting(TargetedOrder::Skill(dash)));
+
+    // Ten cells off, past its four: cast transient, it never walks there.
+    app.world_mut()
+        .insert_resource(AimHover(Some(SkillTarget::Position(utils::at_cell(
+            30, 20,
+        )))));
+    app.world_mut()
+        .run_system_once(input::judge_aim)
+        .expect("the aim judge runs");
+    assert_eq!(
+        *app.world().resource::<AimVerdict>(),
+        AimVerdict::OutOfReach
+    );
+    recolor_card(&mut app);
+    assert_eq!(hint_text(&mut app), "Out of reach");
+
+    // Three cells off, within it.
+    app.world_mut()
+        .insert_resource(AimHover(Some(SkillTarget::Position(utils::at_cell(
+            23, 20,
+        )))));
+    app.world_mut()
+        .run_system_once(input::judge_aim)
+        .expect("the aim judge runs");
+    assert_eq!(*app.world().resource::<AimVerdict>(), AimVerdict::Takes);
+}
+
+#[test]
+fn armed_skill_stays_armed_while_its_leader_can_cast_it() {
+    let mut app = card_app();
+    let (archer, archer_id) =
+        utils::create_entity(app.world_mut(), "archer", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines an archer");
+    let (_, other_id) =
+        utils::create_entity(app.world_mut(), "archer", utils::at_cell(24, 20), Some(0))
+            .expect("the demo content defines an archer");
+    let (_, grunt_id) =
+        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(28, 20), Some(0))
+            .expect("the demo content defines a grunt");
+    let battle_focus = app
+        .world()
+        .resource::<ContentRegistry>()
+        .skill("battle_focus")
+        .expect("the demo content defines battle focus");
+    let armed = || InputMode::Targeting(TargetedOrder::Skill(battle_focus));
+    let is_armed = |app: &App| {
+        matches!(
+            *app.world().resource::<InputMode>(),
+            InputMode::Targeting(TargetedOrder::Skill(skill)) if skill == battle_focus
+        )
+    };
+    let disarm = |app: &mut App| {
+        app.world_mut()
+            .run_system_once(input::disarm_lost_caster)
+            .expect("the disarm system runs");
+    };
+    app.world_mut().insert_resource(armed());
+
+    // Led by an archer, then by another: both cast it, so it stays armed.
+    app.world_mut().insert_resource(Leading(Some(archer_id)));
+    disarm(&mut app);
+    assert!(is_armed(&app));
+    app.world_mut().insert_resource(Leading(Some(other_id)));
+    disarm(&mut app);
+    assert!(is_armed(&app));
+
+    // Led by a grunt, whose type carries no battle focus: disarmed.
+    app.world_mut().insert_resource(Leading(Some(grunt_id)));
+    disarm(&mut app);
+    assert!(!is_armed(&app));
+
+    // Armed again, its archer taken by player 1: disarmed.
+    app.world_mut().insert_resource(armed());
+    app.world_mut().insert_resource(Leading(Some(archer_id)));
+    spawn::change_owner(app.world_mut(), archer, 1, SimulationId(999), Lean::Nothing);
+    disarm(&mut app);
+    assert!(!is_armed(&app));
+}
+
+#[test]
 fn hovered_skill_names_health_it_costs() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
@@ -819,9 +1023,9 @@ fn hovered_skill_names_health_it_costs() {
         .expect("the command card system runs");
     hover_only::<hud::SkillButton>(&mut app);
 
-    // Blood rite: 10 gold and 8 health, and 160 ticks of cooldown, 8.0 s.
+    // Blood rite: 10 gold and 8 health, and 160 ticks of cooldown, 8 Seconds.
     recolor_card(&mut app);
-    assert_eq!(hint_text(&mut app), "10 gold, 8 health, 8.0 s cooldown");
+    assert_eq!(hint_text(&mut app), "10 Gold, 8 Health, 8 Seconds Cooldown");
 }
 
 #[test]
@@ -855,6 +1059,32 @@ fn cooldowns_leave_last_selections_skill_buttons_alone_until_card_rebuilds() {
 }
 
 #[test]
+fn captured_leading_entity_loses_its_skill_buttons() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    // One system kept across runs, so it rebuilds only on what changed.
+    let card = app.world_mut().register_system(hud::update_command_card);
+    let (archer, archer_id) =
+        utils::create_entity(app.world_mut(), "archer", utils::at_cell(20, 20), Some(0))
+            .expect("the demo content defines an archer");
+    app.world_mut().insert_resource(Leading(Some(archer_id)));
+    for _ in 0..2 {
+        app.world_mut()
+            .run_system(card)
+            .expect("the command card system runs");
+    }
+    assert_eq!(skill_button_labels(&mut app).len(), 1, "battle focus");
+
+    // Taken by player 1 while still leading the selection: its card is
+    // rebuilt as another side's, with no skills to offer.
+    spawn::change_owner(app.world_mut(), archer, 1, SimulationId(999), Lean::Nothing);
+    app.world_mut()
+        .run_system(card)
+        .expect("the command card system runs");
+    assert!(skill_button_labels(&mut app).is_empty());
+}
+
+#[test]
 fn hovered_player_skill_names_its_price_and_cooldown() {
     let mut app = card_app();
     app.world_mut().insert_resource(Leading(None));
@@ -866,9 +1096,9 @@ fn hovered_player_skill_names_its_price_and_cooldown() {
         .add(0, "gold", 50);
     hover_only::<hud::PlayerSkillButton>(&mut app);
 
-    // War drums: 50 gold, and 300 ticks of cooldown, 15.0 s.
+    // War drums: 50 gold, and 300 ticks of cooldown, 15 Seconds.
     recolor_card(&mut app);
-    assert_eq!(hint_text(&mut app), "50 gold, 15.0 s cooldown");
+    assert_eq!(hint_text(&mut app), "50 Gold, 15 Seconds Cooldown");
 }
 
 #[test]
@@ -887,17 +1117,17 @@ fn hovered_build_buttons_name_their_price_and_time() {
         .run_system_once(hud::update_command_card)
         .expect("the command card system runs");
 
-    // A tunnel is 100 gold and 50 wood in 80 ticks, 4.0 s; a warren 150 gold
-    // and 150 wood in 100, 5.0 s; a spawning pit 200 gold and 100 wood in 120,
-    // 6.0 s; a tumor 25 gold in 40, 2.0 s; a hatchery 400 gold in 200, 10.0 s.
+    // A tunnel is 100 gold and 50 wood in 80 ticks, 4 Seconds; a warren 150 gold
+    // and 150 wood in 100, 5 Seconds; a spawning pit 200 gold and 100 wood in 120,
+    // 6 Seconds; a tumor 25 gold in 40, 2 Seconds; a hatchery 400 gold in 200, 10 Seconds.
     assert_eq!(
         hover_each::<hud::BuildButton>(&mut app),
         vec![
-            "100 gold, 50 wood, 4.0 s".to_string(),
-            "150 gold, 150 wood, 5.0 s".to_string(),
-            "200 gold, 100 wood, 6.0 s".to_string(),
-            "25 gold, 2.0 s".to_string(),
-            "400 gold, 10.0 s".to_string(),
+            "100 Gold, 50 Wood, 4 Seconds".to_string(),
+            "150 Gold, 150 Wood, 5 Seconds".to_string(),
+            "200 Gold, 100 Wood, 6 Seconds".to_string(),
+            "25 Gold, 2 Seconds".to_string(),
+            "400 Gold, 10 Seconds".to_string(),
         ]
     );
 }
@@ -930,7 +1160,7 @@ fn hovered_morph_names_its_price() {
 
     // Into a guard tower: 80 gold and 20 wood, and 60 ticks at 20 a second.
     recolor_card(&mut app);
-    assert_eq!(hint_text(&mut app), "80 gold, 20 wood, 3.0 s");
+    assert_eq!(hint_text(&mut app), "80 Gold, 20 Wood, 3 Seconds");
 }
 
 #[test]
@@ -959,7 +1189,7 @@ fn build_button_asks_nothing_of_ground_before_site_is_placed() {
     recolor_card(&mut app);
 
     assert_ne!(card_color::<hud::BuildButton>(&mut app), hud::CARD_DISABLED);
-    assert_eq!(hint_text(&mut app), "100 gold, 50 wood, 4.0 s");
+    assert_eq!(hint_text(&mut app), "100 Gold, 50 Wood, 4 Seconds");
 }
 
 #[test]
@@ -1123,14 +1353,17 @@ fn warp_hint_names_leaders_refusal_only_while_no_gate_may_warp() {
     let sent = hover_each::<hud::WarpButton>(&mut app);
     // The zealot's and the stalker's, sorted; the stalker's 50 wood is more
     // than the player holds. The cooling leader's refusal for both; beside a
-    // ready gate the zealot's price, 100 gold and 60 ticks, 3.0 s, and the
+    // ready gate the zealot's price, 100 gold and 60 ticks, 3 Seconds, and the
     // leader's refusal for the stalker no gate may warp; alone again and
     // ready, the zealot's warp-in on its way and the stalker's price unmet.
     assert_eq!(
         (alone, beside, sent),
         (
             vec!["Cooling down".to_string(), "Cooling down".to_string()],
-            vec!["100 gold, 3.0 s".to_string(), "Cooling down".to_string()],
+            vec![
+                "100 Gold, 3 Seconds".to_string(),
+                "Cooling down".to_string()
+            ],
             vec![
                 "Not enough resources".to_string(),
                 "Warp-in on its way".to_string()
@@ -1178,6 +1411,54 @@ fn pressing_warp_gates_warp_button_arms_warp_placement() {
 }
 
 #[test]
+fn grayed_button_names_ground_and_layers_it_needs() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    register_diver(&mut app);
+    let (_, diver_id) =
+        utils::create_entity(app.world_mut(), "diver", utils::at_cell(20, 20), Some(0))
+            .expect("the fixture registers a diver");
+    app.world_mut().insert_resource(Leading(Some(diver_id)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::MorphButton>(&mut app);
+
+    // On land on the ground layer: touching either water on any layer is
+    // unmet, the terrains in name order and the layers left unsaid as they
+    // are all of them; not standing anywhere on the map on the ground layer
+    // is unmet too, its layer named.
+    recolor_card(&mut app);
+    assert_eq!(
+        hint_text(&mut app),
+        "Needs touching Deep Water or Shallow Water and not standing on the map (Ground)"
+    );
+}
+
+#[test]
+fn self_cast_its_buff_would_not_hold_on_grays_with_reason() {
+    let mut app = card_app();
+    app.world_mut().spawn((hud::CommandCard, Node::default()));
+    app.world_mut().spawn((hud::CardHint, Text::new("")));
+    register_diver(&mut app);
+    let (_, dipper_id) =
+        utils::create_entity(app.world_mut(), "dipper", utils::at_cell(20, 20), Some(0))
+            .expect("the fixture registers a dipper");
+    app.world_mut().insert_resource(Leading(Some(dipper_id)));
+    app.world_mut()
+        .run_system_once(hud::update_command_card)
+        .expect("the command card system runs");
+    hover_only::<hud::SkillButton>(&mut app);
+
+    // `dip` asks nothing, but on land the buff it puts on its caster would
+    // not hold: the button grays and says so.
+    recolor_card(&mut app);
+    assert_eq!(card_color::<hud::SkillButton>(&mut app), hud::CARD_DISABLED);
+    assert_eq!(hint_text(&mut app), "The buff would not hold there");
+}
+
+#[test]
 fn grayed_button_names_unmet_part_of_requirement_tree() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
@@ -1207,11 +1488,11 @@ fn grayed_button_names_unmet_part_of_requirement_tree() {
     // An `any` with no branch met names each branch; one with a branch met
     // (health at least a tenth) says nothing; an `all` names each unmet
     // branch and not the met one (sight at least 1). Under 0.34 of the
-    // health reads 34%; 40 ticks idle is 2.0 s, 200 unhurt 10.0 s.
+    // health reads 34%; 40 ticks idle is 2 seconds, 200 unhurt 10 seconds.
     recolor_card(&mut app);
     assert_eq!(
         hint_text(&mut app),
-        "Needs (a Spawning Pit or Frenzy Ritual) and health under 34% and energy at least 50 and Sight Range at least 99 and standing idle and 2.0 s idle and 10.0 s unhurt"
+        "Needs (a Spawning Pit or Frenzy Ritual) and health under 34% and energy at least 50 and Sight Range at least 99 and standing idle and 2 seconds idle and 10 seconds unhurt"
     );
 
     // Led by nothing, the button names the change it cannot start.
@@ -1240,13 +1521,13 @@ fn hovered_researches_name_their_price_and_time() {
         .run_system_once(hud::update_command_card)
         .expect("the command card system runs");
 
-    // Iron weapons: 100 gold, 50 wood and 200 ticks, 10.0 s; vitality drill:
-    // 80 gold, 40 wood and 160 ticks, 8.0 s.
+    // Iron weapons: 100 gold, 50 wood and 200 ticks, 10 Seconds; vitality drill:
+    // 80 gold, 40 wood and 160 ticks, 8 Seconds.
     assert_eq!(
         hover_each::<hud::ResearchButton>(&mut app),
         vec![
-            "100 gold, 50 wood, 10.0 s".to_string(),
-            "80 gold, 40 wood, 8.0 s".to_string(),
+            "100 Gold, 50 Wood, 10 Seconds".to_string(),
+            "80 Gold, 40 Wood, 8 Seconds".to_string(),
         ]
     );
 }
@@ -1403,6 +1684,101 @@ fn register_totem(app: &mut App) {
                 [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
             )]),
     );
+}
+
+/// Registers the `diver`: a ground piece with 100 health whose one change of
+/// form, into a watch tower, requires touching shallow or deep water on any
+/// layer, and not standing anywhere on the map on the ground layer; and the
+/// `dipper`, a ground piece with 100 health casting `dip`, which puts on
+/// itself `soaked`, held while standing on shallow water on the ground layer,
+/// and asks nothing. The registry is validated with them in.
+fn register_diver(app: &mut App) {
+    let (ground_domain, ground, air, shallow, deep) = {
+        let registry = app.world().resource::<ContentRegistry>();
+        (
+            registry.domain("ground").expect("the demo declares ground"),
+            registry.layer("ground").expect("the demo declares ground"),
+            registry.layer("air").expect("the demo declares air"),
+            registry
+                .terrain("shallow_water")
+                .expect("the demo declares shallow water"),
+            registry
+                .terrain("deep_water")
+                .expect("the demo declares deep water"),
+        )
+    };
+    let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+    registry.register(
+        EntityTypeDef::new("diver")
+            .with_location(ground_domain, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(100))
+            .with_morphs([MorphTransition::new(
+                "watch_tower",
+                MorphCourse::direct(MorphInterrupted::Reverts),
+                Quantity::Constant(10),
+                MorphPlacement::Reserve,
+                MorphCancel::Refundable,
+                MorphReason::Change,
+                Vec::new(),
+                [
+                    Requirement::Over {
+                        terrains: Terrains::Only(TerrainMask::from(shallow) | deep),
+                        coverage: Coverage::Any,
+                        layers: LayerMask::from(ground) | air,
+                    },
+                    Requirement::Unless(Box::new(Requirement::Over {
+                        terrains: Terrains::Any,
+                        coverage: Coverage::Every,
+                        layers: ground.into(),
+                    })),
+                ],
+                [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+            )]),
+    );
+    let soaked = registry.register_entity_buff(
+        "soaked",
+        EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting: Lasting::While(Requirement::Over {
+                terrains: Terrains::Only(shallow.into()),
+                coverage: Coverage::Every,
+                layers: ground.into(),
+            }),
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        },
+    );
+    let dip = registry.register_skill(
+        "dip",
+        SkillDef {
+            cooldown: 10,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::ApplyBuff {
+                    buff: soaked,
+                    on: Recipient::Caster,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register(
+        EntityTypeDef::new("dipper")
+            .with_location(ground_domain, CellSize::ONE, Solidity::Solid, ground)
+            .with_pool(Pool::health(100))
+            .with_skills([dip]),
+    );
+    registry.validate();
+}
+
+/// The field of the panel's text labeled `label`: the part of a line between
+/// its ` | ` separators that starts with the label.
+fn panel_field<'a>(shown: &'a str, label: &str) -> Option<&'a str> {
+    shown
+        .lines()
+        .flat_map(|line| line.split(" | "))
+        .find(|field| field.starts_with(&format!("{label}: ")))
 }
 
 /// Hovers the one button carrying the marker component, and no other.

@@ -7,15 +7,18 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_math::FixedU64;
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
     annex,
     components::{
         entity_info::EntityInfoComponent, entity_stats::StatsComponent, last_hit::LastHitComponent,
-        order_queue::IdlenessComponent, rise::RisingComponent, tags::TagsComponent,
+        location::LocationComponent, order_queue::IdlenessComponent, rise::RisingComponent,
+        tags::TagsComponent,
     },
     entity_def,
     entity_index::EntityIndex,
+    map::Map,
     player_research::PlayerResearch,
     session::{GameSession, player_id::PlayerId},
 };
@@ -125,6 +128,21 @@ fn holds(
                 },
             )
         }
+        Requirement::Over {
+            terrains,
+            coverage,
+            layers,
+        } => actor.is_some_and(|actor| {
+            let grid = world.resource::<Map>().nav_grid();
+            world.entity(actor).contains::<LocationComponent>()
+                && *layers & entity_def::layer(world, actor) != LayerMask::EMPTY
+                && coverage.covers(entity_def::occupied_rect(world, actor), |cell| {
+                    terrains.admits(
+                        grid.terrain(cell)
+                            .expect("a footprint on the map lies on its cells"),
+                    )
+                })
+        }),
     }
 }
 

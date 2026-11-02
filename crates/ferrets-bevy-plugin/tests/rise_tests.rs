@@ -64,11 +64,7 @@ fn site_never_bears_risen_passive_tick_it_is_founded() {
                 .then(|| utils::single_owned_of_type(app.world_mut(), "kiosk", 0))
         })
         .expect("the worker founds the kiosk");
-    let opened = app
-        .world()
-        .resource::<ContentRegistry>()
-        .entity_buff("opened")
-        .expect("the fixture registers opened");
+    let opened = utils::entity_buff_id(&app, "opened");
     assert!(!entity_def::bears(app.world(), site, opened));
 }
 

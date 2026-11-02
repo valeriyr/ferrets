@@ -56,7 +56,9 @@ use ferrets_content::{
     turret::TurretStats,
     warp::WarperDef,
 };
-use ferrets_nav_grid::{layer_id::LayerId, layer_mask::LayerMask, mover_shape::MoverShape};
+use ferrets_nav_grid::{
+    layer_id::LayerId, layer_mask::LayerMask, mover_shape::MoverShape, terrain_mask::TerrainMask,
+};
 
 /// Returns the [`SimulationId`] `entity` was spawned with.
 ///
@@ -829,6 +831,22 @@ pub fn level(world: &World, entity: Entity) -> u32 {
         occupied_rect(world, entity),
     )
     .expect("an anchor keeps a footprint on the map")
+}
+
+/// The terrains under the cells `entity` occupies (see [`occupied_rect`]).
+///
+/// Panics if `entity` is not a simulation entity, its type declares no
+/// location, it is hidden (off the map), or a cell it occupies lies off the
+/// map — an anchor keeps a footprint on the map.
+pub fn terrains_under(world: &World, entity: Entity) -> TerrainMask {
+    let grid = world.resource::<Map>().nav_grid();
+    occupied_rect(world, entity)
+        .cells()
+        .map(|cell| {
+            grid.terrain(cell)
+                .expect("an anchor keeps a footprint on the map")
+        })
+        .fold(TerrainMask::EMPTY, |under, terrain| under | terrain)
 }
 
 /// The cells `entity`'s footprint occupies: anchored at the cell its position

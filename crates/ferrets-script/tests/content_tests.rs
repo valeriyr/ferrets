@@ -13,6 +13,7 @@ use ferrets_content::{
     build::BuilderAttendance,
     concealment::Concealment,
     cost::Cost,
+    coverage::Coverage,
     detection::Detection,
     domain::DomainDef,
     dying::{Bequest, DeathKind, DyingDef, LeftBy},
@@ -22,7 +23,7 @@ use ferrets_content::{
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{
-        Emission, FieldAction, FieldCoverage, FieldDecay, FieldEffect, FieldGrowth, FieldPlacement,
+        Emission, FieldAction, FieldDecay, FieldEffect, FieldGrowth, FieldPlacement,
         FieldSourceDef, FieldWatch,
     },
     gateway::{Doors, GatewayDef, Joins},
@@ -1162,9 +1163,9 @@ fn requirement_naming_no_kind_is_rejected() {
         panic!("must reject an entry naming no kind");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains(
-            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
-        )),
+        matches!(&error, ScriptError::ContentError(m) if m ==
+            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, unhurt_for, or over"
+        ),
         "unexpected error: {error:?}"
     );
 }
@@ -1186,9 +1187,9 @@ fn requirement_naming_two_kinds_is_rejected() {
         panic!("must reject an entry naming two kinds");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains(
-            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
-        )),
+        matches!(&error, ScriptError::ContentError(m) if m ==
+            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, unhurt_for, or over"
+        ),
         "unexpected error: {error:?}"
     );
 }
@@ -1211,9 +1212,9 @@ fn requirement_naming_two_kinds_reports_shape_before_lookup() {
     // The shape is judged first, so the entry reads as the shape error it is
     // and not as the failed lookup of a research it should never have asked for.
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains(
-            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for"
-        )),
+        matches!(&error, ScriptError::ContentError(m) if m ==
+            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, unhurt_for, or over"
+        ),
         "unexpected error: {error:?}"
     );
 }
@@ -2060,7 +2061,7 @@ fn requirement_string_other_than_risen_or_idle_errors() {
         panic!("must reject a requirement string that is not 'idle'");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("a requirement must be 'risen', 'idle', an { all = ... } or { any = ... } table, or a table naming one of unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for, found 'resting'")),
+        matches!(&error, ScriptError::ContentError(m) if m == "a requirement must be 'risen', 'idle', an { all = ... } or { any = ... } table, or a table naming one of unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, unhurt_for, or over, found 'resting'"),
         "unexpected error: {error:?}"
     );
 }
@@ -2124,6 +2125,117 @@ fn as_long_as_reads_bare_list_as_all() {
             Requirement::Idle,
             Requirement::UnhurtFor(40),
         ]))
+    );
+}
+
+#[test]
+fn over_reads_terrains_coverage_and_layers() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local AIR = define_layer("air", { level = 5 })
+        local LAND = define_terrain("land")
+        local SHALLOWS = define_terrain("shallows")
+        local SEA = define_terrain("sea")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity_buff("wading", {
+            lasting = { as_long_as = { over = SHALLOWS | SEA, coverage = "any", layers = GROUND | AIR } },
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+        define_entity_buff("ashore", {
+            lasting = { as_long_as = { over = "any", coverage = "every", layers = GROUND } },
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("load content");
+
+    let terrain = |name| registry.terrain(name).expect("terrain registered");
+    let ground = registry.layer("ground").expect("ground registered");
+    let air = registry.layer("air").expect("air registered");
+    let wading = registry.entity_buff("wading").expect("wading registered");
+    assert_eq!(
+        registry.entity_buff_def(wading).lasting,
+        Lasting::While(Requirement::Over {
+            terrains: Terrains::Only(TerrainMask::from(terrain("shallows")) | terrain("sea")),
+            coverage: Coverage::Any,
+            layers: LayerMask::from(ground) | air,
+        })
+    );
+    let ashore = registry.entity_buff("ashore").expect("ashore registered");
+    assert_eq!(
+        registry.entity_buff_def(ashore).lasting,
+        Lasting::While(Requirement::Over {
+            terrains: Terrains::Any,
+            coverage: Coverage::Every,
+            layers: ground.into(),
+        })
+    );
+}
+
+#[test]
+fn over_without_coverage_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local SEA = define_terrain("sea")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity_buff("swimming", {
+            lasting = { as_long_as = { over = SEA, layers = GROUND } },
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("over without coverage");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message)
+            if message == "field 'coverage': error converting Lua nil to String (expected string or number)"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn over_without_layers_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local SEA = define_terrain("sea")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity_buff("swimming", {
+            lasting = { as_long_as = { over = SEA, coverage = "every" } },
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("over without layers");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message)
+            if message == "field 'layers': error converting Lua nil to u32 (expected number or string coercible to number)"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn unknown_over_coverage_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local SEA = define_terrain("sea")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity_buff("swimming", {
+            lasting = { as_long_as = { over = SEA, coverage = "most", layers = GROUND } },
+            stack = "ignore",
+            effects = { "conceal" },
+        })
+    "#;
+    let error = content::load(&engine(), source)
+        .err()
+        .expect("bad coverage");
+    assert!(
+        matches!(&error, ScriptError::ContentError(message)
+            if message == "coverage must be 'every' or 'any', found 'most'"),
+        "{error:?}"
     );
 }
 
@@ -2929,6 +3041,12 @@ fn skill_reads_time_it_is_worked_over() {
             caster = "entity",
             effect = { damage = { amount = "5", on = "enemy" } },
         })
+        define_skill("flare", {
+            cooldown = 10,
+            caster = "entity",
+            cast = "transient",
+            effect = { damage = { amount = "5", on = "enemy" } },
+        })
         define_skill("raise_dead", {
             cooldown = 10,
             caster = "entity",
@@ -2961,6 +3079,11 @@ fn skill_reads_time_it_is_worked_over() {
         casting("bolt"),
         Casting::Instant,
         "a skill saying nothing about time lands the tick it is cast"
+    );
+    assert_eq!(
+        casting("flare"),
+        Casting::Transient,
+        "a transient skill lands without becoming an order"
     );
     assert_eq!(
         casting("raise_dead"),
@@ -3049,6 +3172,15 @@ fn cast_payment_of_unknown_word_errors() {
     let error = casting_error(r#"{ point = 10, pays = "upfront" }"#);
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("cast payment must be 'start' or 'landing', found 'upfront'")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn cast_of_unknown_word_errors() {
+    let error = casting_error(r#""quick""#);
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m == "cast must be 'transient' or a { point, pays, ... } table, found 'quick'"),
         "unexpected error: {error:?}"
     );
 }
@@ -3316,7 +3448,7 @@ fn summon_reads_its_field_rules() {
         &vec![FieldPlacement::Requires {
             field: power,
             of: Affiliation::Own,
-            coverage: FieldCoverage::Every,
+            coverage: Coverage::Every,
         }]
     );
 }
@@ -3453,7 +3585,7 @@ fn warper_reads_its_catalogue_field_rules_and_landing() {
             vec![FieldPlacement::Requires {
                 field: power,
                 of: Affiliation::Own,
-                coverage: FieldCoverage::Every,
+                coverage: Coverage::Every,
             }],
             Landing::Sighted,
         )
@@ -4344,7 +4476,7 @@ fn parses_fields_sources_placement_and_effects() {
             FieldPlacement::Requires {
                 field: power,
                 of: Affiliation::Own,
-                coverage: FieldCoverage::Any,
+                coverage: Coverage::Any,
             },
             FieldPlacement::Forbids { field: creep },
         ]
@@ -4354,7 +4486,7 @@ fn parses_fields_sources_placement_and_effects() {
         vec![FieldEffect::new(
             power,
             Affiliation::Own,
-            FieldCoverage::Every,
+            Coverage::Every,
             Vec::new(),
             vec![EntityEffect::Disable],
             None
@@ -4365,7 +4497,7 @@ fn parses_fields_sources_placement_and_effects() {
         vec![FieldEffect::new(
             creep,
             Affiliation::Anyone,
-            FieldCoverage::Any,
+            Coverage::Any,
             vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                 EntityModifier {
                     stat: EntityStatId::SPEED,
@@ -4454,7 +4586,8 @@ fn unknown_field_coverage_errors() {
         .err()
         .expect("bad coverage");
     assert!(
-        matches!(&error, ScriptError::ContentError(message) if message.contains("field coverage must be 'every' or 'any', found 'half'")),
+        matches!(&error, ScriptError::ContentError(message)
+            if message == "coverage must be 'every' or 'any', found 'half'"),
         "{error:?}"
     );
 }
@@ -5588,7 +5721,7 @@ fn field_effect_reads_concealed() {
         vec![FieldEffect::new(
             veil,
             Affiliation::Allied,
-            FieldCoverage::Every,
+            Coverage::Every,
             vec![EntityEffect::Conceal],
             Vec::new(),
             None
@@ -5616,7 +5749,7 @@ fn field_effect_reads_both_sides() {
         vec![FieldEffect::new(
             power,
             Affiliation::Own,
-            FieldCoverage::Every,
+            Coverage::Every,
             vec![EntityEffect::Conceal],
             vec![EntityEffect::Disable, EntityEffect::Conceal],
             None

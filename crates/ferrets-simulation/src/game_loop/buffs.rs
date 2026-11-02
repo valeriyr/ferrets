@@ -288,9 +288,11 @@ fn lapsed(world: &World, owner: Option<PlayerId>, entity: Entity) -> Vec<EntityB
     buffs
         .active()
         .map(|(id, _)| id)
-        .filter(|&id| match &registry.entity_buff_def(id).lasting {
-            Lasting::While(requirement) => !requirements::met_by(world, owner, entity, requirement),
-            Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => false,
+        .filter(|&id| {
+            registry
+                .entity_buff_def(id)
+                .lasts_while()
+                .is_some_and(|requirement| !requirements::met_by(world, owner, entity, requirement))
         })
         .collect()
 }
@@ -304,11 +306,12 @@ fn due(world: &World, owner: Option<PlayerId>, entity: Entity) -> Vec<EntityBuff
         .iter()
         .copied()
         .filter(|&id| !entity_def::bears(world, entity, id))
-        .filter(|&id| match &registry.entity_buff_def(id).lasting {
-            Lasting::While(requirement) => requirements::met_by(world, owner, entity, requirement),
-            Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => {
-                unreachable!("the registry admits only passives that hold on a requirement")
-            }
+        .filter(|&id| {
+            let requirement = registry
+                .entity_buff_def(id)
+                .lasts_while()
+                .expect("the registry admits only passives that hold on a requirement");
+            requirements::met_by(world, owner, entity, requirement)
         })
         .collect()
 }

@@ -914,6 +914,35 @@ pub fn hover_aim(
     }
 }
 
+/// Returns an armed skill to normal input once the leading entity cannot
+/// cast it: there is none, it is not the local player's, or its type does
+/// not carry the skill.
+pub fn disarm_lost_caster(
+    session: Res<GameSession>,
+    leading: Res<Leading>,
+    index: Res<EntityIndex>,
+    registry: Res<ContentRegistry>,
+    casters: Query<(&OwnerComponent, &EntityInfoComponent)>,
+    mut mode: ResMut<InputMode>,
+) {
+    let InputMode::Targeting(TargetedOrder::Skill(skill)) = *mode else {
+        return;
+    };
+    let casts = leading
+        .0
+        .and_then(|id| index.alive(id))
+        .and_then(|entity| casters.get(entity).ok())
+        .is_some_and(|(owner, info)| {
+            Some(owner.player()) == session.local_player()
+                && registry
+                    .entity(info.type_name())
+                    .is_some_and(|def| def.skills.contains(&skill))
+        });
+    if !casts {
+        *mode = InputMode::Normal;
+    }
+}
+
 /// Judges the hovered aim of an armed skill by the simulation's own rule, for
 /// the leading caster.
 pub fn judge_aim(world: &mut World) {
@@ -1077,13 +1106,16 @@ pub fn targeting_input(
                 return;
             };
             // A miss, or a target the cast would refuse, keeps the mode armed
-            // so the player can click again; the hint line says why.
+            // so the player can click again; the hint line says why. Out of
+            // the leader's reach, each selected caster is still asked: the
+            // executor refuses one that cannot reach from where it stands,
+            // and one that can walk walks into reach.
             let Some(target) = skill_target_at(cursor, skill, &registry, &entities) else {
                 return;
             };
             match *aim_verdict {
-                AimVerdict::Refuses(_) | AimVerdict::OutOfReach => return,
-                AimVerdict::Takes | AimVerdict::Idle => {}
+                AimVerdict::Refuses(_) => return,
+                AimVerdict::Takes | AimVerdict::OutOfReach | AimVerdict::Idle => {}
             }
             for &caster in selection.get(local) {
                 pending.push(PlayerCommand::UseSkill {
@@ -2026,10 +2058,10 @@ fn skill_target_at(
         Has<RemainsComponent>,
     )>,
 ) -> Option<SkillTarget> {
-    let aim = match registry.skill_def(skill).map(|def| &def.caster) {
-        Some(SkillCaster::Entity { effect, .. }) => effect.target(),
-        Some(SkillCaster::Player { .. }) | None => return None,
-    };
+    let aim = registry
+        .skill_def(skill)
+        .and_then(|def| def.entity_effect())?
+        .target();
     match aim {
         EntityCastTarget::Position { .. } => Some(SkillTarget::Position(world_to_pos(cursor))),
         EntityCastTarget::Fallen { .. } => {

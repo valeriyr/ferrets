@@ -13,15 +13,14 @@ use ferrets_content::{
     brood::OrphanFate,
     concealment::Concealment,
     cost::Cost,
+    coverage::Coverage,
     detection::Detection,
     domain::DomainId,
     entity_buffs::{EntityBuffDef, Interruption, Lasting},
     entity_effect::EntityEffect,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{
-        Emission, FieldCoverage, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldSourceDef,
-    },
+    field::{Emission, FieldDecay, FieldDef, FieldEffect, FieldGrowth, FieldSourceDef},
     kinds::Kinds,
     location::Solidity,
     morph::{
@@ -878,11 +877,7 @@ fn unowned_bearer_loses_upkeep_buff_at_first_due_tick() {
     let mut app = concealment_app(rivals());
     let (lurker, _) =
         utils::create_entity(app.world_mut(), "lurker", utils::pos(5, 5), None).unwrap();
-    let hired = app
-        .world()
-        .resource::<ContentRegistry>()
-        .entity_buff("hired")
-        .expect("the fixture registers the hired buff");
+    let hired = utils::entity_buff_id(&app, "hired");
     utils::apply_buff(app.world_mut(), lurker, hired);
     utils::run_ticks(&mut app, 1);
     assert!(app.world().entity(lurker).contains::<ConcealedComponent>());
@@ -900,11 +895,7 @@ fn unowned_bearer_loses_upkeep_buff_at_first_due_tick() {
 fn health_upkeep_ends_buff_and_never_kills() {
     let mut app = concealment_app(rivals());
     let (lurker, _) = utils::create_owned(&mut app, "lurker", 5, 5, 0);
-    let bleeding = app
-        .world()
-        .resource::<ContentRegistry>()
-        .entity_buff("bleeding")
-        .expect("the fixture registers the bleeding buff");
+    let bleeding = utils::entity_buff_id(&app, "bleeding");
     utils::apply_buff(app.world_mut(), lurker, bleeding);
 
     // Period 1, seated at 2: the first 8 health fall due on the second tick,
@@ -1217,11 +1208,7 @@ fn stacked_upkeep_pays_for_every_stack() {
     let mut app = concealment_app(rivals());
     let (lurker, _) = utils::create_owned(&mut app, "lurker", 5, 5, 0);
     utils::grant_gold(&mut app, 30);
-    let retained = app
-        .world()
-        .resource::<ContentRegistry>()
-        .entity_buff("retained")
-        .expect("the fixture registers the retained buff");
+    let retained = utils::entity_buff_id(&app, "retained");
     for _ in 0..3 {
         utils::apply_buff(app.world_mut(), lurker, retained);
     }
@@ -1245,11 +1232,7 @@ fn stack_added_mid_period_keeps_first_payment_due() {
     let mut app = concealment_app(rivals());
     let (lurker, _) = utils::create_owned(&mut app, "lurker", 5, 5, 0);
     utils::grant_gold(&mut app, 30);
-    let retained = app
-        .world()
-        .resource::<ContentRegistry>()
-        .entity_buff("retained")
-        .expect("the fixture registers the retained buff");
+    let retained = utils::entity_buff_id(&app, "retained");
     utils::apply_buff(app.world_mut(), lurker, retained);
 
     // Period 5, seated at 6. A second stack four ticks in joins the first at
@@ -1505,11 +1488,7 @@ fn guard_order_lapses_when_ward_cloaks() {
 
     // Nobody pays an upkeep for the unowned, so what hides the lurker is the
     // timed ambush, which a bearer with no weapon never cuts short.
-    let ambushing = app
-        .world()
-        .resource::<ContentRegistry>()
-        .entity_buff("ambushing")
-        .expect("the fixture registers the ambushing buff");
+    let ambushing = utils::entity_buff_id(&app, "ambushing");
     utils::apply_buff(app.world_mut(), lurker, ambushing);
     utils::run_ticks(&mut app, 12);
     assert!(app.world().entity(lurker).contains::<ConcealedComponent>());
@@ -1970,7 +1949,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([FieldEffect::new(
                     veil,
                     Affiliation::Enemy,
-                    FieldCoverage::Any,
+                    Coverage::Any,
                     vec![EntityEffect::Disable],
                     Vec::new(),
                     None,
@@ -2040,7 +2019,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
             FieldEffect::new(
                 veil,
                 Affiliation::Allied,
-                FieldCoverage::Any,
+                Coverage::Any,
                 vec![EntityEffect::Conceal],
                 Vec::new(),
                 None,
@@ -2112,7 +2091,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([FieldEffect::new(
                     veil,
                     Affiliation::Allied,
-                    FieldCoverage::Every,
+                    Coverage::Every,
                     vec![EntityEffect::Conceal],
                     Vec::new(),
                     None,

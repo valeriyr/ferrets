@@ -10,6 +10,7 @@ use ferrets_content::{
     build::BuilderAttendance,
     concealment::Concealment,
     cost::Cost,
+    coverage::Coverage,
     detection::Detection,
     dying::DeathKind,
     entity_buffs::{Interruption, Lasting},
@@ -17,7 +18,7 @@ use ferrets_content::{
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldCoverage, FieldDef, FieldPlacement, FieldSide, FieldWatch},
+    field::{FieldAction, FieldDef, FieldPlacement, FieldSide, FieldWatch},
     kinds::{Kind, Kinds},
     landing::Landing,
     location::Solidity,
@@ -36,8 +37,8 @@ use ferrets_content::{
     rise::{RisePool, RisePoolInitial},
     sight_block::SightBlock,
     skills::{
-        EntityCastEffect, EntityCastTarget, PlayerCastEffect, Reach, Recipient, SkillCaster,
-        SummonAt, SummonPlacement, Whom,
+        Away, CasterParty, Casting, EntityCastEffect, EntityCastTarget, FromCasterTo, Journey,
+        PlayerCastEffect, Reach, Recipient, SkillCaster, SummonAt, SummonPlacement, Whom,
     },
     splash::{SplashDef, SplashShape},
     stand::StandingAct,
@@ -923,7 +924,7 @@ fn conclave_probe_places_sites_and_nexus_projects_power() {
         assert!(
             def.field_placement.iter().any(|rule| matches!(
                 rule,
-                FieldPlacement::Requires { field, coverage: FieldCoverage::Every, .. }
+                FieldPlacement::Requires { field, coverage: Coverage::Every, .. }
                     if *field == power
             )),
             "'{name}' needs power under its whole footprint"
@@ -1942,8 +1943,14 @@ fn tank_is_built_with_tech_lab_docked_or_once_siege_tech_is_known() {
 fn each_demo_unit_passive_holds_on_its_requirement() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let frenzy_ritual = registry.research("frenzy_ritual").expect("frenzy ritual");
-    let expected: [(&str, &str, Requirement); 6] = [
+    let at_sea = Requirement::Over {
+        terrains: Terrains::Only(registry.terrain("deep_water").expect("deep water").into()),
+        coverage: Coverage::Every,
+        layers: registry.layer("ground").expect("ground").into(),
+    };
+    let expected: [(&str, &str, Requirement); 7] = [
         ("marine", "combat_drugs", Requirement::UnhurtFor(200)),
+        ("naga", "swimming", at_sea),
         ("huntress", "shadowmeld", Requirement::IdleFor(40)),
         (
             "grunt",
@@ -1981,6 +1988,61 @@ fn each_demo_unit_passive_holds_on_its_requirement() {
             "{passive} holds on its own requirement"
         );
     }
+}
+
+#[test]
+fn naga_submerges_only_over_deep_water() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let at_sea = Requirement::Over {
+        terrains: Terrains::Only(registry.terrain("deep_water").expect("deep water").into()),
+        coverage: Coverage::Every,
+        layers: registry.layer("ground").expect("ground").into(),
+    };
+    let submerge = registry.skill("submerge").expect("submerge");
+    let submerged = registry.entity_buff("submerged").expect("submerged");
+
+    assert!(
+        registry
+            .entity("naga")
+            .expect("naga")
+            .skills
+            .contains(&submerge)
+    );
+    assert_eq!(
+        registry.skill_def(submerge).expect("submerge").requires,
+        vec![at_sea.clone()]
+    );
+    assert_eq!(
+        registry.skill_def(submerge).expect("submerge").cooldown,
+        200
+    );
+    // It dives without stopping what the naga was doing.
+    let caster = &registry.skill_def(submerge).expect("submerge").caster;
+    assert!(matches!(
+        caster,
+        SkillCaster::Entity {
+            casting: Casting::Transient,
+            ..
+        }
+    ));
+    let buff = registry.entity_buff_def(submerged);
+    assert_eq!(buff.lasting, Lasting::While(at_sea));
+    assert_eq!(buff.effects, vec![EntityEffect::Conceal]);
+    // Its spear brings it up.
+    assert_eq!(buff.interrupted_by, vec![Interruption::Attack]);
+
+    // At sea it swims half again as fast as it walks.
+    let swimming = registry.entity_buff_def(registry.entity_buff("swimming").expect("swimming"));
+    assert_eq!(
+        swimming.effects,
+        vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+            EntityModifier {
+                stat: EntityStatId::SPEED,
+                op: ModifierOp::PercentAdd,
+                magnitude: "0.5".parse::<FixedI64>().unwrap(),
+            }
+        ]))]
+    );
 }
 
 //
@@ -2330,7 +2392,43 @@ fn huntress_ambush_conceals_until_she_strikes_or_is_struck() {
     let huntress = registry.entity("huntress").expect("huntress is registered");
     assert_eq!(
         huntress.skills,
-        vec![registry.skill("ambush").expect("ambush is registered")]
+        vec![
+            registry.skill("ambush").expect("ambush is registered"),
+            registry.skill("dash").expect("dash is registered"),
+        ]
+    );
+}
+
+#[test]
+fn huntress_dashes_four_cells_without_stopping_to_cast() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let dash = registry
+        .skill_def(registry.skill("dash").expect("dash is registered"))
+        .expect("dash is defined");
+
+    // Five seconds at 20 Hz.
+    assert_eq!(dash.cooldown, 100);
+    let SkillCaster::Entity {
+        costs,
+        casting,
+        effect,
+    } = &dash.caster
+    else {
+        panic!("dash is cast by an entity");
+    };
+    assert!(costs.is_empty());
+    assert_eq!(*casting, Casting::Transient);
+    assert_eq!(
+        *effect,
+        EntityCastEffect::Relocate {
+            journey: Box::new(Journey::FromCaster {
+                party: CasterParty::Caster,
+                to: FromCasterTo::Aim(Away::Cell {
+                    reach: Reach::Within(Quantity::Constant(4)),
+                }),
+            }),
+            landing: Landing::Sighted,
+        }
     );
 }
 
@@ -2368,7 +2466,7 @@ fn arbiter_veils_its_side_but_not_itself() {
             ),
             (
                 Affiliation::Allied,
-                FieldCoverage::Every,
+                Coverage::Every,
                 &[EntityEffect::Conceal][..],
                 &[][..]
             ),
@@ -2387,13 +2485,13 @@ fn declared_coverage_matches_what_each_effect_means() {
     // quick with a toe on creep, and a larva and a finished pit wither only
     // wholly off it.
     for (type_name, field_name, expected) in [
-        ("gateway", "power", FieldCoverage::Every),
-        ("photon_cannon", "power", FieldCoverage::Every),
-        ("swarmling", "creep", FieldCoverage::Any),
-        ("larva", "creep", FieldCoverage::Any),
-        ("spawning_pit", "creep", FieldCoverage::Any),
-        ("zealot", "veil", FieldCoverage::Every),
-        ("dark_templar", "veil", FieldCoverage::Every),
+        ("gateway", "power", Coverage::Every),
+        ("photon_cannon", "power", Coverage::Every),
+        ("swarmling", "creep", Coverage::Any),
+        ("larva", "creep", Coverage::Any),
+        ("spawning_pit", "creep", Coverage::Any),
+        ("zealot", "veil", Coverage::Every),
+        ("dark_templar", "veil", Coverage::Every),
     ] {
         let def = registry
             .entity(type_name)

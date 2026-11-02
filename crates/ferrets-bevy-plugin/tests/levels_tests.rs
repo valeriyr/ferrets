@@ -9,13 +9,12 @@ use ferrets_content::{
     attack::Slain,
     berths::BerthGroup,
     brood::OrphanFate,
+    coverage::Coverage,
     detection::Detection,
     domain::{DomainDef, DomainId},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{
-        Emission, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldPlacement, FieldSourceDef,
-    },
+    field::{Emission, FieldDecay, FieldDef, FieldGrowth, FieldPlacement, FieldSourceDef},
     gateway::{Doors, Joins},
     kinds::Kinds,
     landing::Landing,
@@ -1828,7 +1827,7 @@ fn nest_app() -> App {
             .with_field_placement([FieldPlacement::Requires {
                 field: mulch,
                 of: Affiliation::Anyone,
-                coverage: FieldCoverage::Every,
+                coverage: Coverage::Every,
             }]),
     );
     registry.register(

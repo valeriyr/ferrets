@@ -2621,7 +2621,7 @@ fn cast_point(
         return None;
     };
     match casting {
-        Casting::Instant => None,
+        Casting::Transient | Casting::Instant => None,
         Casting::Delayed { point, .. } => stats?.quantity_ticks(*point),
     }
 }

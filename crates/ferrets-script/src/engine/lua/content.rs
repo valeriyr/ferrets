@@ -63,7 +63,7 @@ use mlua::{Lua, Table, Value};
 use crate::{content, error::ScriptError};
 
 /// The keys a requirement table may name, one of them each.
-const REQUIREMENT_KEYS: [&str; 12] = [
+const REQUIREMENT_KEYS: [&str; 13] = [
     "all",
     "any",
     "unless",
@@ -76,6 +76,7 @@ const REQUIREMENT_KEYS: [&str; 12] = [
     "stat",
     "idle_for",
     "unhurt_for",
+    "over",
 ];
 
 /// A requirement table as written: one requirement naming its key, or a bare
@@ -1641,14 +1642,24 @@ fn parse_carries<T>(
     Ok(carries)
 }
 
-/// Reads how long a cast holds its caster: `cast = { point, period, pays,
-/// refund }`, `point` and `period` in ticks or as `{ stat = ... }` tables, or
+/// Reads how a cast takes its caster's time: `cast = { point, period, pays,
+/// refund }`, `point` and `period` in ticks or as `{ stat = ... }` tables,
+/// `cast = "transient"` for a cast that lands without becoming an order, or
 /// nothing at all for a cast that lands at once. An omitted `period` is the
 /// point itself — no recovery. `pays` is `"start"`, with `refund` `"none"` or
 /// `"full"`, or `"landing"`, with no `refund`.
 fn parse_casting(table: &Table, registry: &ContentRegistry) -> crate::Result<Casting> {
-    let Some(cast) = optional::<Table>(table, "cast")? else {
-        return Ok(Casting::Instant);
+    let cast = match optional::<Value>(table, "cast")? {
+        None => return Ok(Casting::Instant),
+        Some(Value::String(word)) if word == "transient" => return Ok(Casting::Transient),
+        Some(Value::Table(cast)) => cast,
+        Some(other) => {
+            return Err(content::unexpected(
+                "cast",
+                &["'transient'", "a { point, pays, ... } table"],
+                &found(&other),
+            ));
+        }
     };
     let point = parse_quantity(
         "cast point",
@@ -2442,12 +2453,15 @@ fn names_requirement_key(table: &Table) -> crate::Result<bool> {
     Ok(false)
 }
 
-/// Reads one requirement: `"risen"`, `"idle"`, an `{ all = { ... } }` or `{ any = { ... } }`
-/// node, an `{ unless = <requirement> }` negation, or a table naming exactly one leaf — `{ entity_type = }`, `{ tag = }`,
+/// Reads one requirement: `"risen"`, `"idle"`, an `{ all = { ... } }` or
+/// `{ any = { ... } }` node, an `{ unless = <requirement> }` negation, or a
+/// table naming exactly one leaf — `{ entity_type = }`, `{ tag = }`,
 /// `{ research = }`, `{ annexed = }`, `{ health = <bound> }`,
 /// `{ energy = <bound> }`, `{ stat = "name", <bound keys> }`,
-/// `{ idle_for = ticks }`, or `{ unhurt_for = ticks }` — a bound naming
-/// exactly one of `under`, `at_least`, `under_share` or `at_least_share`.
+/// `{ idle_for = ticks }`, `{ unhurt_for = ticks }`, or
+/// `{ over = <terrains> | "any", coverage = "every" | "any", layers = <layers> }`
+/// — a bound naming exactly one of `under`, `at_least`, `under_share` or
+/// `at_least_share`.
 fn parse_requirement(value: &Value, registry: &ContentRegistry) -> crate::Result<Requirement> {
     let entry = match value {
         Value::String(name) if name == "risen" => return Ok(Requirement::Risen),
@@ -2460,7 +2474,7 @@ fn parse_requirement(value: &Value, registry: &ContentRegistry) -> crate::Result
                     "'risen'",
                     "'idle'",
                     "an { all = ... } or { any = ... } table",
-                    "a table naming one of unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for",
+                    "a table naming one of unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, unhurt_for, or over",
                 ],
                 &found(other),
             ));
@@ -2486,7 +2500,7 @@ fn parse_requirement(value: &Value, registry: &ContentRegistry) -> crate::Result
     }
     let [key] = named[..] else {
         return Err(ScriptError::ContentError(
-            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, or unhurt_for".to_string(),
+            "a requirement names exactly one of all, any, unless, entity_type, tag, research, annexed, health, energy, stat, idle_for, unhurt_for, or over".to_string(),
         ));
     };
     match key {
@@ -2539,6 +2553,11 @@ fn parse_requirement(value: &Value, registry: &ContentRegistry) -> crate::Result
             entry,
             "unhurt_for",
         )?)),
+        "over" => Ok(Requirement::Over {
+            terrains: parse_terrains(&required::<Value>(entry, "over")?)?,
+            coverage: content::coverage(&required::<String>(entry, "coverage")?)?,
+            layers: LayerMask::from(required::<u32>(entry, "layers")?),
+        }),
         _ => unreachable!("the key was drawn from the list above"),
     }
 }
@@ -2641,7 +2660,7 @@ fn parse_field_placement(
                 (Some(name), None) => Ok(FieldPlacement::Requires {
                     field: resolve(name)?,
                     of: content::affiliation(&required::<String>(entry, "of")?)?,
-                    coverage: content::field_coverage(&required::<String>(entry, "coverage")?)?,
+                    coverage: content::coverage(&required::<String>(entry, "coverage")?)?,
                 }),
                 (None, Some(name)) => Ok(FieldPlacement::Forbids {
                     field: resolve(name)?,
@@ -2683,7 +2702,7 @@ fn parse_field_effects(
             Ok(FieldEffect::new(
                 field_id(entry, registry)?,
                 content::affiliation(&required::<String>(entry, "of")?)?,
-                content::field_coverage(&required::<String>(entry, "coverage")?)?,
+                content::coverage(&required::<String>(entry, "coverage")?)?,
                 inside,
                 outside,
                 holds_while,

@@ -5,9 +5,10 @@ use ferrets_content::{
     annex::{AnnexClaim, AnnexWork},
     attack::Slain,
     concealment::Concealment,
+    coverage::Coverage,
     dying::DeathKind,
     entity_buffs::Interruption,
-    field::{FieldAction, FieldCoverage},
+    field::FieldAction,
     gateway::Doors,
     landing::Landing,
     location::Solidity,
@@ -419,12 +420,12 @@ pub(crate) fn interruption(value: &str) -> crate::Result<Interruption> {
     )
 }
 
-/// Maps a field coverage name to its enum.
-pub(crate) fn field_coverage(value: &str) -> crate::Result<FieldCoverage> {
+/// Maps a coverage name to its enum.
+pub(crate) fn coverage(value: &str) -> crate::Result<Coverage> {
     keyword(
-        "field coverage",
+        "coverage",
         value,
-        &[("every", FieldCoverage::Every), ("any", FieldCoverage::Any)],
+        &[("every", Coverage::Every), ("any", Coverage::Any)],
     )
 }
 

@@ -8,7 +8,11 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
-use super::{build, cast, morph, orders, warp};
+use super::{
+    build,
+    cast::{self, Aiming, CastLanding},
+    morph, orders, warp,
+};
 use crate::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
@@ -40,7 +44,7 @@ use ferrets_content::{
     pool_def::PoolId,
     registry::ContentRegistry,
     research::ResearchId,
-    skills::{SkillCaster, SkillId},
+    skills::{Casting, SkillCaster, SkillId},
     tags,
 };
 
@@ -914,11 +918,12 @@ fn push_order(world: &mut World, entity: Entity, order: Order, flush: Option<Can
 /// Casts a skill for `player`: the skill must exist, match the caster kind it
 /// is asked of, and its requirements must be met.
 ///
-/// A player cast is settled here and now. An entity cast becomes an order, so
-/// what it is aimed at, what it costs and how far it must walk are all settled
-/// when the order runs — but a caster whose skill is still cooling down, or
-/// that cannot start the order at all, is left at whatever it was doing rather
-/// than dropping it for a cast that will not happen.
+/// A player cast, and an entity's transient cast, are settled here and now.
+/// Any other entity cast becomes an order, so what it is aimed at, what it
+/// costs and how far it must walk are settled when the order runs — but a
+/// cast refused as it is ordered (see [`cast::judge_issue`]) leaves the caster
+/// at whatever it was doing rather than dropping it for a cast that will not
+/// happen.
 fn use_skill(
     world: &mut World,
     player: PlayerId,
@@ -936,37 +941,38 @@ fn use_skill(
     else {
         return;
     };
-    // Requirements answer to the issuing player whoever casts: an entity's
-    // skill unlocks with its owner's research, and locks again with it. An
-    // annex entry is asked of the caster, so a player cast can hold none.
-    let casting = match caster {
-        SkillCasterRef::Entity(id) => find_owned_interactable(world, player, id),
-        SkillCasterRef::Player => None,
-    };
-    if !requirements::met(world, player, casting, &def.requires) {
-        return;
-    }
     match (caster, &def.caster) {
         (SkillCasterRef::Player, SkillCaster::Player { price, effect }) => {
-            cast::by_player(world, player, skill, def.cooldown, price, *effect);
-        }
-        (SkillCasterRef::Entity(_), SkillCaster::Entity { .. }) => {
-            let Some(entity) = casting else {
-                return;
-            };
-            // Casting is something the caster does, so it goes through the
-            // queue like any other doing: what it was at is canceled, the
-            // order walks it into reach if the skill has one, and the cast
-            // answers to the same gating, refusals and cancellation as the
-            // rest. Judged before the queue is touched, though — a cast the
-            // caster could not start, or one still cooling down, must not
-            // cancel what it was doing for nothing.
-            let order = Order::Cast { skill, target };
-            if cast::can_start(world, entity, &order).is_err() || !cast::ready(world, entity, skill)
-            {
+            // Requirements answer to the issuing player. An annex entry is
+            // asked of the caster, so a player cast can hold none.
+            if !requirements::met(world, player, None, &def.requires) {
                 return;
             }
-            issue(world, vec![entity], order, Some(CancelPolicy::Soft));
+            cast::by_player(world, player, skill, def.cooldown, price, *effect);
+        }
+        (SkillCasterRef::Entity(id), SkillCaster::Entity { casting, .. }) => {
+            let Some(entity) = find_owned_interactable(world, player, id) else {
+                return;
+            };
+            if cast::judge_issue(world, player, entity, skill, Aiming::Picked(target)).is_err() {
+                return;
+            }
+            match casting {
+                Casting::Transient => match cast::transient(world, player, entity, skill, target) {
+                    CastLanding::Landed | CastLanding::Refused => {}
+                },
+                // Casting is something the caster does, so it goes through
+                // the queue like any other doing: what it was at is canceled,
+                // the order walks it into reach if the skill has one, and the
+                // cast answers to the same gating, refusals and cancellation
+                // as the rest.
+                Casting::Instant | Casting::Delayed { .. } => issue(
+                    world,
+                    vec![entity],
+                    Order::Cast { skill, target },
+                    Some(CancelPolicy::Soft),
+                ),
+            }
         }
         (SkillCasterRef::Player, SkillCaster::Entity { .. })
         | (SkillCasterRef::Entity(_), SkillCaster::Player { .. }) => {}

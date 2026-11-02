@@ -53,8 +53,8 @@ fn setting_label(setting: Setting, settings: &Settings) -> String {
         }
         Setting::View => {
             let name = match settings.view {
-                View::IsometricDiamond => "Isometric Diamond",
-                View::IsometricSquare => "Isometric Square",
+                View::IsometricDiamond => "Isometric diamond",
+                View::IsometricSquare => "Isometric square",
                 View::Orthogonal => "Orthogonal",
             };
             format!("World: {name}")
@@ -97,21 +97,21 @@ pub fn setup_menu(mut commands: Commands, settings: Res<Settings>) {
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.65)),
         children![
             (
-                Text::new("Ferrets Demo"),
+                Text::new("Ferrets demo"),
                 TextFont {
                     font_size: 48.0,
                     ..default()
                 },
                 TextColor(Color::srgb(0.95, 0.95, 0.9)),
             ),
-            menu_button("Local Game", MenuButton::Lobby(LobbyMode::Local)),
-            menu_button("Create Network Game", MenuButton::Lobby(LobbyMode::Host)),
+            menu_button("Local game", MenuButton::Lobby(LobbyMode::Local)),
+            menu_button("Create network game", MenuButton::Lobby(LobbyMode::Host)),
             menu_button(
-                "Connect To Network Game",
+                "Connect to network game",
                 MenuButton::Lobby(LobbyMode::Client)
             ),
             menu_button("Scenario", MenuButton::Scenario),
-            menu_button("Watch Replay", MenuButton::WatchReplay),
+            menu_button("Watch replay", MenuButton::WatchReplay),
             // A gap separates what starts a game from what configures it.
             (Node {
                 height: px(28),

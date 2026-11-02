@@ -6,13 +6,15 @@ use ferrets_content::{
     affiliation::Affiliation,
     attack::Slain,
     cost::Cost,
+    coverage::Coverage,
     detection::Detection,
+    entity_buffs::{EntityBuffDef, Lasting},
+    entity_effect::EntityEffect,
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
     field::{
-        Emission, FieldAction, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldPlacement,
-        FieldSourceDef,
+        Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldPlacement, FieldSourceDef,
     },
     kinds::Kinds,
     landing::Landing,
@@ -23,6 +25,7 @@ use ferrets_content::{
     price,
     quantity::Quantity,
     registry::ContentRegistry,
+    requirement::Requirement,
     resource::DepletionPolicy,
     skills::{
         Casting, EntityCastEffect, PaymentPoint, Reach, Recipient, Refund, SkillCaster, SkillDef,
@@ -38,7 +41,7 @@ use ferrets_simulation::{
     buffs_store::Term,
     command::{PlayerCommand, SkillTarget},
     components::{
-        entity_info::EntityInfoComponent, entity_skills::SkillsComponent, pools,
+        entity_info::EntityInfoComponent, entity_skills::SkillsComponent, last_hit, pools,
         resource::ResourceSourceComponent, rise::RiseOrigin,
     },
     cooldown::Cooldown,
@@ -46,7 +49,7 @@ use ferrets_simulation::{
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent, SpawnCause},
     game_loop::{
-        cast::{self, CastAim},
+        cast::{self, AimRefusal, Aiming, CastAim, CastRefusal},
         damage, fields,
     },
     movement_model::MovementModel,
@@ -1360,6 +1363,377 @@ fn target_leaving_reach_breaks_cast_under_way() {
 }
 
 //
+// ─── Requirements as a cast begins and lands ────────────────────────────────
+//
+
+#[test]
+fn cast_requirement_is_judged_again_when_casting_begins() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 11, 5, 0);
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 4, 5, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    // Ordered at sea, the cast is taken; its chase walks the wader ashore to
+    // the first cell within two of the raft (cells 4–5): column 5 + 2 = 7,
+    // land, where the cast begins and is refused before it pays — no
+    // cooldown runs.
+    utils::cast_on(&mut app, caster_id, "mark", raft_id);
+    utils::run_ticks(&mut app, 60);
+    assert_eq!(
+        entity_def::occupied_rect(app.world(), caster).origin,
+        CellPos::new(7, 5)
+    );
+    assert!(!entity_def::bears(app.world(), raft, marked));
+    assert_eq!(cooldown_of(&app, caster_id, "mark"), Cooldown::Ready);
+}
+
+#[test]
+fn unpaid_cast_requirement_is_judged_again_when_it_lands() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 60);
+
+    // Unhurt for 60 ticks, the cast begins; a hit before it lands breaks its
+    // requirement, so it lands nothing, and paying at landing it has paid
+    // nothing: no cooldown runs.
+    utils::cast_self(&mut app, caster_id, "brace");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let hit_tick = utils::tick(&app);
+    last_hit::record(app.world_mut(), caster, SimulationId(999), hit_tick);
+    utils::run_ticks(&mut app, 10);
+    assert!(!entity_def::bears(app.world(), caster, marked));
+    assert_eq!(cooldown_of(&app, caster_id, "brace"), Cooldown::Ready);
+}
+
+#[test]
+fn paid_cast_is_not_judged_again_when_it_lands() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 60);
+
+    // Paid as it began, its requirements judged then, the cast lands though
+    // a hit since has broken them; its cooldown runs.
+    utils::cast_self(&mut app, caster_id, "steel");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let hit_tick = utils::tick(&app);
+    last_hit::record(app.world_mut(), caster, SimulationId(999), hit_tick);
+    utils::run_ticks(&mut app, 10);
+    assert!(entity_def::bears(app.world(), caster, marked));
+    // Its 100-tick cooldown began with the cast, the third tick after the
+    // order (the command's delay), and has aged through the fourteenth:
+    // 100 − 12 = 88.
+    assert_eq!(
+        cooldown_of(&app, caster_id, "steel"),
+        Cooldown::Cooling { remaining: 88 }
+    );
+}
+
+#[test]
+fn cast_refuses_recipient_that_cannot_hold_its_buff() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 7, 5, 0);
+    let drenched = utils::entity_buff_id(&app, "drenched");
+    let soak = utils::skill_id(&app, "soak");
+    utils::run_ticks(&mut app, 1);
+
+    // `drenched` holds only at sea; the raft stands ashore, so the aim is
+    // refused before anything is paid.
+    assert_eq!(
+        cast::aim(
+            app.world(),
+            0,
+            caster,
+            soak,
+            Some(SkillTarget::Entity(raft_id))
+        )
+        .err(),
+        Some(AimRefusal::Unheld)
+    );
+    utils::cast_on(&mut app, caster_id, "soak", raft_id);
+    utils::run_ticks(&mut app, 10);
+    assert!(!entity_def::bears(app.world(), raft, drenched));
+    assert_eq!(cooldown_of(&app, caster_id, "soak"), Cooldown::Ready);
+}
+
+#[test]
+fn paid_cast_lands_buff_its_recipient_stopped_holding() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    utils::run_ticks(&mut app, 60);
+
+    // Paid as it began with `steady` holding on its caster, the cast is not
+    // judged again on the way: a hit before it lands does not cut it short
+    // (cut short, its full refund would leave it ready), so it lands and its
+    // cooldown runs.
+    utils::cast_self(&mut app, caster_id, "vow");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let hit_tick = utils::tick(&app);
+    last_hit::record(app.world_mut(), caster, SimulationId(999), hit_tick);
+    utils::run_ticks(&mut app, 10);
+    // Begun on the third tick after the order and aged through the
+    // fourteenth: 100 − 12 = 88.
+    assert_eq!(
+        cooldown_of(&app, caster_id, "vow"),
+        Cooldown::Cooling { remaining: 88 }
+    );
+}
+
+#[test]
+fn unpaid_cast_buff_is_judged_again_when_it_lands() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let steady = utils::entity_buff_id(&app, "steady");
+    utils::run_ticks(&mut app, 60);
+
+    // Paying at landing, the cast is judged again as it lands: hit since it
+    // began, its caster would not hold `steady`, so nothing lands or is paid.
+    utils::cast_self(&mut app, caster_id, "oath");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    let hit_tick = utils::tick(&app);
+    last_hit::record(app.world_mut(), caster, SimulationId(999), hit_tick);
+    utils::run_ticks(&mut app, 10);
+    assert!(!entity_def::bears(app.world(), caster, steady));
+    assert_eq!(cooldown_of(&app, caster_id, "oath"), Cooldown::Ready);
+}
+
+#[test]
+fn self_cast_its_buff_would_not_hold_on_cancels_nothing() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let drenched = utils::entity_buff_id(&app, "drenched");
+    utils::run_ticks(&mut app, 1);
+
+    // Walking twenty cells along the shore at half a cell a tick, the wader
+    // is told to put `drenched`, held only at sea, on itself: refused as it
+    // is issued, the walk goes on to (5, 25).
+    utils::order_move(&mut app, caster, 5, 25);
+    utils::cast_self(&mut app, caster_id, "wade");
+    utils::run_ticks(&mut app, 60);
+    assert_eq!(utils::position_of(app.world(), caster), utils::pos(5, 25));
+    assert!(!entity_def::bears(app.world(), caster, drenched));
+}
+
+//
+// ─── Transient casts ────────────────────────────────────────────────────────
+//
+
+#[test]
+fn transient_self_buff_held_while_idle_lands_on_idle_caster() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let dug_in = utils::entity_buff_id(&app, "dug_in");
+    utils::run_ticks(&mut app, 1);
+
+    // No order is queued for it, so the caster stays idle and the buff holds.
+    utils::cast_self(&mut app, caster_id, "dig_in");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::bears(app.world(), caster, dug_in));
+    utils::run_ticks(&mut app, 20);
+    assert!(entity_def::bears(app.world(), caster, dug_in));
+}
+
+#[test]
+fn transient_self_buff_held_while_idle_is_refused_to_walker() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let dug_in = utils::entity_buff_id(&app, "dug_in");
+    utils::run_ticks(&mut app, 1);
+
+    // Walking twenty cells at half a cell a tick, the wader is not idle: the
+    // buff would not hold, so nothing is cast or paid and the walk goes on.
+    utils::order_move(&mut app, caster, 5, 25);
+    utils::cast_self(&mut app, caster_id, "dig_in");
+    utils::run_ticks(&mut app, 60);
+    assert_eq!(utils::position_of(app.world(), caster), utils::pos(5, 25));
+    assert!(!entity_def::bears(app.world(), caster, dug_in));
+    assert_eq!(cooldown_of(&app, caster_id, "dig_in"), Cooldown::Ready);
+}
+
+#[test]
+fn transient_self_buff_held_unless_idle_holds_while_walking() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let astir = utils::entity_buff_id(&app, "astir");
+    utils::run_ticks(&mut app, 1);
+
+    // Cast on the walk, the buff holds while the wader walks and lapses once
+    // it stands at (5, 25) with nothing left to do.
+    utils::order_move(&mut app, caster, 5, 25);
+    utils::cast_self(&mut app, caster_id, "rouse");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::bears(app.world(), caster, astir));
+    utils::run_ticks(&mut app, 60);
+    assert_eq!(utils::position_of(app.world(), caster), utils::pos(5, 25));
+    assert!(!entity_def::bears(app.world(), caster, astir));
+}
+
+#[test]
+fn transient_cast_leaves_walk_going() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    utils::order_move(&mut app, caster, 5, 25);
+    utils::cast_self(&mut app, caster_id, "stride");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::bears(app.world(), caster, marked));
+    utils::run_ticks(&mut app, 60);
+    assert_eq!(utils::position_of(app.world(), caster), utils::pos(5, 25));
+}
+
+#[test]
+fn transient_cast_lands_on_its_aim_wherever_it_stands() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let (other, other_id) = utils::create_owned(&mut app, "wader", 8, 28, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    // Twenty-three cells off, the other wader takes the buff while the caster
+    // walks on.
+    utils::order_move(&mut app, caster, 5, 25);
+    utils::cast_on(&mut app, caster_id, "brand", other_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::bears(app.world(), other, marked));
+    utils::run_ticks(&mut app, 60);
+    assert_eq!(utils::position_of(app.world(), caster), utils::pos(5, 25));
+}
+
+#[test]
+fn transient_cast_pays_and_starts_cooldown_as_it_lands() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    utils::cast_self(&mut app, caster_id, "bleed");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::bears(app.world(), caster, marked));
+    assert_eq!(utils::health_as_u32(&app, caster), 20, "30 - 10");
+    // Begun on tick 3, as the command executes, and aged through tick 4.
+    assert_eq!(
+        cooldown_of(&app, caster_id, "bleed"),
+        Cooldown::Cooling { remaining: 98 },
+        "100 - 2"
+    );
+}
+
+#[test]
+fn transient_cast_its_caster_cannot_afford_lands_nothing() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    // Forty health of its thirty: refused unpaid, the walk going on.
+    utils::order_move(&mut app, caster, 5, 25);
+    utils::cast_self(&mut app, caster_id, "gamble");
+    utils::run_ticks(&mut app, 60);
+    assert!(!entity_def::bears(app.world(), caster, marked));
+    assert_eq!(utils::health_as_u32(&app, caster), 30);
+    assert_eq!(cooldown_of(&app, caster_id, "gamble"), Cooldown::Ready);
+    assert_eq!(utils::position_of(app.world(), caster), utils::pos(5, 25));
+}
+
+#[test]
+fn transient_cast_refuses_aim_it_cannot_take() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let (enemy, enemy_id) = utils::create_owned(&mut app, "wader", 8, 8, 1);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    // `brand` takes only the caster's own: refused as it is ordered.
+    utils::order_move(&mut app, caster, 5, 25);
+    utils::cast_on(&mut app, caster_id, "brand", enemy_id);
+    utils::run_ticks(&mut app, 60);
+    assert!(!entity_def::bears(app.world(), enemy, marked));
+    assert_eq!(cooldown_of(&app, caster_id, "brand"), Cooldown::Ready);
+    assert_eq!(utils::position_of(app.world(), caster), utils::pos(5, 25));
+}
+
+#[test]
+fn transient_cast_within_reach_lands_from_where_its_caster_stands() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let (near, near_id) = utils::create_owned(&mut app, "wader", 7, 5, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    // Two cells off, within its three.
+    utils::cast_on(&mut app, caster_id, "tag", near_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::bears(app.world(), near, marked));
+    assert_eq!(utils::cell_of(app.world(), caster), CellPos::new(5, 5));
+}
+
+#[test]
+fn walking_caster_transient_cast_is_judged_from_cell_it_has_reached() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let (near, near_id) = utils::create_owned(&mut app, "wader", 8, 15, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    // Walking up from (5, 5) at half a cell a tick, by the time the command
+    // arrives it stands within three cells of (8, 15): the buff lands and
+    // the walk goes on to (5, 25).
+    utils::order_move(&mut app, caster, 5, 25);
+    utils::run_ticks(&mut app, 16);
+    utils::cast_on(&mut app, caster_id, "tag", near_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::bears(app.world(), near, marked));
+    utils::run_ticks(&mut app, 40);
+    assert_eq!(utils::position_of(app.world(), caster), utils::pos(5, 25));
+}
+
+#[test]
+fn caster_that_cannot_walk_has_its_picked_aim_judged_as_ordered() {
+    let mut app = shore_app();
+    let (obelisk, _) = utils::create_owned(&mut app, "obelisk", 5, 5, 0);
+    let (_, near_id) = utils::create_owned(&mut app, "wader", 7, 5, 0);
+    let (_, far_id) = utils::create_owned(&mut app, "wader", 5, 15, 0);
+    utils::run_ticks(&mut app, 1);
+    let pin = utils::skill_id(&app, "pin");
+    let judge = |app: &App, target| {
+        cast::judge_issue(
+            app.world(),
+            0,
+            obelisk,
+            pin,
+            Aiming::Picked(Some(SkillTarget::Entity(target))),
+        )
+    };
+
+    // Ten cells off, past its three, it could never reach: refused before
+    // anything it was doing is canceled. Two cells off, it is ordered.
+    assert_eq!(judge(&app, far_id), Err(CastRefusal::OutOfReach));
+    assert_eq!(judge(&app, near_id), Ok(()));
+}
+
+#[test]
+fn transient_cast_out_of_reach_is_refused_without_walking() {
+    let mut app = shore_app();
+    let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);
+    let (far, far_id) = utils::create_owned(&mut app, "wader", 5, 15, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    // Ten cells off, past its three: nothing lands, nothing is paid and the
+    // caster stays where it stood.
+    utils::cast_on(&mut app, caster_id, "tag", far_id);
+    utils::run_ticks(&mut app, 30);
+    assert!(!entity_def::bears(app.world(), far, marked));
+    assert_eq!(cooldown_of(&app, caster_id, "tag"), Cooldown::Ready);
+    assert_eq!(utils::cell_of(app.world(), caster), CellPos::new(5, 5));
+}
+
+//
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
 
@@ -2084,7 +2458,7 @@ fn app() -> App {
                 vec![FieldPlacement::Requires {
                     field: glow,
                     of: Affiliation::Own,
-                    coverage: FieldCoverage::Every,
+                    coverage: Coverage::Every,
                 }],
                 SummonArrival::Rising,
                 vec![Cost::Energy(FixedU64::from_num(30))],
@@ -2397,4 +2771,208 @@ fn exactly(mut skill: SkillDef) -> SkillDef {
     };
     *placement = SummonPlacement::Exact;
     skill
+}
+
+/// [`utils::dry_orders_app`] with water on every cell from column 10 east: a
+/// `wader`, the orders soldier, casting `mark` (`marked` on an own body within
+/// two cells, landing five ticks after it starts, paid at its start with
+/// nothing given back) only while every cell it stands on is water, `brace`
+/// (`marked` on itself, landing five ticks after it starts, paid then) and
+/// `steel` (the same, paid at its start with nothing given back) only while
+/// unhurt for 50 ticks, and `soak` (`drenched`, held only at sea, on an own
+/// body within three cells, at once); casting on itself `vow` (`steady`, held
+/// while unhurt for 50 ticks, landing five ticks after it starts, paid at its
+/// start and refunded in full), `oath` (the same, paid at landing) and `wade`
+/// (`drenched`, at once); transient, without an order, `dig_in` (`dug_in`,
+/// held while idle, on itself), `rouse` (`astir`, held unless idle, on
+/// itself), `stride` (`marked` on itself), `brand` (`marked` on an own body
+/// wherever it stands), `tag` (`marked` on an own body within three cells),
+/// `bleed` and `gamble` (`marked` on itself, costing 10 and 40 health of its
+/// 30); a `raft`, a static 2×2 building with 100 health; and an `obelisk`, a
+/// static 1×1 one casting `pin` (`marked` on an own body within three cells,
+/// at once, through an order). Every cast has a cooldown of 100 ticks.
+fn shore_app() -> App {
+    let water: Vec<(u32, u32)> = (10..32)
+        .flat_map(|x| (0..32).map(move |y| (x, y)))
+        .collect();
+    utils::dry_orders_app(MovementModel::Cell, &water, |registry, _| {
+        let at_sea = Requirement::Over {
+            terrains: Terrains::Only(utils::WATER.into()),
+            coverage: Coverage::Every,
+            layers: utils::GROUND.into(),
+        };
+        let buff = |lasting| EntityBuffDef {
+            effects: vec![EntityEffect::Conceal],
+            lasting,
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        };
+        let marked = registry.register_entity_buff("marked", buff(Lasting::For(100)));
+        let drenched =
+            registry.register_entity_buff("drenched", buff(Lasting::While(at_sea.clone())));
+        let own_within = |cells| Recipient::Standing {
+            whom: Whom {
+                side: Affiliation::Own,
+                kinds: Kinds::Any,
+            },
+            reach: Reach::Within(Quantity::Constant(cells)),
+        };
+        let delayed = |pays| Casting::Delayed {
+            point: Quantity::Constant(5),
+            period: Quantity::Constant(6),
+            pays,
+        };
+        let skill = |casting, buff, on, requires| SkillDef {
+            cooldown: 100,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting,
+                effect: EntityCastEffect::ApplyBuff { buff, on },
+            },
+            requires,
+        };
+        let unhurt = vec![Requirement::UnhurtFor(50)];
+        let mark = registry.register_skill(
+            "mark",
+            skill(
+                delayed(PaymentPoint::AtStart(Refund::None)),
+                marked,
+                own_within(2),
+                vec![at_sea],
+            ),
+        );
+        let brace = registry.register_skill(
+            "brace",
+            skill(
+                delayed(PaymentPoint::AtLanding),
+                marked,
+                Recipient::Caster,
+                unhurt.clone(),
+            ),
+        );
+        let steel = registry.register_skill(
+            "steel",
+            skill(
+                delayed(PaymentPoint::AtStart(Refund::None)),
+                marked,
+                Recipient::Caster,
+                unhurt,
+            ),
+        );
+        let soak = registry.register_skill(
+            "soak",
+            skill(Casting::Instant, drenched, own_within(3), Vec::new()),
+        );
+        let steady = registry
+            .register_entity_buff("steady", buff(Lasting::While(Requirement::UnhurtFor(50))));
+        let dug_in =
+            registry.register_entity_buff("dug_in", buff(Lasting::While(Requirement::Idle)));
+        let vow = registry.register_skill(
+            "vow",
+            skill(
+                delayed(PaymentPoint::AtStart(Refund::Full)),
+                steady,
+                Recipient::Caster,
+                Vec::new(),
+            ),
+        );
+        let oath = registry.register_skill(
+            "oath",
+            skill(
+                delayed(PaymentPoint::AtLanding),
+                steady,
+                Recipient::Caster,
+                Vec::new(),
+            ),
+        );
+        let astir = registry.register_entity_buff(
+            "astir",
+            buff(Lasting::While(Requirement::Unless(Box::new(
+                Requirement::Idle,
+            )))),
+        );
+        let dig_in = registry.register_skill(
+            "dig_in",
+            skill(Casting::Transient, dug_in, Recipient::Caster, Vec::new()),
+        );
+        let rouse = registry.register_skill(
+            "rouse",
+            skill(Casting::Transient, astir, Recipient::Caster, Vec::new()),
+        );
+        let stride = registry.register_skill(
+            "stride",
+            skill(Casting::Transient, marked, Recipient::Caster, Vec::new()),
+        );
+        let brand = registry.register_skill(
+            "brand",
+            skill(
+                Casting::Transient,
+                marked,
+                Recipient::Standing {
+                    whom: Whom {
+                        side: Affiliation::Own,
+                        kinds: Kinds::Any,
+                    },
+                    reach: Reach::Wherever,
+                },
+                Vec::new(),
+            ),
+        );
+        let wade = registry.register_skill(
+            "wade",
+            skill(Casting::Instant, drenched, Recipient::Caster, Vec::new()),
+        );
+        let bled = |health: u32| SkillDef {
+            cooldown: 100,
+            caster: SkillCaster::Entity {
+                costs: vec![Cost::Health(FixedU64::from_num(health))],
+                casting: Casting::Transient,
+                effect: EntityCastEffect::ApplyBuff {
+                    buff: marked,
+                    on: Recipient::Caster,
+                },
+            },
+            requires: Vec::new(),
+        };
+        let bleed = registry.register_skill("bleed", bled(10));
+        let gamble = registry.register_skill("gamble", bled(40));
+        let tag = registry.register_skill(
+            "tag",
+            skill(Casting::Transient, marked, own_within(3), Vec::new()),
+        );
+        let mut wader = registry
+            .entity("soldier")
+            .expect("the orders content declares a soldier")
+            .clone();
+        wader.name = "wader".to_string();
+        registry.register(wader.with_skills([
+            mark, brace, steel, soak, vow, oath, dig_in, rouse, stride, brand, tag, bleed, gamble,
+            wade,
+        ]));
+        registry.register(
+            EntityTypeDef::new("raft")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(100)),
+        );
+        let pin = registry.register_skill(
+            "pin",
+            skill(Casting::Instant, marked, own_within(3), Vec::new()),
+        );
+        registry.register(
+            EntityTypeDef::new("obelisk")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(100))
+                .with_skills([pin]),
+        );
+    })
 }

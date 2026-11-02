@@ -5,8 +5,9 @@
 use ferrets_nav_grid::{layer_mask::LayerMask, terrain_mask::TerrainMask};
 
 use crate::{
-    affiliation::Affiliation, detection::Detection, entity_effect::EntityEffect,
-    requirement::Requirement, sight_block::SightBlock, terrains::Terrains,
+    affiliation::Affiliation, coverage::Coverage, detection::Detection,
+    entity_effect::EntityEffect, requirement::Requirement, sight_block::SightBlock,
+    terrains::Terrains,
 };
 
 /// A handle to a registered field kind, assigned in registration order.
@@ -281,16 +282,6 @@ impl FieldSourceDef {
     }
 }
 
-/// How much of a footprint must answer a field's question for the answer to
-/// stand.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldCoverage {
-    /// Every cell of the footprint.
-    Every,
-    /// Any one cell of it.
-    Any,
-}
-
 /// One rule a field imposes on where an entity type may be placed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldPlacement {
@@ -301,7 +292,7 @@ pub enum FieldPlacement {
         /// Whose coverage counts.
         of: Affiliation,
         /// Which footprint cells are read.
-        coverage: FieldCoverage,
+        coverage: Coverage,
     },
     /// No footprint cell may be covered by the field, by anyone.
     Forbids {
@@ -341,7 +332,7 @@ pub struct FieldEffect {
     of: Affiliation,
     /// How much of the bearer's footprint must be covered for it to stand
     /// inside.
-    coverage: FieldCoverage,
+    coverage: Coverage,
     /// What the field does to the bearer inside it.
     inside: Vec<EntityEffect>,
     /// What the field does to the bearer outside it.
@@ -356,7 +347,7 @@ impl FieldEffect {
     pub fn new(
         field: FieldId,
         of: Affiliation,
-        coverage: FieldCoverage,
+        coverage: Coverage,
         inside: Vec<EntityEffect>,
         outside: Vec<EntityEffect>,
         holds_while: Option<Requirement>,
@@ -386,7 +377,7 @@ impl FieldEffect {
     /// How much of the bearer's footprint must be covered for it to stand
     /// inside.
     #[inline]
-    pub fn coverage(&self) -> FieldCoverage {
+    pub fn coverage(&self) -> Coverage {
         self.coverage
     }
 

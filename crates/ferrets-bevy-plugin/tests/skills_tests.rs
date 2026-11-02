@@ -629,10 +629,7 @@ fn app() -> App {
 
 /// The fixture's damage buff.
 fn frenzy(app: &App) -> EntityBuffId {
-    app.world()
-        .resource::<ContentRegistry>()
-        .entity_buff("frenzy")
-        .expect("the fixture registers frenzy")
+    utils::entity_buff_id(app, "frenzy")
 }
 
 /// What `cast::aim` makes of player 0's `caster` aiming `skill` at `target`.

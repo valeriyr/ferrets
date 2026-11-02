@@ -2083,8 +2083,20 @@ pub const CONTENT: &str = r#"
         cooldown = 400,
         effect = { apply_buff = { buff = "ambushing", on = "caster" } },
     })
+    -- Dash: the huntress leaps to a cell her side sees within four of where
+    -- she stands, at once and without stopping to cast; whatever she was
+    -- doing ends where she lands.
+    define_skill("dash", {
+        caster = "entity",
+        cooldown = 100,
+        cast = "transient",
+        effect = { relocate = {
+            journey = { from_caster = { party = "caster", to = { aim = { kind = "position", range = 4 } } } },
+            landing = "sighted",
+        } },
+    })
     -- Two seconds standing still and a huntress is not there to an enemy
-    -- without detection; a step or a swing shows her.
+    -- without detection; a walk or a swing shows her, a dash does not.
     define_entity_buff("shadowmeld", {
         lasting = { as_long_as = { idle_for = 40 } },
         stack = "ignore",
@@ -2109,10 +2121,33 @@ pub const CONTENT: &str = r#"
         price = { gold = 90, wood = 10 },
         train_time = 55,
         selection = { priority = 10 },
-        skills = { "ambush" },
+        skills = { "ambush", "dash" },
         passives = { "shadowmeld" },
     })
 
+    -- At sea, with every cell it stands on deep water, the naga swims half
+    -- again as fast as it walks.
+    define_entity_buff("swimming", {
+        lasting = { as_long_as = { over = DEEP_WATER, coverage = "every", layers = GROUND } },
+        stack = "ignore",
+        effects = { { stats = { { entity_stat = "speed", op = "percent", value = "0.5" } } } },
+    })
+    -- Over deep water alone the naga dives out of sight of an enemy without
+    -- detection, going on with whatever it was doing as it dives; it surfaces
+    -- when it wades out or throws its spear.
+    define_entity_buff("submerged", {
+        lasting = { as_long_as = { over = DEEP_WATER, coverage = "every", layers = GROUND } },
+        stack = "ignore",
+        effects = { "conceal" },
+        interrupted_by = { "attack" },
+    })
+    define_skill("submerge", {
+        caster = "entity",
+        cooldown = 200,
+        cast = "transient",
+        requires = { { over = DEEP_WATER, coverage = "every", layers = GROUND } },
+        effect = { apply_buff = { buff = "submerged", on = "caster" } },
+    })
     -- The naga walks the land and swims deep water alike: the one elven body
     -- the sea and the rivers do not stop. Its spear reaches what stands on the
     -- ground or floats, nothing that flies.
@@ -2133,6 +2168,8 @@ pub const CONTENT: &str = r#"
         price = { gold = 120, wood = 30 },
         train_time = 70,
         selection = { priority = 10 },
+        skills = { "submerge" },
+        passives = { "swimming" },
     })
 
     -- ── The Terrans ─────────────────────────────────────────────────────────

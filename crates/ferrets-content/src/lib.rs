@@ -10,6 +10,7 @@ pub mod brood;
 pub mod build;
 pub mod concealment;
 pub mod cost;
+pub mod coverage;
 pub mod detection;
 pub mod domain;
 pub mod dying;

@@ -66,11 +66,11 @@ fn finished_game_reports_what_each_player_spent() {
         "one headline per player in the session: {shown:?}"
     );
     assert!(
-        shown.contains("P0 (you): built 0, lost 0, killed 0, damage 0/0, research 0, skills 0"),
+        shown.contains("P0 (you): Built 0, lost 0, killed 0, damage 0/0, research 0, skills 0"),
         "the headline reports every tally, not a summary: {shown:?}"
     );
     assert!(
-        shown.contains("gold +0/-25"),
+        shown.contains("Gold +0/-25"),
         "and the economy line reports what moved: {shown:?}"
     );
     assert!(

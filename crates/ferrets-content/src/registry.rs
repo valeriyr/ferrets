@@ -45,8 +45,8 @@ use crate::{
     rise::RisePool,
     skills::{
         Casting, Count, EntityCastEffect, EntityCastTarget, FromAimTo, FromCasterTo, Journey,
-        PlayerCastEffect, Reach, Recipient, SkillCaster, SkillDef, SkillId, SummonArrival,
-        SummonAt, SummonPlacement, Whom,
+        PlayerCastEffect, Reach, SkillCaster, SkillDef, SkillId, SummonArrival, SummonAt,
+        SummonPlacement, Whom,
     },
     stand::StandingAct,
     stats::EntityModifier,
@@ -241,6 +241,8 @@ impl ContentRegistry {
             self.validate_repairs(def);
             self.validate_requires(&format!("entity type '{}'", def.name), &def.requires);
             self.validate_passives(def);
+            self.validate_standing_asked(def);
+            self.validate_change_requires(def);
             self.validate_pool_stats(def);
             self.validate_bonus_damage_vs(def);
             self.validate_morphs(def);
@@ -267,6 +269,7 @@ impl ContentRegistry {
                 &format!("skill '{name}'"),
                 &self.skill_defs[id.index()].requires,
             );
+            self.validate_cast_requires(name, &self.skill_defs[id.index()]);
             self.validate_aim(name, &self.skill_defs[id.index()]);
             self.validate_journey(name, &self.skill_defs[id.index()]);
         }
@@ -1799,7 +1802,7 @@ impl ContentRegistry {
                             );
                         }
                     }
-                    Casting::Instant => {}
+                    Casting::Transient | Casting::Instant => {}
                 }
             }
             for cost in costs {
@@ -1826,14 +1829,9 @@ impl ContentRegistry {
             // caster's own pools, so the caster must have them; a buff cast on
             // something else draws from whatever it lands on, which only the
             // cast can know.
-            if let SkillCaster::Entity {
-                effect:
-                    EntityCastEffect::ApplyBuff {
-                        buff,
-                        on: Recipient::Caster,
-                    },
-                ..
-            } = &skill_def.caster
+            if let Some(buff) = skill_def
+                .entity_effect()
+                .and_then(EntityCastEffect::buff_on_caster)
                 && let Lasting::Upkeep { costs: upkeep, .. } =
                     &self.entity_buff_defs[buff.index()].lasting
             {
@@ -2117,6 +2115,27 @@ impl ContentRegistry {
                 *ticks > 0,
                 "{owner} requires no hit for no ticks at all; unhurt_for is at least one"
             ),
+            Requirement::Over {
+                terrains, layers, ..
+            } => {
+                match terrains {
+                    Terrains::Only(terrains) => assert!(
+                        *terrains != TerrainMask::EMPTY,
+                        "{owner} requires standing over no terrain at all; name one or \"any\""
+                    ),
+                    Terrains::Any => {}
+                }
+                self.validate_terrains(owner, *terrains);
+                assert!(
+                    *layers != LayerMask::EMPTY,
+                    "{owner} requires standing on no layer at all; name the layers"
+                );
+                let unregistered = *layers & !self.registered_layers();
+                assert!(
+                    unregistered == LayerMask::EMPTY,
+                    "{owner} requires standing on unregistered layers {unregistered}"
+                );
+            }
         }
     }
 
@@ -2215,12 +2234,11 @@ impl ContentRegistry {
             );
         }
         for (name, &id) in &self.entity_buffs {
-            match &self.entity_buff_defs[id.index()].lasting {
-                Lasting::While(requirement) => unlocked(
+            if let Some(requirement) = self.entity_buff_defs[id.index()].lasts_while() {
+                unlocked(
                     &format!("entity buff '{name}'"),
                     std::slice::from_ref(requirement),
-                ),
-                Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => {}
+                );
             }
         }
     }
@@ -2268,7 +2286,8 @@ impl ContentRegistry {
             | Requirement::Risen
             | Requirement::Idle
             | Requirement::IdleFor(_)
-            | Requirement::UnhurtFor(_) => unreachable!("a state leaf is taken as met"),
+            | Requirement::UnhurtFor(_)
+            | Requirement::Over { .. } => unreachable!("a state leaf is taken as met"),
         })
     }
 
@@ -2315,16 +2334,16 @@ impl ContentRegistry {
             | Requirement::Risen
             | Requirement::Idle
             | Requirement::IdleFor(_)
-            | Requirement::UnhurtFor(_) => true,
+            | Requirement::UnhurtFor(_)
+            | Requirement::Over { .. } => true,
         }
     }
 
     /// Checks a buff that holds `While` a requirement — see
     /// [`Self::validate_held`].
     fn validate_while(&self, name: &str, buff: &EntityBuffDef) {
-        let requirement = match &buff.lasting {
-            Lasting::While(requirement) => requirement,
-            Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => return,
+        let Some(requirement) = buff.lasts_while() else {
+            return;
         };
         self.validate_held(&format!("entity buff '{name}'"), requirement, &buff.effects);
     }
@@ -2417,6 +2436,161 @@ impl ContentRegistry {
         }
     }
 
+    /// Checks that every `over` a type's own passives, skills, changes of
+    /// form, field effects' `holds_while` and the buffs its own skills put on
+    /// it must meet names ground the type can stand on: one of its domain's
+    /// terrains on its domain's layer. A leaf under `any` or `unless` is not
+    /// checked.
+    fn validate_standing_asked(&self, def: &EntityTypeDef) {
+        let passives = def.passives.iter().filter_map(|&passive| {
+            let requirement = self.entity_buff_defs[passive.index()].lasts_while()?;
+            Some((
+                format!(
+                    "passive '{}'",
+                    self.entity_buff_name(passive)
+                        .expect("a passive is checked registered before")
+                ),
+                std::slice::from_ref(requirement),
+            ))
+        });
+        let skills = def.skills.iter().map(|&skill| {
+            (
+                format!(
+                    "skill '{}'",
+                    self.skill_name(skill)
+                        .expect("a type's skill comes from this registry")
+                ),
+                &self
+                    .skill_def(skill)
+                    .expect("a type's skill comes from this registry")
+                    .requires[..],
+            )
+        });
+        let morphs = def.morphs.iter().map(|morph| {
+            (
+                format!("change into '{}'", morph.into_type()),
+                morph.requires(),
+            )
+        });
+        let field_effects = def.field_effects.iter().filter_map(|field_effect| {
+            field_effect.holds_while().map(|requirement| {
+                (
+                    format!(
+                        "effect of field '{}'",
+                        self.field_name(field_effect.field())
+                            .expect("a type's field effect names a registered field")
+                    ),
+                    std::slice::from_ref(requirement),
+                )
+            })
+        });
+        let self_buffs = def.skills.iter().filter_map(|&skill| {
+            let buff = self
+                .skill_def(skill)
+                .expect("a type's skill comes from this registry")
+                .entity_effect()?
+                .buff_on_caster()?;
+            let requirement = self.entity_buff_defs[buff.index()].lasts_while()?;
+            Some((
+                format!(
+                    "buff '{}' its skill '{}' puts on it",
+                    self.entity_buff_name(buff)
+                        .expect("a skill's buff comes from this registry"),
+                    self.skill_name(skill)
+                        .expect("a type's skill comes from this registry")
+                ),
+                std::slice::from_ref(requirement),
+            ))
+        });
+        let askers = passives
+            .chain(skills)
+            .chain(morphs)
+            .chain(field_effects)
+            .chain(self_buffs);
+        for (asker, requires) in askers {
+            let leaves = requires.iter().flat_map(Requirement::must_hold);
+            for leaf in leaves {
+                match leaf {
+                    Requirement::Over {
+                        terrains, layers, ..
+                    } => {
+                        let stands = def.location.is_some_and(|location| {
+                            let domain = self.domain_def(location.domain());
+                            terrains.mask(self) & self.domain_terrains(&location)
+                                != TerrainMask::EMPTY
+                                && *layers & domain.layer() != LayerMask::EMPTY
+                        });
+                        assert!(
+                            stands,
+                            "entity type '{}' never stands where its {asker} asks: over {} on layers {layers}",
+                            def.name,
+                            terrains.mask(self)
+                        );
+                    }
+                    Requirement::All(_)
+                    | Requirement::Any(_)
+                    | Requirement::Unless(_)
+                    | Requirement::EntityType(_)
+                    | Requirement::Tag(_)
+                    | Requirement::Research(_)
+                    | Requirement::Annexed(_)
+                    | Requirement::Health(_)
+                    | Requirement::Energy(_)
+                    | Requirement::Stat { .. }
+                    | Requirement::Risen
+                    | Requirement::Idle
+                    | Requirement::IdleFor(_)
+                    | Requirement::UnhurtFor(_) => {}
+                }
+            }
+        }
+    }
+
+    /// Checks that a skill cast through an order never reads its caster's
+    /// idleness, which its own order decides: not in its requirements, nor in
+    /// the requirement the buff it puts on its caster is held `While`.
+    fn validate_cast_requires(&self, name: &str, skill: &SkillDef) {
+        match &skill.caster {
+            SkillCaster::Entity {
+                casting: Casting::Instant | Casting::Delayed { .. },
+                effect,
+                ..
+            } => {
+                assert!(
+                    !skill.requires.iter().any(Requirement::reads_idleness),
+                    "skill '{name}' asks whether its caster is idle, which its own cast order decides"
+                );
+                let lasts_while = effect
+                    .buff_on_caster()
+                    .and_then(|buff| self.entity_buff_defs[buff.index()].lasts_while());
+                if let Some(requirement) = lasts_while {
+                    assert!(
+                        !requirement.reads_idleness(),
+                        "skill '{name}' puts on its caster a buff held on its idleness, which its own cast order decides; a transient cast leaves it as it was"
+                    );
+                }
+            }
+            SkillCaster::Entity {
+                casting: Casting::Transient,
+                ..
+            }
+            | SkillCaster::Player { .. } => {}
+        }
+    }
+
+    /// Checks that no change of form a type takes reads its idleness, which
+    /// its own change decides.
+    fn validate_change_requires(&self, def: &EntityTypeDef) {
+        for morph in &def.morphs {
+            assert!(
+                !morph.requires().iter().any(Requirement::reads_idleness),
+                "entity type '{}' asks whether it is idle to change into '{}', which its own change decides",
+                def.name,
+                morph.into_type()
+            );
+        }
+    }
+
     /// Checks the buffs a type bears of itself: each registered here, none
     /// named twice, each held `While` a requirement, and every stat one
     /// modifies carried by the type.
@@ -2437,9 +2611,9 @@ impl ContentRegistry {
                 def.name
             );
             let buff = &self.entity_buff_defs[passive.index()];
-            match &buff.lasting {
-                Lasting::While(_) => {}
-                Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => panic!(
+            match buff.lasts_while() {
+                Some(_) => {}
+                None => panic!(
                     "entity type '{}' bears passive '{name}', which does not hold on a requirement",
                     def.name
                 ),
@@ -2470,23 +2644,19 @@ impl ContentRegistry {
         let mut holders: Vec<RequirementHolder> = Vec::new();
         for &passive in &def.passives {
             let buff = &self.entity_buff_defs[passive.index()];
-            match &buff.lasting {
-                Lasting::While(requirement) => {
-                    let mut judged = Vec::new();
-                    judged_stats(requirement, Negation::Plain, &mut judged);
-                    let name = self
-                        .entity_buff_name(passive)
-                        .expect("a passive is a registered buff");
-                    holders.push(RequirementHolder {
-                        name: format!("passive '{name}'"),
-                        judged,
-                        effects: buff.effects.clone(),
-                    });
-                }
-                Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => {
-                    unreachable!("a passive holds on a requirement, as validate_passives checks")
-                }
-            }
+            let requirement = buff
+                .lasts_while()
+                .expect("a passive holds on a requirement, as validate_passives checks");
+            let mut judged = Vec::new();
+            judged_stats(requirement, Negation::Plain, &mut judged);
+            let name = self
+                .entity_buff_name(passive)
+                .expect("a passive is a registered buff");
+            holders.push(RequirementHolder {
+                name: format!("passive '{name}'"),
+                judged,
+                effects: buff.effects.clone(),
+            });
         }
         for (index, field_effect) in def.field_effects.iter().enumerate() {
             if let Some(requirement) = field_effect.holds_while() {
@@ -4250,7 +4420,8 @@ fn judged_stats(
         | Requirement::Risen
         | Requirement::Idle
         | Requirement::IdleFor(_)
-        | Requirement::UnhurtFor(_) => {}
+        | Requirement::UnhurtFor(_)
+        | Requirement::Over { .. } => {}
     }
 }
 

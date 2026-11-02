@@ -35,9 +35,20 @@ pub fn clock_text(seconds: f64) -> String {
     }
 }
 
-/// Seconds written to a tenth: `2.3 s`.
+/// Seconds as a named amount, written to a tenth and a whole number whole:
+/// `6 Seconds`, `2.5 Seconds`, `1 Second`.
 pub fn seconds_text(seconds: f64) -> String {
-    format!("{seconds:.1} s")
+    let amount = seconds_amount(seconds);
+    match amount.as_str() {
+        "1" => format!("{amount} Second"),
+        _ => format!("{amount} Seconds"),
+    }
+}
+
+/// Seconds as words inside a sentence, written as [`seconds_text`] writes
+/// them: `6 seconds`, `2.5 seconds`, `1 second`.
+pub fn seconds_words(seconds: f64) -> String {
+    seconds_text(seconds).to_lowercase()
 }
 
 /// A speed the game offers. The engine takes any positive factor; these are the
@@ -141,5 +152,14 @@ impl SpeedStep {
             .into_iter()
             .find(|step| step.speed() == speed)
             .unwrap_or(SpeedStep::Normal)
+    }
+}
+
+/// Seconds to a tenth, a whole number written whole: `6`, `2.5`.
+fn seconds_amount(seconds: f64) -> String {
+    let tenths = format!("{seconds:.1}");
+    match tenths.strip_suffix(".0") {
+        Some(whole) => whole.to_string(),
+        None => tenths,
     }
 }

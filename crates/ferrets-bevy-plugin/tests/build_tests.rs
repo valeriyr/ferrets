@@ -8,10 +8,11 @@ use ferrets_content::{
     affiliation::Affiliation,
     attack::Slain,
     build::BuilderAttendance,
+    coverage::Coverage,
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldCoverage, FieldDecay, FieldDef, FieldPlacement},
+    field::{FieldDecay, FieldDef, FieldPlacement},
     kinds::Kinds,
     location::Solidity,
     pool::Pool,
@@ -2525,7 +2526,7 @@ fn builders_app() -> App {
                 .with_field_placement([FieldPlacement::Requires {
                     field: ward,
                     of: Affiliation::Anyone,
-                    coverage: FieldCoverage::Every,
+                    coverage: Coverage::Every,
                 }])
                 .with_builder(
                     ["depot"],

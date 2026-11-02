@@ -363,14 +363,14 @@ pub fn enter_lobby(mut commands: Commands, mode: Res<LobbyMode>) {
         LobbyMode::Host => match open_host(config.mode, TCP_PORT, config.slots.len()) {
             Ok(host) => {
                 config.status =
-                    format!("hosting on port {TCP_PORT} - clients dial this machine's ip");
+                    format!("Hosting on port {TCP_PORT} - clients dial this machine's IP");
                 commands.insert_resource(HostTcpPort(TCP_PORT));
                 commands.queue(move |world: &mut World| {
                     world.insert_non_send_resource(LobbyLink::Host(host));
                 });
             }
             Err(error) => {
-                config.status = format!("host failed: {error}");
+                config.status = format!("Host failed: {error}");
             }
         },
         LobbyMode::Client => {} // The client auto-connects while in the lobby.
@@ -446,7 +446,7 @@ pub fn poll_lobby_link(
                 {
                     let state = state.clone();
                     mirror(&mut config, &state);
-                    config.status = "connected".to_string();
+                    config.status = "Connected".to_string();
                 }
                 config.local_seat = mirrored_seat(
                     client.local_player(),
@@ -454,7 +454,7 @@ pub fn poll_lobby_link(
                     config.local_seat,
                 );
                 if client.started().is_some() {
-                    config.status = "starting...".to_string();
+                    config.status = "Starting...".to_string();
                     commands.insert_resource(StartRequested);
                 }
             }
@@ -569,7 +569,7 @@ pub fn parse_tcp_port(input: &str) -> Result<u16, String> {
         return Ok(TCP_PORT);
     }
     match input.parse::<u16>() {
-        Ok(0) | Err(_) => Err(format!("invalid tcp port '{input}'")),
+        Ok(0) | Err(_) => Err(format!("Invalid TCP port '{input}'")),
         Ok(port) => Ok(port),
     }
 }
@@ -583,7 +583,7 @@ pub fn parse_udp_port(input: &str) -> Result<Option<u16>, String> {
     input
         .parse::<u16>()
         .map(Some)
-        .map_err(|_| format!("invalid udp port '{input}'"))
+        .map_err(|_| format!("Invalid UDP port '{input}'"))
 }
 
 /// The socket address `input` dials: as typed when it carries a port, with
@@ -881,16 +881,16 @@ pub fn auto_connect_client(
                     }
                 };
                 if let Err(error) = client.join(udp_port, Some(Race::Human.id())) {
-                    config.status = format!("join failed: {error}");
+                    config.status = format!("Join failed: {error}");
                     return;
                 }
-                config.status = "connected".to_string();
+                config.status = "Connected".to_string();
                 commands.queue(move |world: &mut World| {
                     world.insert_non_send_resource(LobbyLink::Client(client));
                 });
             }
             Ok(Err(error)) => {
-                config.status = format!("connect failed: {error}");
+                config.status = format!("Connect failed: {error}");
                 commands.queue(|world: &mut World| {
                     world.remove_non_send_resource::<PendingConnect>();
                 });
@@ -913,7 +913,7 @@ pub fn auto_connect_client(
 
     let field = config.host_addr.clone();
     let addr = dial_addr(&field);
-    config.status = format!("connecting to {addr}...");
+    config.status = format!("Connecting to {addr}...");
     let (sender, result) = mpsc::channel();
     thread::spawn(move || {
         let _ = sender.send(bootstrap::join_lobby(addr.as_str()));
@@ -974,10 +974,10 @@ pub fn host_rebind(
                 world.insert_non_send_resource(LobbyLink::Host(host));
                 world.insert_resource(HostTcpPort(desired));
                 world.resource_mut::<LobbyConfig>().status =
-                    format!("hosting on port {desired} - clients dial this machine's ip");
+                    format!("Hosting on port {desired} - clients dial this machine's IP");
             }
             Err(error) => {
-                world.resource_mut::<LobbyConfig>().status = format!("host failed: {error}");
+                world.resource_mut::<LobbyConfig>().status = format!("Host failed: {error}");
             }
         }
     });
@@ -1000,9 +1000,9 @@ fn can_start(mode: &LobbyMode, link: Option<&LobbyLink>) -> bool {
 pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>, config: Res<LobbyConfig>) {
     let is_client = *mode == LobbyMode::Client;
     let title = match *mode {
-        LobbyMode::Local => "Local Game",
-        LobbyMode::Host => "Create Network Game",
-        LobbyMode::Client => "Connect To Network Game",
+        LobbyMode::Local => "Local game",
+        LobbyMode::Host => "Create network game",
+        LobbyMode::Client => "Connect to network game",
     };
 
     let root = commands
@@ -1101,7 +1101,7 @@ pub fn setup_lobby(mut commands: Commands, mode: Res<LobbyMode>, config: Res<Lob
         // a local game moves its one human directly.
         parent.spawn(row_node()).with_children(|row| {
             label(row, "Your seat:");
-            spawn_button(row, "Spectate / Play", LobbyButton::Observe);
+            spawn_button(row, "Spectate / play", LobbyButton::Observe);
             row.spawn((
                 ObserverText,
                 Text::new(String::new()),
@@ -1419,7 +1419,7 @@ pub fn update_lobby_view(
     }
     if let Ok(mut text) = udp_port.single_mut() {
         let value = if config.udp_port.is_empty() {
-            "auto"
+            "Auto"
         } else {
             &config.udp_port
         };

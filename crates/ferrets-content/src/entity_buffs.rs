@@ -77,3 +77,14 @@ pub struct EntityBuffDef {
     /// What cuts it short before its lasting runs out.
     pub interrupted_by: Vec<Interruption>,
 }
+
+impl EntityBuffDef {
+    /// The requirement the buff is held `While`; `None` for a buff lasting
+    /// otherwise.
+    pub fn lasts_while(&self) -> Option<&Requirement> {
+        match &self.lasting {
+            Lasting::While(requirement) => Some(requirement),
+            Lasting::Forever | Lasting::For(_) | Lasting::Upkeep { .. } => None,
+        }
+    }
+}

@@ -86,7 +86,8 @@ pub struct EntityTypeDef {
     /// registered tag.
     pub tags: BTreeSet<String>,
     /// Requirements for producing an instance: each entry is asked of the
-    /// producing player or of the producer itself, and all must hold.
+    /// producing player or of the producer itself (the builder, trainer or
+    /// warper), and all must hold.
     pub requires: Vec<Requirement>,
 
     /// Base value of every stat this type carries, written on its own or

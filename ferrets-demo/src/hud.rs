@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{PendingInput, ReplayPlayback, ScenarioObjectives};
 use ferrets_content::{
     cost::Cost,
+    coverage::Coverage,
     entity_stats::EntityStatId,
     morph::MorphCancel,
     pool_def::PoolId,
@@ -13,9 +14,11 @@ use ferrets_content::{
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     research::ResearchId,
-    skills::{EntityCastEffect, EntityCastTarget, SkillCaster, SkillId},
+    skills::{EntityCastTarget, SkillCaster, SkillId},
+    terrains::Terrains,
 };
 use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_simulation::{
     annex,
     command::{PlayerCommand, SelectMode, SkillCasterRef},
@@ -26,6 +29,7 @@ use ferrets_simulation::{
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
         hidden::HiddenComponent,
+        location::LocationComponent,
         morph::MorphComponent,
         order_queue::{OrderEntry, OrderQueueComponent},
         owner::OwnerComponent,
@@ -40,7 +44,7 @@ use ferrets_simulation::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     game_loop::{
-        cast::AimRefusal,
+        cast::{self, AimRefusal, Aiming, CastRefusal},
         morph,
         orders::{self, Refusal},
         warp::{self, WarpRefusal},
@@ -260,7 +264,7 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
             .with_children(|parent| {
                 parent.spawn((
                     PlayerSkillButton { skill: war_drums },
-                    card_button("War Drums", SKILL_NORMAL),
+                    card_button(&pretty_name("war_drums"), SKILL_NORMAL),
                 ));
             });
     }
@@ -325,10 +329,13 @@ pub fn setup_hud(mut commands: Commands, registry: Res<ContentRegistry>) {
             ..default()
         },
         TextColor(Color::srgb(0.9, 0.95, 1.0)),
+        // Each line set against the right edge, so a line that changes length
+        // moves nothing else.
+        TextLayout::new_with_justify(Justify::Right),
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(8.0),
-            right: Val::Px(12.0),
+            right: Val::Px(10.0),
             ..default()
         },
     ));
@@ -559,7 +566,7 @@ pub fn update_replay_note(
         }
         Some(playback) if playback.is_done() => String::from("Replay ended"),
         _ if session.is_paused() => String::from("Paused"),
-        _ if speed != SpeedStep::Normal => format!("Speed {}", speed.label()),
+        _ if speed != SpeedStep::Normal => format!("Speed: {}", speed.label()),
         _ => String::new(),
     };
 
@@ -650,29 +657,26 @@ pub fn update_help(
     {
         let def = registry.def(info.type_id());
         if def.trainer.is_some() {
-            message = String::from(
-                "Train: click a command-card button   |   RMB set rally (on self clears)",
-            );
+            message =
+                String::from("Train: Click a command-card button | RMB set rally (on self clears)");
         }
         if def.breeder.is_some() {
-            message = String::from(
-                "Brood: click to select every larva   |   RMB set rally (on self clears)",
-            );
+            message =
+                String::from("Brood: Click to select every larva | RMB set rally (on self clears)");
         }
         if !def.morphs.is_empty() {
-            message = String::from("Change: click a command-card button");
+            message = String::from("Change: Click a command-card button");
         }
         if def.holder.is_some() {
             message = String::from(
-                "Load: click a unit to take in   |   Unload: let everyone out (Unload To: click where)",
+                "Load: Click a unit to take in | Unload: Let everyone out (Unload to: Click where)",
             );
         }
         if def.builder.is_some() {
-            message =
-                String::from("Build: click a command-card button   |   click the map to place");
+            message = String::from("Build: Click a command-card button | Click the map to place");
         }
         if !def.skills.is_empty() {
-            message = String::from("Skill: click a command-card button");
+            message = String::from("Skill: Click a command-card button");
         }
     }
 
@@ -736,11 +740,7 @@ pub fn update_selection(world: &mut World) {
                     // handle a replay, a log line, or a forensics run names the
                     // same entity by, so a report can point at one unit rather
                     // than describe it.
-                    let mut parts = vec![format!(
-                        "{} #{}",
-                        pretty_name(info.type_name()),
-                        info.id().0
-                    )];
+                    let title = format!("{} #{}", pretty_name(info.type_name()), info.id().0);
                     // A side knows its own wherever they are: a worker down a
                     // mine or inside the site it raises is off the map, which
                     // carries no sighting even for the player who owns it.
@@ -752,19 +752,34 @@ pub fn update_selection(world: &mut World) {
                         (Some(_), None) | (None, _) => false,
                     };
                     if !own && !render::stamped(sighted).is_seen() {
-                        parts.push("out of sight".to_string());
-                        return parts.join("   ");
+                        return format!("{title}\nOut of sight");
                     }
+                    // One line each: its vitals, where it stands and what it
+                    // does there, and what it is under, so a reading that
+                    // changes moves only its own line.
+                    let mut vitals = Vec::new();
+                    let mut standing = Vec::new();
+                    let mut state = Vec::new();
                     // The effective ceiling, so a modifier that moves max health shows in
                     // the denominator instead of leaving the reading out of step with it.
                     let max_health = stats
                         .and_then(|stats| stats.effective(EntityStatId::MAX_HEALTH))
                         .or_else(|| def.base_stat(EntityStatId::MAX_HEALTH));
                     if let (Some(health), Some(max_health)) = (health, max_health) {
-                        parts.push(format!(
-                            "HP {}/{}",
+                        vitals.push(format!(
+                            "Health: {}/{}",
                             pools::displayed_health(health),
                             max_health.to_num::<u32>()
+                        ));
+                    }
+                    let max_energy = stats
+                        .and_then(|stats| stats.effective(EntityStatId::MAX_ENERGY))
+                        .or_else(|| def.base_stat(EntityStatId::MAX_ENERGY));
+                    if let (Some(energy), Some(max_energy)) = (energy, max_energy) {
+                        vitals.push(format!(
+                            "Energy: {}/{}",
+                            pools::displayed_energy(energy),
+                            max_energy.to_num::<u32>()
                         ));
                     }
                     // Effective values, so an upgrade or a running buff shows
@@ -773,35 +788,62 @@ pub fn update_selection(world: &mut World) {
                         .and_then(|stats| stats.effective(EntityStatId::DAMAGE))
                         .or_else(|| def.base_stat(EntityStatId::DAMAGE))
                     {
-                        parts.push(format!("attack {}", damage.to_num::<u32>()));
+                        vitals.push(format!("Attack: {}", damage.to_num::<u32>()));
                     }
                     if let Some(speed) = stats
                         .and_then(|stats| stats.effective(EntityStatId::SPEED))
                         .or_else(|| def.base_stat(EntityStatId::SPEED))
                     {
-                        parts.push(format!("speed {:.2}", speed.to_num::<f32>()));
+                        vitals.push(format!("Speed: {:.2}", speed.to_num::<f32>()));
+                    }
+                    // The ground under it; terrain is map knowledge every side has.
+                    if world_ref.entity(entity).contains::<LocationComponent>() {
+                        let under = entity_def::terrains_under(world_ref, entity);
+                        let names: Vec<String> = registry
+                            .terrains()
+                            .filter(|&(_, terrain)| under.meets(terrain.into()))
+                            .map(|(name, _)| pretty_name(name))
+                            .collect();
+                        standing.push(format!("Terrain: {}", names.join(", ")));
                     }
                     if let Some(carrier) = carrier
                         && let Some(kind) = &carrier.kind
                     {
-                        parts.push(format!("carrying {} {kind}", carrier.amount));
+                        standing.push(format!(
+                            "Carrying: {} {}",
+                            carrier.amount,
+                            pretty_name(kind)
+                        ));
                     }
                     if let (Some(source), Some(source_def)) = (source, def.resource_source.as_ref())
                     {
-                        parts.push(format!("{} {} left", source.amount, source_def.kind()));
+                        standing.push(format!(
+                            "Left: {} {}",
+                            source.amount,
+                            pretty_name(source_def.kind())
+                        ));
                     }
                     if let Some(StanceComponent(stance)) = stance {
-                        parts.push(format!("stance: {}", stance.name().replace('_', " ")));
-                    }
-                    let max_energy = stats
-                        .and_then(|stats| stats.effective(EntityStatId::MAX_ENERGY))
-                        .or_else(|| def.base_stat(EntityStatId::MAX_ENERGY));
-                    if let (Some(energy), Some(max_energy)) = (energy, max_energy) {
-                        parts.push(format!(
-                            "energy {}/{}",
-                            pools::displayed_energy(energy),
-                            max_energy.to_num::<u32>()
+                        standing.push(format!(
+                            "Stance: {}",
+                            capitalized(&stance.name().replace('_', " "))
                         ));
+                    }
+                    // Not operating, as the simulation judges it, and hidden
+                    // from enemies.
+                    let mut status = Vec::new();
+                    match entity_def::operation(world_ref, entity) {
+                        Operation::Rising => status.push(rising_words(world_ref, entity)),
+                        Operation::Disabled(_) => status.push("disabled"),
+                        Operation::Stranded => status.push("waiting for room"),
+                        Operation::Operating => {}
+                    }
+                    if concealed {
+                        status.push("concealed");
+                    }
+                    if !status.is_empty() {
+                        let status: Vec<String> = status.into_iter().map(capitalized).collect();
+                        state.push(format!("Status: {}", status.join(", ")));
                     }
                     if let Some(buffs) = buffs
                         && !buffs.is_empty()
@@ -818,21 +860,17 @@ pub fn update_selection(world: &mut World) {
                                 }
                             })
                             .collect();
-                        parts.push(names.join(", "));
+                        state.push(format!("Buffs: {}", names.join(", ")));
                     }
-                    // Not operating, as the simulation judges it.
-                    match entity_def::operation(world_ref, entity) {
-                        Operation::Rising => {
-                            parts.push(rising_words(world_ref, entity).to_string());
-                        }
-                        Operation::Disabled(_) => parts.push("disabled".to_string()),
-                        Operation::Stranded => parts.push("waiting for room".to_string()),
-                        Operation::Operating => {}
-                    }
-                    if concealed {
-                        parts.push("concealed".to_string());
-                    }
-                    parts.join("   ")
+                    std::iter::once(title)
+                        .chain(
+                            [vitals, standing, state]
+                                .into_iter()
+                                .filter(|line| !line.is_empty())
+                                .map(|line| line.join(" | ")),
+                        )
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 },
             )
             .unwrap_or_default(),
@@ -889,10 +927,10 @@ pub fn update_spectator_note(
             // This node watches by role, through whichever perspective it
             // flipped to — a side's view, named by its team when it has one.
             LocalRole::Observer => match watch.0 {
-                None => "Observing - everything (Tab: next view)".to_string(),
+                None => "Observing - everything (Tab: Next view)".to_string(),
                 Some(side) => match session.slot(side).and_then(|slot| slot.team()) {
-                    Some(team) => format!("Observing - team {team}'s view (Tab: next view)"),
-                    None => format!("Observing - player {side}'s view (Tab: next view)"),
+                    Some(team) => format!("Observing - team {team}'s view (Tab: Next view)"),
+                    None => format!("Observing - player {side}'s view (Tab: Next view)"),
                 },
             },
             // A player watching is one whose elimination has taken effect —
@@ -935,11 +973,11 @@ pub fn update_roster(session: Res<GameSession>, mut text: Query<&mut Text, With<
                 .team()
                 .map_or(String::new(), |team| format!(" [T{team}]"));
             let standing = if session.is_player_dropped(id) {
-                "left"
+                "Left"
             } else if session.is_player_eliminated(id) {
-                "eliminated"
+                "Eliminated"
             } else {
-                "playing"
+                "Playing"
             };
             let you = if Some(id) == local { " (you)" } else { "" };
             format!("P{id}{team}: {standing}{you}")
@@ -1017,7 +1055,7 @@ pub fn update_final_statistics(
             let lost: u32 = tally.lost_types().map(|(_, count)| count).sum();
             let killed: u32 = tally.killed_types().map(|(_, count)| count).sum();
             format!(
-                "P{id}{you}: built {produced}, lost {lost}, killed {killed}, \
+                "P{id}{you}: Built {produced}, lost {lost}, killed {killed}, \
                  damage {dealt}/{taken}, research {research}, skills {skills}\n\
                  {spacer}{economy}",
                 dealt = tally.damage_dealt().to_num::<u32>(),
@@ -1043,7 +1081,7 @@ fn economy_line(tally: &PlayerTally) -> String {
     kinds.extend(tally.spent_kinds().map(|(kind, _)| kind));
     kinds.extend(tally.refunded_kinds().map(|(kind, _)| kind));
     if kinds.is_empty() {
-        return "no economy".to_string();
+        return "No economy".to_string();
     }
     kinds
         .into_iter()
@@ -1055,7 +1093,8 @@ fn economy_line(tally: &PlayerTally) -> String {
                 String::new()
             };
             format!(
-                "{kind} +{gathered}/-{spent}{back}",
+                "{} +{gathered}/-{spent}{back}",
+                pretty_name(kind),
                 gathered = tally.gathered(kind),
                 spent = tally.spent(kind),
             )
@@ -1086,13 +1125,14 @@ fn card_button(label: &str, base: Color) -> impl Bundle {
 }
 
 /// Rebuilds the command card whenever what it would show changes: the leading
-/// selection, the leading entity's own type, the leading entity having risen,
-/// or the first and last broodling the player has.
+/// selection, the leading entity's own type or owner, the leading entity
+/// having risen, or the first and last broodling the player has.
 pub fn update_command_card(
     session: Res<GameSession>,
     leading: Res<Leading>,
     registry: Res<ContentRegistry>,
     changed: Query<&EntityInfoComponent, Changed<EntityInfoComponent>>,
+    owned: Query<&EntityInfoComponent, Changed<OwnerComponent>>,
     entities: Query<(
         &EntityInfoComponent,
         Option<&MorphComponent>,
@@ -1135,6 +1175,9 @@ pub fn update_command_card(
     let leading_type_changed = leading
         .0
         .is_some_and(|id| changed.iter().any(|info| info.id() == id));
+    let leading_owner_changed = leading
+        .0
+        .is_some_and(|id| owned.iter().any(|info| info.id() == id));
     let leading_risen = leading.0.is_some_and(|id| {
         finished
             .read()
@@ -1174,6 +1217,7 @@ pub fn update_command_card(
     let morph_button_stale = changing == morph_button.is_empty();
     if !leading.is_changed()
         && !leading_type_changed
+        && !leading_owner_changed
         && !leading_risen
         && !brood_button_stale
         && !morph_button_stale
@@ -1308,12 +1352,12 @@ pub fn update_command_card(
             ));
         }
         if trains_any {
-            parent.spawn((CancelTrainButton, card_button("Cancel Unit", BUTTON_NORMAL)));
+            parent.spawn((CancelTrainButton, card_button("Cancel unit", BUTTON_NORMAL)));
         }
         if researches_any {
             parent.spawn((
                 CancelResearchButton,
-                card_button("Cancel Research", BUTTON_NORMAL),
+                card_button("Cancel research", BUTTON_NORMAL),
             ));
         }
         if own_cancelable_rise {
@@ -1335,7 +1379,7 @@ pub fn update_command_card(
             ));
             parent.spawn((
                 UnloadButton { at_point: true },
-                card_button("Unload To", BUTTON_NORMAL),
+                card_button("Unload to", BUTTON_NORMAL),
             ));
         }
     });
@@ -1680,9 +1724,10 @@ enum CardAction {
 }
 
 /// Recolors the gated card buttons from what the executor would currently
-/// allow: a train, research, skill or change of form the leading entity may
-/// not start now (see [`orders::can_start`]), or any whose requirements are
-/// unmet, grays out, as does a research that is done or already under way;
+/// allow: a train, research or change of form the leading entity may not
+/// start now (see [`orders::can_start`]), a skill it may not cast now (see
+/// [`cast::judge_issue`]), or any whose requirements are unmet, grays out, as
+/// does a research that is done or already under way;
 /// a build, whose site is not placed yet, by its requirements, a bound tunnel
 /// end and the builder's operation alone. The hovered button's price, or a
 /// grayed one's reason, is written to the [`CardHint`] line.
@@ -1726,14 +1771,6 @@ pub fn update_card_availability(world: &mut World) {
     let operating = |world: &World| {
         leading.is_some_and(|entity| {
             matches!(entity_def::operation(world, entity), Operation::Operating)
-        })
-    };
-    let ready = |world: &World, skill: SkillId| {
-        leading.is_some_and(|entity| {
-            world
-                .entity(entity)
-                .get::<SkillsComponent>()
-                .is_some_and(|skills| skills.ready(skill))
         })
     };
     // What the change under way answers a cancel with: a refundable one
@@ -1832,12 +1869,6 @@ pub fn update_card_availability(world: &mut World) {
                 .entity(type_name)
                 .is_none_or(|def| requirements::met(world, player, leading, &def.requires))
         };
-        let skill_requirements_met = |world: &World, skill: SkillId| {
-            world
-                .resource::<ContentRegistry>()
-                .skill_def(skill)
-                .is_none_or(|def| requirements::met(world, player, leading, &def.requires))
-        };
         let (available, normal, hovered) = match &action {
             CardAction::Train(type_name) => (
                 type_requirements_met(world, type_name)
@@ -1885,19 +1916,21 @@ pub fn update_card_availability(world: &mut World) {
                     );
                 (available, RESEARCH_NORMAL, RESEARCH_HOVERED)
             }
-            // The cooldown is judged where the cast is issued, so a skill
-            // still cooling down is refused outright: the button says so
-            // rather than swallowing the click.
+            // A skill is available when [`cast::judge_issue`] accepts it with
+            // no aim picked yet.
             CardAction::Skill(skill) => (
-                skill_requirements_met(world, *skill)
-                    && !summon_refused(world, leading, *skill)
-                    && operating(world)
-                    && ready(world, *skill),
+                leading.is_some_and(|entity| {
+                    cast::judge_issue(world, player, entity, *skill, Aiming::Unpicked).is_ok()
+                }),
                 SKILL_NORMAL,
                 SKILL_HOVERED,
             ),
             CardAction::PlayerSkill(skill) => (
-                skill_requirements_met(world, *skill),
+                // As the executor asks: of the player alone.
+                world
+                    .resource::<ContentRegistry>()
+                    .skill_def(*skill)
+                    .is_none_or(|def| requirements::met(world, player, None, &def.requires)),
                 SKILL_NORMAL,
                 SKILL_HOVERED,
             ),
@@ -1975,6 +2008,7 @@ fn aim_refusal_words(refusal: AimRefusal) -> &'static str {
         AimRefusal::WrongSide => "Not a side it can be cast on",
         AimRefusal::WrongKind => "Not something it can be cast on",
         AimRefusal::Uncarried => "It would do nothing to that",
+        AimRefusal::Unheld => "The buff would not hold there",
         AimRefusal::LandingUnseen => "Cannot land where it cannot see",
     }
 }
@@ -2019,7 +2053,7 @@ fn price_words(world: &World, action: &CardAction) -> String {
                 SkillCaster::Player { price, .. } => price_parts(price),
             };
             parts.push(format!(
-                "{} cooldown",
+                "{} Cooldown",
                 time::seconds_text(time::seconds(def.cooldown))
             ));
             parts.join(", ")
@@ -2049,22 +2083,22 @@ fn price_words(world: &World, action: &CardAction) -> String {
     }
 }
 
-/// Each kind of a price in words: `60 gold`.
+/// Each kind of a price in words: `60 Gold`.
 fn price_parts(price: &Price) -> Vec<String> {
     price
         .iter()
-        .map(|(kind, amount)| format!("{amount} {kind}"))
+        .map(|(kind, amount)| format!("{amount} {}", pretty_name(kind)))
         .collect()
 }
 
-/// Each cost in words: a price's kinds, `25 energy`, `10 health`.
+/// Each cost in words: a price's kinds, `25 Energy`, `10 Health`.
 fn cost_parts(costs: &[Cost]) -> Vec<String> {
     let mut parts = Vec::new();
     for cost in costs {
         match cost {
             Cost::Resources(price) => parts.extend(price_parts(price)),
-            Cost::Energy(amount) => parts.push(format!("{amount} energy")),
-            Cost::Health(amount) => parts.push(format!("{amount} health")),
+            Cost::Energy(amount) => parts.push(format!("{amount} Energy")),
+            Cost::Health(amount) => parts.push(format!("{amount} Health")),
         }
     }
     parts
@@ -2165,23 +2199,24 @@ fn card_hint(
             let unmet = registry
                 .skill_def(*skill)
                 .and_then(|def| needs(&def.requires));
-            match (unmet, leading) {
-                (Some(words), _) => words,
-                (None, Some(_)) if summon_refused(world, leading, *skill) => {
-                    "Already bound to its other end".to_string()
-                }
-                (None, None) => "Nothing selected can cast it".to_string(),
-                (None, Some(entity)) => match entity_def::operation(world, entity) {
-                    Operation::Rising => still_rising_words(world, entity),
-                    Operation::Disabled(_) => "Switched off".to_string(),
-                    Operation::Stranded => "Waiting for room to come back".to_string(),
-                    Operation::Operating => match world.entity(entity).get::<SkillsComponent>() {
-                        Some(skills) if skills.skills().any(|known| known == *skill) => {
-                            "Cooling down".to_string()
+            match leading {
+                None => unmet.unwrap_or_else(|| "Nothing selected can cast it".to_string()),
+                Some(entity) => {
+                    match cast::judge_issue(world, player, entity, *skill, Aiming::Unpicked) {
+                        Ok(()) => String::new(),
+                        Err(CastRefusal::Unmet) => unmet.unwrap_or_default(),
+                        Err(CastRefusal::Caster(Refusal::Incapable)) => {
+                            "It cannot cast this".to_string()
                         }
-                        Some(_) | None => "It cannot cast this".to_string(),
-                    },
-                },
+                        Err(CastRefusal::Caster(refusal)) => refusal_words(world, entity, refusal),
+                        Err(CastRefusal::Bound) => "Already bound to its other end".to_string(),
+                        Err(CastRefusal::CoolingDown) => "Cooling down".to_string(),
+                        Err(CastRefusal::Aim(refusal)) => aim_refusal_words(refusal).to_string(),
+                        Err(CastRefusal::OutOfReach) => {
+                            unreachable!("the card judges no picked aim, so no reach")
+                        }
+                    }
+                }
             }
         }
         CardAction::PlayerSkill(skill) => registry
@@ -2271,22 +2306,6 @@ fn raising_refused(world: &World, leading: Option<Entity>, type_name: &str) -> b
         .is_some_and(|def| tunnels::refuses_raising(world, entity, def))
 }
 
-/// Whether `skill` summons an end of the leading entity's tunnel while that
-/// entity, a tunnel end, is already bound.
-fn summon_refused(world: &World, leading: Option<Entity>, skill: SkillId) -> bool {
-    let Some(entity) = leading else {
-        return false;
-    };
-    let registry = world.resource::<ContentRegistry>();
-    match registry.skill_def(skill).map(|def| &def.caster) {
-        Some(SkillCaster::Entity {
-            effect: EntityCastEffect::Summon { entity_type, .. },
-            ..
-        }) => tunnels::refuses_raising(world, entity, registry.def(*entity_type)),
-        Some(SkillCaster::Entity { .. } | SkillCaster::Player { .. }) | None => false,
-    }
-}
-
 /// Why `entity`, in `operation`, does not act, in words; empty when it
 /// operates.
 fn operation_words(world: &World, entity: Entity, operation: Operation) -> String {
@@ -2339,7 +2358,8 @@ fn unmet_words(
         | Requirement::Risen
         | Requirement::Idle
         | Requirement::IdleFor(_)
-        | Requirement::UnhurtFor(_) => {
+        | Requirement::UnhurtFor(_)
+        | Requirement::Over { .. } => {
             (!requirements::met(world, player, leading, std::slice::from_ref(entry)))
                 .then(|| leaf_words(world, entry))
         }
@@ -2374,7 +2394,8 @@ fn requirement_words(world: &World, entry: &Requirement) -> String {
         | Requirement::Risen
         | Requirement::Idle
         | Requirement::IdleFor(_)
-        | Requirement::UnhurtFor(_) => leaf_words(world, entry),
+        | Requirement::UnhurtFor(_)
+        | Requirement::Over { .. } => leaf_words(world, entry),
     }
 }
 
@@ -2407,10 +2428,43 @@ fn leaf_words(world: &World, entry: &Requirement) -> String {
         Requirement::Risen => "finished building".to_string(),
         Requirement::Idle => "standing idle".to_string(),
         Requirement::IdleFor(ticks) => {
-            format!("{} idle", time::seconds_text(time::seconds(*ticks)))
+            format!("{} idle", time::seconds_words(time::seconds(*ticks)))
         }
         Requirement::UnhurtFor(ticks) => {
-            format!("{} unhurt", time::seconds_text(time::seconds(*ticks)))
+            format!("{} unhurt", time::seconds_words(time::seconds(*ticks)))
+        }
+        Requirement::Over {
+            terrains,
+            coverage,
+            layers,
+        } => {
+            let ground = match terrains {
+                Terrains::Any => "standing on the map".to_string(),
+                Terrains::Only(_) => {
+                    let names = registry
+                        .terrains()
+                        .filter(|&(_, terrain)| terrains.admits(terrain))
+                        .map(|(name, _)| pretty_name(name))
+                        .collect::<Vec<_>>()
+                        .join(" or ");
+                    match coverage {
+                        Coverage::Every => format!("standing on {names}"),
+                        Coverage::Any => format!("touching {names}"),
+                    }
+                }
+            };
+            // The layers are named only when some are left out.
+            if *layers == registry.registered_layers() {
+                ground
+            } else {
+                let names = registry
+                    .layers()
+                    .filter(|&(_, layer)| *layers & layer != LayerMask::EMPTY)
+                    .map(|(name, _)| pretty_name(name))
+                    .collect::<Vec<_>>()
+                    .join(" or ");
+                format!("{ground} ({names})")
+            }
         }
     }
 }
@@ -2592,12 +2646,10 @@ pub fn skill_card_input(
                 let Some(def) = registry.skill_def(button.skill) else {
                     continue;
                 };
-                let target = match &def.caster {
-                    SkillCaster::Entity { effect, .. } => effect.target(),
-                    SkillCaster::Player { .. } => {
-                        unreachable!("entity types declare only entity-cast skills")
-                    }
-                };
+                let target = def
+                    .entity_effect()
+                    .expect("entity types declare only entity-cast skills")
+                    .target();
                 match target {
                     // Self-cast: fires immediately for every selected unit that
                     // has the skill.
@@ -2783,19 +2835,21 @@ pub fn group_roster_input(
     }
 }
 
-/// Turns a type id like `town_hall` into a display name like `Town Hall`.
-fn pretty_name(type_name: &str) -> String {
-    type_name
-        .split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
+/// Turns a content name like `town_hall` into a display name like `Town Hall`.
+pub(crate) fn pretty_name(name: &str) -> String {
+    name.split('_')
+        .map(capitalized)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// `text` with its first letter capitalized, as a whole text starts.
+pub(crate) fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// The topic an order-queue entry works, if it is a research entry.

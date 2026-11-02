@@ -198,6 +198,7 @@ pub fn run() {
                 ),
                 minimap::order_input,
                 input::order_mode_input,
+                input::disarm_lost_caster,
                 input::hover_aim.in_set(render::ReadsSightings),
                 input::judge_aim,
                 input::targeting_input.in_set(render::ReadsSightings),

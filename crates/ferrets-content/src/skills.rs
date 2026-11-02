@@ -47,17 +47,22 @@ impl SkillId {
 /// How close a caster must be to what it casts at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reach {
-    /// Wherever the caster stands: the cast lands the moment it is ordered,
-    /// however far off the aim is.
+    /// From wherever the caster stands, without walking, however far off the
+    /// aim is.
     Wherever,
-    /// Within the cells this comes to, which the caster walks into first.
-    /// Zero is satisfied only by standing inside the aim's own footprint.
+    /// Within the cells this comes to, which the caster walks into first, or,
+    /// for a transient cast, stands within already. Zero is satisfied only by
+    /// standing inside the aim's own footprint.
     Within(Quantity),
 }
 
-/// How long a cast holds its caster once it has settled into reach.
+/// How a cast takes its caster's time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Casting {
+    /// It lands the moment it is ordered, from where the caster stands,
+    /// without becoming an order: the caster goes on with whatever it was
+    /// doing.
+    Transient,
     /// It lands the moment the caster is in reach, and takes no more of its
     /// time.
     Instant,
@@ -106,7 +111,7 @@ pub enum SkillCaster {
         /// What one cast costs. Every entry must be payable and all are paid,
         /// so a cast never half-charges. Empty means free.
         costs: Vec<Cost>,
-        /// How long the cast holds the caster once it is in reach.
+        /// How the cast takes its caster's time.
         casting: Casting,
         /// What the cast does, and what it is aimed at.
         effect: EntityCastEffect,
@@ -410,6 +415,37 @@ impl EntityCastEffect {
             EntityCastEffect::Relocate { journey, .. } => journey.target(),
         }
     }
+
+    /// The buff the cast applies, to whomever it lands on.
+    pub fn applied_buff(&self) -> Option<EntityBuffId> {
+        match self {
+            EntityCastEffect::ApplyBuff { buff, .. } => Some(*buff),
+            EntityCastEffect::RemoveBuff { .. }
+            | EntityCastEffect::Damage { .. }
+            | EntityCastEffect::Heal { .. }
+            | EntityCastEffect::Field { .. }
+            | EntityCastEffect::Watch { .. }
+            | EntityCastEffect::Summon { .. }
+            | EntityCastEffect::Relocate { .. } => None,
+        }
+    }
+
+    /// The buff the cast applies to its own caster.
+    pub fn buff_on_caster(&self) -> Option<EntityBuffId> {
+        match self {
+            EntityCastEffect::ApplyBuff { buff, on } => match on {
+                Recipient::Caster => Some(*buff),
+                Recipient::Standing { .. } => None,
+            },
+            EntityCastEffect::RemoveBuff { .. }
+            | EntityCastEffect::Damage { .. }
+            | EntityCastEffect::Heal { .. }
+            | EntityCastEffect::Field { .. }
+            | EntityCastEffect::Watch { .. }
+            | EntityCastEffect::Summon { .. }
+            | EntityCastEffect::Relocate { .. } => None,
+        }
+    }
 }
 
 /// Who a relocation moves, and where to. A journey's destination is never
@@ -606,4 +642,15 @@ pub struct SkillDef {
     /// player-scoped entry is asked of the caster's owner, an actor-scoped one
     /// of the caster.
     pub requires: Vec<Requirement>,
+}
+
+impl SkillDef {
+    /// What the skill does when an entity casts it; `None` for a player
+    /// skill.
+    pub fn entity_effect(&self) -> Option<&EntityCastEffect> {
+        match &self.caster {
+            SkillCaster::Entity { effect, .. } => Some(effect),
+            SkillCaster::Player { .. } => None,
+        }
+    }
 }

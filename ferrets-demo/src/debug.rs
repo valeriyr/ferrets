@@ -24,6 +24,7 @@ use ferrets_simulation::{
 };
 
 use crate::{
+    hud,
     input::{self, Clicked, InputMode},
     map,
     render::{self, CELL_PX, FogReveal, Smoothing, world_center},
@@ -159,10 +160,10 @@ pub fn debug_readout(
     let hover = cursor_world(&windows, &cameras)
         .and_then(|world| input::entity_at(world, Clicked::Standing, &registry, &entities))
         .and_then(|id| entities.iter().find(|(info, ..)| info.id() == id))
-        .map(|(info, ..)| format!("{} #{}", info.type_name(), info.id().0));
+        .map(|(info, ..)| format!("{} #{}", hud::pretty_name(info.type_name()), info.id().0));
     let hover_str = hover.as_deref().unwrap_or("-");
     let ground_str = cell.map_or_else(
-        || "-".to_string(),
+        || "Terrain: -".to_string(),
         |(x, y)| ground_text(&map, &registry, CellPos::new(x, y)),
     );
 
@@ -184,15 +185,15 @@ pub fn debug_readout(
         ids => format!("{} units", ids.len()),
     };
     let mode_str = match &*mode {
-        InputMode::Normal => "normal",
-        InputMode::PlacingBuild(_) => "placing",
-        InputMode::PlacingWarp(_) => "warping",
-        InputMode::Targeting(_) => "targeting",
+        InputMode::Normal => "Normal",
+        InputMode::PlacingBuild(_) => "Placing",
+        InputMode::PlacingWarp(_) => "Warping",
+        InputMode::Targeting(_) => "Targeting",
     };
 
     let model_str = match map.movement_model() {
-        MovementModel::Cell => "cell",
-        MovementModel::Continuous => "continuous",
+        MovementModel::Cell => "Cell",
+        MovementModel::Continuous => "Continuous",
     };
 
     // The cadence the game is asking for, and the one it is actually holding: a
@@ -207,16 +208,16 @@ pub fn debug_readout(
         // Game time at the nominal cadence, so it reads the same whatever the
         // game is throttled to.
         **text = format!(
-            "tick {} ({}) | {held_hz:.1}/{wanted_hz:.0} Hz | {} | {} | sound {} | layer {}\n\
-             selected {} | {} | LMB {} RMB {}\n\
-             cursor {} | hover {}\n\
-             ground {}",
+            "Tick: {} ({}) | Hz: {held_hz:.1}/{wanted_hz:.0} | Movement: {} | View: {} | Sound: {} | Layer: {}\n\
+             Selected: {} | Mode: {} | Mouse: LMB {}, RMB {}\n\
+             Cursor: {} | Hover: {}\n\
+             {}",
             session.tick(),
             time::clock_text(time::seconds(session.tick())),
             model_str,
-            if smoothing.0 { "smoothed" } else { "per tick" },
-            if muted.0 { "off" } else { "on" },
-            debug.layer,
+            if smoothing.0 { "Smoothed" } else { "Per tick" },
+            if muted.0 { "Off" } else { "On" },
+            hud::pretty_name(&debug.layer),
             selection_str,
             mode_str,
             mouse.pressed(MouseButton::Left) as u8,
@@ -585,7 +586,7 @@ fn fill_cell(gizmos: &mut Gizmos, x: u32, y: u32) {
 fn ground_text(map: &Map, registry: &ContentRegistry, cell: CellPos) -> String {
     let grid = map.nav_grid();
     let Some(terrain) = grid.terrain(cell) else {
-        return "off the map".to_string();
+        return "Terrain: Off the map".to_string();
     };
     let terrain = registry
         .terrains()
@@ -596,14 +597,27 @@ fn ground_text(map: &Map, registry: &ContentRegistry, cell: CellPos) -> String {
         .filter_map(|(name, layer)| {
             let relief = grid.relief(layer, cell)?;
             let slope = match relief.slope {
-                Some(Slope::Ramp(rises)) => format!("ramp rising {rises:?}"),
-                Some(Slope::Cliff(rises)) => format!("cliff rising {rises:?}"),
+                Some(Slope::Ramp(rises)) => {
+                    format!("ramp rising {}", format!("{rises:?}").to_lowercase())
+                }
+                Some(Slope::Cliff(rises)) => {
+                    format!("cliff rising {}", format!("{rises:?}").to_lowercase())
+                }
                 None => "flat".to_string(),
             };
-            Some(format!("{name} level {} {slope}", relief.level))
+            Some(format!(
+                "{}: Level {}, {}",
+                hud::pretty_name(name),
+                relief.level,
+                hud::capitalized(&slope)
+            ))
         })
         .collect();
-    format!("{terrain} | {}", layers.join(" | "))
+    format!(
+        "Terrain: {} | {}",
+        hud::pretty_name(terrain),
+        layers.join(" | ")
+    )
 }
 
 /// The grid cell under the cursor, if the cursor is over the playable area.

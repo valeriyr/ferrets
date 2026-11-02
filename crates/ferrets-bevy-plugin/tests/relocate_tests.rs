@@ -595,6 +595,24 @@ fn caster_moved_by_its_own_cast_carries_on_with_what_it_queued_after() {
     );
 }
 
+#[test]
+fn walker_moved_by_its_own_transient_cast_drops_its_walk() {
+    let mut app = app();
+    let (mage, mage_id) = utils::create_owned(&mut app, "mage", 3, 5, 0);
+
+    // Walking twenty cells up at half a cell a tick, the mage flashes to
+    // (10, 5): set down at rest there, its walk is dropped as any moved body's.
+    utils::order_move(&mut app, mage, 3, 25);
+    utils::run_ticks(&mut app, 1);
+    utils::cast_at(&mut app, mage_id, "flash", 10, 5);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(10, 5));
+    assert!(utils::order_queue_is_empty(app.world_mut(), mage));
+    utils::run_ticks(&mut app, 40);
+    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(10, 5));
+    assert_eq!(utils::energy_as_u32(&app, mage), 150, "200 - 50");
+}
+
 //
 // ─── Pull, swap and portal ───────────────────────────────────────────────────
 //
@@ -978,7 +996,8 @@ fn gathering_takes_hatch_carrying_its_seated_grubs_but_never_grubs_alone() {
 const CHANGE_TIME: u32 = 20;
 
 /// App with two players: a `mage` seeing ten cells around, with 200 energy
-/// and every relocation below, each costing 50; walking `footman`s, each
+/// and every relocation below, each costing 50 (`flash`, a blink cast
+/// transient); walking `footman`s, each
 /// changing into a `veteran`; a `sapper` that never stands on lasting
 /// `creep`; a 2×2 `hall`, buildable; a `mole` that holds its ground without
 /// claiming its cell; a `snail` crawling a quarter cell a tick; a `wagon`
@@ -1282,6 +1301,24 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                 )
             })
             .collect();
+        ids.push(registry.register_skill(
+            "flash",
+            SkillDef {
+                cooldown: 10,
+                caster: SkillCaster::Entity {
+                    costs: vec![Cost::Energy(FixedU64::from_num(50))],
+                    casting: Casting::Transient,
+                    effect: EntityCastEffect::Relocate {
+                        journey: Box::new(Journey::FromCaster {
+                            party: CasterParty::Caster,
+                            to: FromCasterTo::Aim(cell()),
+                        }),
+                        landing: Landing::Anywhere,
+                    },
+                },
+                requires: Vec::new(),
+            },
+        ));
         ids.push(registry.register_skill(
             "slow_blink",
             SkillDef {

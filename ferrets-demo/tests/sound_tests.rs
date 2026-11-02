@@ -806,7 +806,7 @@ fn debug_readout_reports_whether_sound_is_on() {
 
     show_readout(&mut app);
     assert!(
-        readout_text(&mut app, readout).contains("sound off"),
+        readout_text(&mut app, readout).contains("Sound: Off"),
         "muted is what the readout says while nothing can be heard: {:?}",
         readout_text(&mut app, readout)
     );
@@ -814,9 +814,31 @@ fn debug_readout_reports_whether_sound_is_on() {
     app.world_mut().resource_mut::<Muted>().0 = false;
     show_readout(&mut app);
     assert!(
-        readout_text(&mut app, readout).contains("sound on"),
+        readout_text(&mut app, readout).contains("Sound: On"),
         "and it follows the toggle: {:?}",
         readout_text(&mut app, readout)
+    );
+}
+
+//
+// ─── Debug readout ───────────────────────────────────────────────────────
+//
+
+#[test]
+fn debug_readout_labels_each_field() {
+    let mut app = readout_app();
+    let readout = app.world_mut().spawn((DebugText, Text::new(""))).id();
+    show_readout(&mut app);
+
+    // Bevy's fixed step at its default 64 Hz, unthrottled; smoothing on and
+    // the ground layer drawn by default; muted. With no window there is no
+    // cursor: every field under it reads "-".
+    assert_eq!(
+        readout_text(&mut app, readout),
+        "Tick: 0 (00:00) | Hz: 64.0/64 | Movement: Cell | View: Smoothed | Sound: Off | Layer: Ground\n\
+         Selected: - | Mode: Normal | Mouse: LMB 0, RMB 0\n\
+         Cursor: - | Hover: -\n\
+         Terrain: -"
     );
 }
 

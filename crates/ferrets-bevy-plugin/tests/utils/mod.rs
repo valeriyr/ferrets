@@ -128,7 +128,7 @@ pub const AIR: LayerId = LayerId::new(2);
 /// of unless a test lays water.
 pub const LAND: TerrainId = TerrainId::new(1);
 /// The terrain [`register_dry`] adds.
-const WATER: TerrainId = TerrainId::new(2);
+pub const WATER: TerrainId = TerrainId::new(2);
 /// The domain [`register_ground`] declares: the ground layer over every
 /// terrain.
 pub const GROUND_DOMAIN: DomainId = DomainId::new(0);
@@ -3793,6 +3793,14 @@ pub fn skill_id(app: &App, name: &str) -> SkillId {
         .resource::<ContentRegistry>()
         .skill(name)
         .unwrap_or_else(|| panic!("skill '{name}' is registered"))
+}
+
+/// The id of the registered entity buff `name`.
+pub fn entity_buff_id(app: &App, name: &str) -> EntityBuffId {
+    app.world()
+        .resource::<ContentRegistry>()
+        .entity_buff(name)
+        .unwrap_or_else(|| panic!("entity buff '{name}' is registered"))
 }
 
 /// Has the local player cast the named skill from `caster` at `target`; the

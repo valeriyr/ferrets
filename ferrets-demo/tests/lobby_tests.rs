@@ -27,7 +27,7 @@ fn explicit_udp_port_parses_exactly() {
 fn out_of_range_udp_port_is_rejected_by_value() {
     assert_eq!(
         parse_udp_port("70000"),
-        Err("invalid udp port '70000'".to_string())
+        Err("Invalid UDP port '70000'".to_string())
     );
 }
 
@@ -43,5 +43,5 @@ fn explicit_tcp_port_parses_exactly() {
 
 #[test]
 fn zero_tcp_port_is_rejected_by_value() {
-    assert_eq!(parse_tcp_port("0"), Err("invalid tcp port '0'".to_string()));
+    assert_eq!(parse_tcp_port("0"), Err("Invalid TCP port '0'".to_string()));
 }

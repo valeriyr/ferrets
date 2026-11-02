@@ -8,6 +8,7 @@ use ferrets_content::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     build::BuilderAttendance,
+    coverage::Coverage,
     domain::DomainDef,
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
@@ -19,11 +20,13 @@ use ferrets_content::{
     pool::{Pool, PoolInitial},
     pool_def::PoolId,
     price::{self, Price},
+    quantity::Quantity,
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearchId},
     skills::{
-        Casting, EntityCastEffect, PlayerCastEffect, Reach, Recipient, SkillCaster, SkillDef, Whom,
+        Casting, EntityCastEffect, PaymentPoint, PlayerCastEffect, Reach, Recipient, SkillCaster,
+        SkillDef, Whom,
     },
     stack_rule::StackRule,
     stats::{EntityModifier, ModifierOp},
@@ -288,6 +291,13 @@ fn scripts_read_skill_catalogue() {
             local focus = content.skills.battle_focus
             if focus.caster ~= "entity" then error("wrong caster") end
             if focus.target ~= "caster" then error("wrong target") end
+            if focus.cast ~= "instant" then error("wrong cast") end
+            if content.skills.second_wind.cast ~= "transient" then
+                error("wrong second wind cast")
+            end
+            if content.skills.rally_cry.cast ~= "delayed" then
+                error("wrong rally cry cast")
+            end
             local wanted = focus.requires[1]
             if wanted.kind ~= "research" or wanted.name ~= "smithing" then
                 error("wrong requires")
@@ -295,6 +305,7 @@ fn scripts_read_skill_catalogue() {
             local drums = content.skills.war_drums
             if drums.caster ~= "player" then error("wrong drums caster") end
             if drums.target ~= nil then error("drums take no target") end
+            if drums.cast ~= nil then error("drums take no caster's time") end
             if drums.requires ~= nil then error("drums require nothing") end
             local lab = content.entities.lab
             if lab.skills[1] ~= "battle_focus" then error("wrong lab skills") end
@@ -316,7 +327,7 @@ fn scripts_read_requirement_nodes_and_state_leaves() {
             if either.kind ~= "any" or #either.items ~= 2 then error("wrong any") end
             if either.items[1].kind ~= "entity_type" or either.items[1].name ~= "lab" then error("wrong first branch") end
             local both = either.items[2]
-            if both.kind ~= "all" or #both.items ~= 9 then error("wrong all") end
+            if both.kind ~= "all" or #both.items ~= 11 then error("wrong all") end
             if both.items[1].kind ~= "health" or both.items[1].under_share ~= "0.5" then error("wrong health") end
             if both.items[2].kind ~= "stat" or both.items[2].name ~= "speed" or both.items[2].at_least ~= "1" then error("wrong stat") end
             if both.items[3].kind ~= "idle" then error("wrong idle") end
@@ -326,6 +337,10 @@ fn scripts_read_requirement_nodes_and_state_leaves() {
             if both.items[7].kind ~= "stat" or both.items[7].at_least_share ~= "1.5" then error("wrong stat share") end
             if both.items[8].kind ~= "risen" then error("wrong risen") end
             if both.items[9].kind ~= "unless" or both.items[9].item.kind ~= "idle" then error("wrong unless") end
+            local touching = both.items[10]
+            if touching.kind ~= "over" or touching.coverage ~= "any" or #touching.terrains ~= 1 or touching.terrains[1] ~= "land" or #touching.layers ~= 1 or touching.layers[1] ~= "ground" then error("wrong over") end
+            local anywhere = both.items[11]
+            if anywhere.kind ~= "over" or anywhere.coverage ~= "every" or #anywhere.terrains ~= 2 or anywhere.terrains[1] ~= "land" or anywhere.terrains[2] ~= "water" then error("wrong over any") end
             return {}
         end"#,
     );
@@ -941,14 +956,18 @@ fn cell(x: u32, y: u32) -> FixedUVec2 {
 
 /// A content view built from a real registry holding the `smithing` research
 /// (30 gold, 200 ticks, requires "lab") and the free `tactics` unlock, plus
-/// the handle `smithing` resolves to. The registry also carries three skills —
-/// `battle_focus` (entity-cast on itself, requires `smithing`), `second_wind`
-/// (entity-cast on an ally), and the player-cast `war_drums` — carried by the
-/// `lab` type where a type is needed.
+/// the handle `smithing` resolves to. The registry also carries four skills:
+/// `battle_focus` (entity-cast on itself, requires `smithing`) and
+/// `second_wind` (entity-cast transient on an ally), both carried by the `lab`
+/// type; `rally_cry` (entity-cast on itself over ten ticks), carried by none;
+/// and the player-cast `war_drums`.
 fn research_content() -> (ContentView, ResearchId) {
     let mut registry = ContentRegistry::default();
     let ground = registry.register_layer("ground", LayerLevel::At(1), &[]);
-    registry.register_terrain("land");
+    // A layer no requirement names, so the view lists only the named one.
+    registry.register_layer("air", LayerLevel::At(5), &[]);
+    let land = registry.register_terrain("land");
+    registry.register_terrain("water");
     registry.register_domain("ground", DomainDef::new(ground, Terrains::Any, None));
     registry.register_resource("gold");
     let smithing = registry.register_research(
@@ -985,7 +1004,7 @@ fn research_content() -> (ContentView, ResearchId) {
             cooldown: 5,
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
-                casting: Casting::Instant,
+                casting: Casting::Transient,
                 effect: EntityCastEffect::Heal {
                     amount: FixedU64::ONE,
                     on: Recipient::Standing {
@@ -995,6 +1014,25 @@ fn research_content() -> (ContentView, ResearchId) {
                         },
                         reach: Reach::Wherever,
                     },
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register_skill(
+        "rally_cry",
+        SkillDef {
+            cooldown: 5,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Delayed {
+                    point: Quantity::Constant(10),
+                    period: Quantity::Constant(10),
+                    pays: PaymentPoint::AtLanding,
+                },
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Caster,
                 },
             },
             requires: Vec::new(),
@@ -1119,6 +1157,16 @@ fn research_content() -> (ContentView, ResearchId) {
                     },
                     Requirement::Risen,
                     Requirement::Unless(Box::new(Requirement::Idle)),
+                    Requirement::Over {
+                        terrains: Terrains::Only(land.into()),
+                        coverage: Coverage::Any,
+                        layers: ground.into(),
+                    },
+                    Requirement::Over {
+                        terrains: Terrains::Any,
+                        coverage: Coverage::Every,
+                        layers: ground.into(),
+                    },
                 ]),
             ])]),
     );

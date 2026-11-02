@@ -5,9 +5,7 @@ mod utils;
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 use ferrets_bevy_plugin::PendingInput;
 use ferrets_content::{
-    affiliation::Affiliation,
-    field::{FieldCoverage, FieldPlacement},
-    location::Solidity,
+    affiliation::Affiliation, coverage::Coverage, field::FieldPlacement, location::Solidity,
     registry::ContentRegistry,
 };
 use ferrets_demo::{
@@ -121,7 +119,7 @@ fn ghost_judges_field_rules_on_coverage_overlay_shows() {
     let on_enemy_power = [FieldPlacement::Requires {
         field: power,
         of: Affiliation::Enemy,
-        coverage: FieldCoverage::Every,
+        coverage: Coverage::Every,
     }];
     let rect = CellRect::new(CellPos::new(21, 21), CellSize::ONE);
 
@@ -510,7 +508,7 @@ fn ghost_snapped_to_source_fits_only_as_its_field_rules_say() {
     def.field_placement = vec![FieldPlacement::Requires {
         field: creep,
         of: Affiliation::Anyone,
-        coverage: FieldCoverage::Every,
+        coverage: Coverage::Every,
     }];
     let info = world.get::<EntityInfoComponent>(mine).expect("placed");
     let location = world.get::<LocationComponent>(mine).expect("placed");

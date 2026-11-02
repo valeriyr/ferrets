@@ -5,7 +5,7 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_content::{
     cost::Cost,
-    entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
+    entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
@@ -46,7 +46,7 @@ fn drain_reaches_type_that_never_declared_it() {
 
     // The keep names no drain; its health pool carries one at zero, so the
     // buff's 2 a tick lands: 100 − 2 = 98.
-    let burning = buff_id(&app, "burning");
+    let burning = utils::entity_buff_id(&app, "burning");
     utils::apply_buff(app.world_mut(), keep, burning);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::health_as_u32(&app, keep), 98);
@@ -74,7 +74,7 @@ fn energy_regen_reaches_type_that_names_none() {
     // 40 − 10 = 30, nothing regenerated unsaid; then 1 a tick from the buff.
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::energy_as_u32(&app, keep), 30);
-    let bright = buff_id(&app, "bright");
+    let bright = utils::entity_buff_id(&app, "bright");
     utils::apply_buff(app.world_mut(), keep, bright);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::energy_as_u32(&app, keep), 31);
@@ -90,7 +90,7 @@ fn share_keeps_share_as_maximum_comes_and_goes() {
     let keep = wounded_keep(&mut app, "50");
 
     // 50 of 100 is a half: a half of the doubled 200 is 100, and back to 50.
-    let doubled = buff_id(&app, "doubled");
+    let doubled = utils::entity_buff_id(&app, "doubled");
     utils::apply_buff(app.world_mut(), keep, doubled);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::health_as_u32(&app, keep), 100);
@@ -105,7 +105,7 @@ fn difference_moves_pool_by_same_amount() {
     let keep = wounded_keep(&mut app, "50");
 
     // +50 to the maximum is +50 to the pool: 50 → 100 of 150, and back.
-    let braced = buff_id(&app, "braced");
+    let braced = utils::entity_buff_id(&app, "braced");
     utils::apply_buff(app.world_mut(), keep, braced);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::health_as_u32(&app, keep), 100);
@@ -126,7 +126,7 @@ fn clamp_keeps_pool_under_new_maximum() {
 
     // Full at 100, the maximum halved by clamp: held at the new 50; lifted
     // again, the pool stays at 50 of 100.
-    let halved = buff_id(&app, "halved");
+    let halved = utils::entity_buff_id(&app, "halved");
     utils::apply_buff(app.world_mut(), keep, halved);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::health_as_u32(&app, keep), 50);
@@ -142,7 +142,7 @@ fn lowered_maximum_never_empties_live_pool() {
 
     // 1 of 100 moved by −99 is nothing, but a live pool is held at the least
     // live amount instead.
-    let crushed = buff_id(&app, "crushed");
+    let crushed = utils::entity_buff_id(&app, "crushed");
     utils::apply_buff(app.world_mut(), keep, crushed);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::health(&app, keep), FixedU64::DELTA);
@@ -156,8 +156,8 @@ fn difference_steps_before_clamp_arriving_together() {
     // 40 of 100. Difference steps before clamp: (100 + 50) = 150, 40 + 50 =
     // 90; then the clamp: 150 × 0.5 = 75, the 90 held under it at 75. Clamp
     // first would give 40 under 50, then 40 + 25 = 65.
-    let braced = buff_id(&app, "braced");
-    let halved = buff_id(&app, "halved");
+    let braced = utils::entity_buff_id(&app, "braced");
+    let halved = utils::entity_buff_id(&app, "halved");
     utils::apply_buff(app.world_mut(), keep, halved);
     utils::apply_buff(app.world_mut(), keep, braced);
     utils::run_ticks(&mut app, 1);
@@ -176,7 +176,7 @@ fn stack_change_is_part_leaving_and_arriving() {
 
     // One stack of +10 (difference): 100 → 110. The second stack leaves the
     // +10 (110 → 100) and brings +20 (100 → 120).
-    let layered = buff_id(&app, "layered");
+    let layered = utils::entity_buff_id(&app, "layered");
     utils::apply_buff(app.world_mut(), keep, layered);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::health_as_u32(&app, keep), 110);
@@ -209,8 +209,8 @@ fn simultaneous_arrivals_step_share_before_difference() {
     // Both in one tick. Share first: 50 × 200 / 100 = 100 of 200; then
     // difference: 100 + (300 − 200) = 200 of 300. `swell` stepping first, as
     // its earlier registration once had it, gives 150 then 225.
-    let doubled = buff_id(&app, "doubled");
-    let swell = buff_id(&app, "swell");
+    let doubled = utils::entity_buff_id(&app, "doubled");
+    let swell = utils::entity_buff_id(&app, "swell");
     utils::apply_buff(app.world_mut(), keep, swell);
     utils::apply_buff(app.world_mut(), keep, doubled);
     utils::run_ticks(&mut app, 1);
@@ -225,8 +225,8 @@ fn simultaneous_arrivals_of_one_shift_step_once() {
 
     // Both clamp, in one tick: one step to 100 × (1 + 1 − 0.5) = 150, the 100
     // held kept — not the cut clipping it to 50 before the raise.
-    let halved = buff_id(&app, "halved");
-    let grown = buff_id(&app, "grown");
+    let halved = utils::entity_buff_id(&app, "halved");
+    let grown = utils::entity_buff_id(&app, "grown");
     utils::apply_buff(app.world_mut(), keep, halved);
     utils::apply_buff(app.world_mut(), keep, grown);
     utils::run_ticks(&mut app, 1);
@@ -242,7 +242,7 @@ fn equal_parts_leave_one_by_one() {
     let mut app = app();
     let (keep, _) = utils::create_owned(&mut app, "keep", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    let plated = buff_id(&app, "plated");
+    let plated = utils::entity_buff_id(&app, "plated");
     let drill = player_buff_id(&app, "drill");
     utils::apply_buff(app.world_mut(), keep, plated);
     game_loop::buffs::apply_player_buff(app.world_mut(), 0, drill);
@@ -262,7 +262,7 @@ fn energy_pool_follows_its_maximum() {
     utils::run_ticks(&mut app, 1);
 
     // Full at 40, the energy maximum doubled with its share kept: 80 of 80.
-    let charged = buff_id(&app, "charged");
+    let charged = utils::entity_buff_id(&app, "charged");
     utils::apply_buff(app.world_mut(), keep, charged);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::energy_as_u32(&app, keep), 80);
@@ -615,7 +615,7 @@ fn buff_interim_cannot_carry_leaves_origin_by_share_before_record() {
     let mut app = app();
     let (caterpillar, _) = utils::create_owned(&mut app, "caterpillar", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    let charged = buff_id(&app, "charged");
+    let charged = utils::entity_buff_id(&app, "charged");
     utils::apply_buff(app.world_mut(), caterpillar, charged);
     utils::run_ticks(&mut app, 1);
     pools::drain(
@@ -737,7 +737,7 @@ fn buff_interim_cannot_carry_leaves_origin_by_difference_before_record() {
     let mut app = app();
     let (silkworm, _) = utils::create_owned(&mut app, "silkworm", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    let weighed = buff_id(&app, "weighed");
+    let weighed = utils::entity_buff_id(&app, "weighed");
     utils::apply_buff(app.world_mut(), silkworm, weighed);
     utils::run_ticks(&mut app, 1);
     // 100 − 50 = 50 of 50, then wounded to 40.
@@ -803,7 +803,7 @@ fn revert_by_restore_holds_under_origin_maximum_now() {
     let mut app = app();
     let (caterpillar, _) = utils::create_owned(&mut app, "caterpillar", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    let braced = buff_id(&app, "braced");
+    let braced = utils::entity_buff_id(&app, "braced");
     utils::apply_buff(app.world_mut(), caterpillar, braced);
     utils::run_ticks(&mut app, 1);
     // 50 + 50 (`hide`) + 50 (`braced`) = 150 of 150, recorded at the start.
@@ -854,7 +854,7 @@ fn lowered_maximum_may_empty_energy() {
 
     // 10 of 40, cut by 30 by difference: 10 − 30 held at 0 — only a live
     // health pool is kept above empty.
-    let sapping = buff_id(&app, "sapping");
+    let sapping = utils::entity_buff_id(&app, "sapping");
     utils::apply_buff(app.world_mut(), keep, sapping);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::energy_as_u32(&app, keep), 0);
@@ -868,7 +868,7 @@ fn share_from_zero_maximum_returns_nothing() {
     pools::drain(app.world_mut(), keep, PoolId::ENERGY, utils::fixed("10"));
 
     // 30 of 40, the maximum taken to 40 × (1 − 1) = 0: 30 × 0 / 40 = 0.
-    let silenced = buff_id(&app, "silenced");
+    let silenced = utils::entity_buff_id(&app, "silenced");
     utils::apply_buff(app.world_mut(), keep, silenced);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::energy_as_u32(&app, keep), 0);
@@ -888,7 +888,7 @@ fn clamp_from_zero_maximum_returns_nothing() {
 
     // 30 of 40 held under a maximum of 0: min(30, 0) = 0; back to 40, the
     // value stays where it is: 0 of 40.
-    let hushed = buff_id(&app, "hushed");
+    let hushed = utils::entity_buff_id(&app, "hushed");
     utils::apply_buff(app.world_mut(), keep, hushed);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::energy_as_u32(&app, keep), 0);
@@ -906,7 +906,7 @@ fn difference_from_zero_maximum_returns_whole_new_maximum() {
 
     // 30 of 40, the maximum down by 40: 30 − 40 held at 0; back up by 40:
     // 0 + 40 = 40 of 40.
-    let muted = buff_id(&app, "muted");
+    let muted = utils::entity_buff_id(&app, "muted");
     utils::apply_buff(app.world_mut(), keep, muted);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::energy_as_u32(&app, keep), 0);
@@ -988,7 +988,7 @@ fn buff_interim_cannot_carry_ends_and_stays_ended_after_cancel() {
     let mut app = app();
     let (caterpillar, _) = utils::create_owned(&mut app, "caterpillar", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    let charged = buff_id(&app, "charged");
+    let charged = utils::entity_buff_id(&app, "charged");
     utils::apply_buff(app.world_mut(), caterpillar, charged);
     utils::order_morph(&mut app, caterpillar, "skipper");
     utils::run_ticks(&mut app, 1);
@@ -1013,7 +1013,7 @@ fn buff_destination_cannot_carry_ends_on_landing() {
     let mut app = app();
     let (caterpillar, _) = utils::create_owned(&mut app, "caterpillar", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    let charged = buff_id(&app, "charged");
+    let charged = utils::entity_buff_id(&app, "charged");
     utils::apply_buff(app.world_mut(), caterpillar, charged);
 
     utils::order_morph(&mut app, caterpillar, "monarch");
@@ -1027,7 +1027,7 @@ fn buff_that_fits_rides_through_change() {
     let mut app = app();
     let (caterpillar, _) = utils::create_owned(&mut app, "caterpillar", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    let doubled = buff_id(&app, "doubled");
+    let doubled = utils::entity_buff_id(&app, "doubled");
     utils::apply_buff(app.world_mut(), caterpillar, doubled);
     utils::order_morph(&mut app, caterpillar, "skipper");
     utils::run_ticks(&mut app, 1);
@@ -1149,11 +1149,11 @@ fn shift_table_moves_health_and_maximum_tick_by_tick() {
             for act in acts {
                 match act {
                     Apply(name) => {
-                        let id = buff_id(&app, name);
+                        let id = utils::entity_buff_id(&app, name);
                         utils::apply_buff(app.world_mut(), keep, id);
                     }
                     Remove(name) => {
-                        let id = buff_id(&app, name);
+                        let id = utils::entity_buff_id(&app, name);
                         game_loop::buffs::remove_entity_buff(app.world_mut(), keep, id);
                     }
                     ApplyPlayer(name) => {
@@ -1187,7 +1187,7 @@ fn shift_table_moves_health_and_maximum_tick_by_tick() {
 fn restore_holds_under_effective_maximum() {
     let mut app = app();
     let keep = wounded_keep(&mut app, "30");
-    let braced = buff_id(&app, "braced");
+    let braced = utils::entity_buff_id(&app, "braced");
     utils::apply_buff(app.world_mut(), keep, braced);
     utils::run_ticks(&mut app, 1);
 
@@ -1805,14 +1805,6 @@ fn wounded_keep(app: &mut App, amount: &str) -> Entity {
     utils::run_ticks(app, 1);
     utils::wound(app, keep, amount);
     keep
-}
-
-/// The id of the fixture's entity buff `name`.
-fn buff_id(app: &App, name: &str) -> EntityBuffId {
-    app.world()
-        .resource::<ContentRegistry>()
-        .entity_buff(name)
-        .expect("the fixture registers the buff")
 }
 
 /// A passive held while its bearer lives: `max_health +magnitude`, moving

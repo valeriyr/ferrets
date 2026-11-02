@@ -6,12 +6,11 @@ use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
     build::BuilderAttendance,
+    coverage::Coverage,
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{
-        Emission, FieldCoverage, FieldDecay, FieldDef, FieldGrowth, FieldPlacement, FieldSourceDef,
-    },
+    field::{Emission, FieldDecay, FieldDef, FieldGrowth, FieldPlacement, FieldSourceDef},
     landing::Landing,
     location::Solidity,
     pool::Pool,
@@ -760,7 +759,7 @@ fn app() -> App {
             vec![FieldPlacement::Requires {
                 field: power,
                 of: Affiliation::Own,
-                coverage: FieldCoverage::Every,
+                coverage: Coverage::Every,
             }]
         };
         registry.register(

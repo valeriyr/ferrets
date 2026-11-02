@@ -17,10 +17,11 @@ use crate::{
 };
 use ferrets_content::{
     affiliation::Affiliation,
+    coverage::Coverage,
     entity_effect::EntityEffect,
     entity_modifiers::EntityModifiers,
     entity_type_def::EntityTypeDef,
-    field::{FieldCoverage, FieldEffect, FieldId, FieldPlacement, FieldSide},
+    field::{FieldEffect, FieldId, FieldPlacement, FieldSide},
     registry::ContentRegistry,
     requirement::Requirement,
 };
@@ -321,10 +322,10 @@ pub fn rules_allow_by(
             field,
             of,
             coverage,
-        } => covers_enough(rect, coverage, |cell| {
+        } => coverage.covers(rect, |cell| {
             covered(field, cell).is_some_and(|mask| mask.satisfies(session, of, player))
         }),
-        FieldPlacement::Forbids { field } => covers_enough(rect, FieldCoverage::Every, |cell| {
+        FieldPlacement::Forbids { field } => Coverage::Every.covers(rect, |cell| {
             covered(field, cell).is_none_or(PlayerMask::is_empty)
         }),
     })
@@ -444,14 +445,6 @@ pub(crate) fn debug_assert_spreads_on(
     }
 }
 
-/// Whether enough of `rect` answers `test` for `coverage` to be satisfied.
-fn covers_enough(rect: CellRect, coverage: FieldCoverage, test: impl Fn(CellPos) -> bool) -> bool {
-    match coverage {
-        FieldCoverage::Every => rect.cells().all(test),
-        FieldCoverage::Any => rect.cells().any(test),
-    }
-}
-
 /// Whether a field effect of the form `def` does to `entity`, where it stands,
 /// something `wanted` picks out. Entries carrying nothing wanted are passed
 /// over unjudged.
@@ -502,7 +495,7 @@ fn applying<'a>(
     footprint: CellRect,
     holds: &impl Fn(&Requirement) -> bool,
 ) -> &'a [EntityEffect] {
-    let inside = covers_enough(footprint, field_effect.coverage(), |cell| {
+    let inside = field_effect.coverage().covers(footprint, |cell| {
         grid.contains(cell)
             && grid.covers(
                 session,

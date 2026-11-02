@@ -40,8 +40,8 @@ const SCRIPT: &str = r#"
     define_scenario("build_army", {
         period = 10,
         objectives = {
-            { id = "camp", label = "Build a training camp" },
-            { id = "archers", label = "Train 3 archers" },
+            { id = "camp", label = "Build a Training Camp" },
+            { id = "archers", label = "Train 3 Archers" },
         },
         check = function(state, view)
             local camps, archers = 0, 0

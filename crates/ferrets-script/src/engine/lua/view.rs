@@ -150,6 +150,7 @@ pub(super) fn content_table(lua: &Lua, content: &ContentView) -> mlua::Result<Ta
     for skill in &content.skills {
         let entry = lua.create_table()?;
         entry.set("caster", skill.caster.as_str())?;
+        entry.set("cast", skill.cast.as_deref())?;
         entry.set("target", skill.target.as_deref())?;
         entry.set(
             "requires",
@@ -261,7 +262,8 @@ fn requirement_list(lua: &Lua, requires: &[RequirementView]) -> mlua::Result<Tab
 /// One requirement as a `{ kind = ..., ... }` table: `all` and `any` carry
 /// `items`; `unless` carries `item`; a named kind carries `name`; `health` and `energy` carry one of
 /// `under`, `at_least`, `under_share` or `at_least_share`; `stat` carries
-/// `name` and one of those; `idle_for` and `unhurt_for` carry `ticks`.
+/// `name` and one of those; `idle_for` and `unhurt_for` carry `ticks`; `over`
+/// carries `terrains` and `layers`, lists of names, and `coverage`.
 fn requirement_table(lua: &Lua, entry: &RequirementView) -> mlua::Result<Table> {
     let view = lua.create_table()?;
     match entry {
@@ -299,6 +301,22 @@ fn requirement_table(lua: &Lua, entry: &RequirementView) -> mlua::Result<Table> 
         RequirementView::UnhurtFor(ticks) => {
             view.set("kind", "unhurt_for")?;
             view.set("ticks", *ticks)?;
+        }
+        RequirementView::Over {
+            terrains,
+            coverage,
+            layers,
+        } => {
+            view.set("kind", "over")?;
+            view.set(
+                "terrains",
+                lua.create_sequence_from(terrains.iter().map(String::as_str))?,
+            )?;
+            view.set("coverage", coverage.as_str())?;
+            view.set(
+                "layers",
+                lua.create_sequence_from(layers.iter().map(String::as_str))?,
+            )?;
         }
     }
     Ok(view)

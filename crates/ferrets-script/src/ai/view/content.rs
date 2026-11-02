@@ -4,14 +4,16 @@
 use ferrets_content::{
     affiliation::Affiliation,
     cost::Cost,
+    coverage::Coverage,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     quantity::Quantity,
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     research::ResearchId,
-    skills::{EntityCastTarget, SkillCaster, SkillId, Whom},
+    skills::{Casting, EntityCastTarget, SkillCaster, SkillId, Whom},
 };
+use ferrets_nav_grid::layer_mask::LayerMask;
 
 /// The limit a requirement compares against, as a script reads it: an amount,
 /// or a fraction of the reference, as a decimal string.
@@ -67,6 +69,17 @@ pub enum RequirementView {
     IdleFor(u32),
     /// No hit has landed on the actor for this many ticks, or ever.
     UnhurtFor(u32),
+    /// The actor stands on the map, on one of these layers, with as much of
+    /// its footprint on these terrains as the coverage asks for.
+    Over {
+        /// The terrains asked for, by registered name in ascending order.
+        terrains: Vec<String>,
+        /// How much of the footprint must lie on them, `"every"` or `"any"`.
+        coverage: String,
+        /// The layers the actor may stand on, by registered name in ascending
+        /// order.
+        layers: Vec<String>,
+    },
 }
 
 /// The static content catalogue a script can consult.
@@ -112,9 +125,16 @@ impl ContentView {
                     let def = registry
                         .skill_def(id)
                         .expect("a listed skill resolves in its own registry");
-                    let (caster, target) = match &def.caster {
-                        SkillCaster::Entity { effect, .. } => (
+                    let (caster, cast, target) = match &def.caster {
+                        SkillCaster::Entity {
+                            casting, effect, ..
+                        } => (
                             "entity",
+                            Some(match casting {
+                                Casting::Transient => "transient",
+                                Casting::Instant => "instant",
+                                Casting::Delayed { .. } => "delayed",
+                            }),
                             Some(match effect.target() {
                                 EntityCastTarget::Caster => "caster",
                                 EntityCastTarget::Position { .. } => "position",
@@ -130,12 +150,13 @@ impl ContentView {
                                 },
                             }),
                         ),
-                        SkillCaster::Player { .. } => ("player", None),
+                        SkillCaster::Player { .. } => ("player", None, None),
                     };
                     SkillContentView {
                         name: name.to_string(),
                         id,
                         caster: caster.to_string(),
+                        cast: cast.map(str::to_string),
                         target: target.map(str::to_string),
                         requires: requirements(&def.requires, registry),
                     }
@@ -153,8 +174,13 @@ pub struct SkillContentView {
     pub id: SkillId,
     /// Which arm casts: `"entity"` or `"player"`.
     pub caster: String,
-    /// Who an entity cast acts on: `"caster"`, `"ally"`, or `"enemy"`. `None`
-    /// for a player cast, which lands on the casting player.
+    /// How an entity cast takes its caster's time: `"transient"`,
+    /// `"instant"` or `"delayed"`. `None` for a player cast.
+    pub cast: Option<String>,
+    /// What an entity cast acts on: `"caster"`, `"position"`, `"fallen"`, or
+    /// a standing entity's side, `"own"`, `"allied"`, `"enemy"` or
+    /// `"anyone"`. `None` for a player cast, which lands on the casting
+    /// player.
     pub target: Option<String>,
     /// What must hold for a cast. `None` when nothing must.
     pub requires: Option<Vec<RequirementView>>,
@@ -390,6 +416,27 @@ fn requirement(entry: &Requirement, registry: &ContentRegistry) -> RequirementVi
         Requirement::Idle => RequirementView::Idle,
         Requirement::IdleFor(ticks) => RequirementView::IdleFor(*ticks),
         Requirement::UnhurtFor(ticks) => RequirementView::UnhurtFor(*ticks),
+        Requirement::Over {
+            terrains,
+            coverage,
+            layers,
+        } => RequirementView::Over {
+            terrains: registry
+                .terrains()
+                .filter(|&(_, terrain)| terrains.admits(terrain))
+                .map(|(name, _)| name.to_string())
+                .collect(),
+            coverage: match coverage {
+                Coverage::Every => "every",
+                Coverage::Any => "any",
+            }
+            .to_string(),
+            layers: registry
+                .layers()
+                .filter(|&(_, layer)| *layers & layer != LayerMask::EMPTY)
+                .map(|(name, _)| name.to_string())
+                .collect(),
+        },
     }
 }
 
