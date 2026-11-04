@@ -10,6 +10,7 @@ pub mod buffs;
 pub mod build;
 pub mod cast;
 mod chase;
+pub mod claim_plane;
 pub mod conceal;
 mod cost;
 mod crew;

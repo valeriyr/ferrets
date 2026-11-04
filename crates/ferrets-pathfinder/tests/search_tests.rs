@@ -300,7 +300,7 @@ fn free_placement_skips_occupied_anchor_where_shared_takes_it() {
     let mut grid = utils::grid(10, 10);
     for y in 3..5 {
         for x in 3..5 {
-            grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
+            grid.add_claim(utils::GROUND, utils::nav(x, y));
         }
     }
 
@@ -329,9 +329,9 @@ fn placement_requires_whole_spawn_footprint() {
     // the middle whose whole 2×2 footprint is free wins.
     let mut grid = utils::grid(8, 8);
     // Claim the anchor cell and checker the first ring so no 2×2 fits there.
-    grid.set_claimed_by(utils::GROUND, utils::nav(3, 3), true);
+    grid.add_claim(utils::GROUND, utils::nav(3, 3));
     for &(x, y) in &[(2, 2), (4, 2), (2, 4), (4, 4)] {
-        grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
+        grid.add_claim(utils::GROUND, utils::nav(x, y));
     }
 
     let asked = |footing| {
@@ -373,7 +373,7 @@ fn free_placement_gives_up_beyond_max_radius_where_shared_does_not() {
     let mut grid = utils::grid(10, 10);
     for y in 2..6 {
         for x in 2..6 {
-            grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
+            grid.add_claim(utils::GROUND, utils::nav(x, y));
         }
     }
 
@@ -585,11 +585,11 @@ fn placements_return_fewer_than_asked_when_room_runs_out() {
     let mut grid = utils::grid_with_water(5, 5, &[utils::nav(1, 1)]);
     for y in 0..5 {
         for x in 0..5 {
-            grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
+            grid.add_claim(utils::GROUND, utils::nav(x, y));
         }
     }
-    grid.set_claimed_by(utils::GROUND, utils::nav(2, 2), false);
-    grid.set_claimed_by(utils::GROUND, utils::nav(0, 0), false);
+    grid.remove_claim(utils::GROUND, utils::nav(2, 2));
+    grid.remove_claim(utils::GROUND, utils::nav(0, 0));
 
     let asked = |footing| {
         search::find_placements_near(

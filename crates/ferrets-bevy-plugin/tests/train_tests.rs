@@ -4,7 +4,7 @@
 mod utils;
 
 use bevy::prelude::{App, World};
-use ferrets_content::player_stats::PlayerStatId;
+use ferrets_content::{domain::DomainDef, player_stats::PlayerStatId, terrains::Terrains};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
@@ -113,6 +113,51 @@ fn trained_unit_stands_only_on_terrain_its_domain_takes() {
     let world = app.world_mut();
     assert_eq!(cells_of(world, "soldier"), [CellPos::new(10, 9)]);
     assert_eq!(cells_of(world, "landlubber"), [CellPos::new(9, 10)]);
+}
+
+#[test]
+fn naval_trainee_lands_on_water_beside_its_trainer() {
+    // A 2×2 barracks at (10, 10) on the shore of a sea from column 12 east.
+    // The boat's domain takes water alone, so it lands on the sea cell nearest
+    // the barracks' middle: (12, 10) and (12, 11) both sit beside its east side,
+    // and the tie goes to the lowest row.
+    let sea: Vec<(u32, u32)> = (12..32)
+        .flat_map(|x| (0..32).map(move |y| (x, y)))
+        .collect();
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &sea, |registry, _| {
+        let wet = registry.register_domain(
+            "wet",
+            DomainDef::new(utils::GROUND, Terrains::Only(utils::WATER.into()), None),
+        );
+        let soldier = registry
+            .entity("soldier")
+            .expect("the orders content declares a soldier")
+            .clone();
+        let mut boat = utils::in_domain(soldier, wet);
+        boat.name = "boat".to_string();
+        registry.register(boat);
+        let barracks = registry
+            .entity("barracks")
+            .expect("the orders content declares a barracks")
+            .clone();
+        let mut yard = barracks.with_trainer(["boat"]);
+        yard.name = "yard".to_string();
+        registry.register(yard);
+    });
+    let world = app.world_mut();
+    let (_, yard_id) = utils::create_entity(world, "yard", utils::pos(10, 10), Some(0)).unwrap();
+    world.resource_mut::<PlayerResources>().add(0, "gold", 30);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: yard_id,
+            type_name: "boat".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 30);
+
+    assert_eq!(cells_of(app.world_mut(), "boat"), [CellPos::new(12, 10)]);
 }
 
 #[test]

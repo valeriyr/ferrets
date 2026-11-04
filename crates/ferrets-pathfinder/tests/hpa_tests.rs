@@ -144,7 +144,7 @@ fn long_route_ignores_unit_claims() {
     // conflict is movement's to resolve at crossing time.
     let mut grid = utils::grid(16, 4);
     for y in 0..4 {
-        grid.set_claimed_by(utils::GROUND, utils::nav(8, y), true);
+        grid.add_claim(utils::GROUND, utils::nav(8, y));
     }
     let hierarchy = utils::build_ground(&grid, 4);
 
@@ -320,7 +320,7 @@ fn detour_routes_around_claims() {
     let mut grid = utils::grid(16, 8);
     for y in 1..8 {
         for x in 5..7 {
-            grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
+            grid.add_claim(utils::GROUND, utils::nav(x, y));
         }
     }
     let hierarchy = utils::build_ground(&grid, 8);
@@ -354,7 +354,7 @@ fn detour_crosses_fully_claimed_choke() {
     let mut grid = utils::grid(16, 8);
     for y in 0..8 {
         for x in 5..7 {
-            grid.set_claimed_by(utils::GROUND, utils::nav(x, y), true);
+            grid.add_claim(utils::GROUND, utils::nav(x, y));
         }
     }
     let hierarchy = utils::build_ground(&grid, 8);
@@ -384,7 +384,7 @@ fn wide_detour_pays_for_claims_under_whole_footprint() {
     // the park it was asked to route around.
     let mut grid = utils::grid(16, 8);
     for x in 5..7 {
-        grid.set_claimed_by(utils::GROUND, utils::nav(x, 3), true);
+        grid.add_claim(utils::GROUND, utils::nav(x, 3));
     }
     let wide = utils::square_on_ground(2);
     let hierarchy = utils::build_for(&grid, 8, &[wide]);

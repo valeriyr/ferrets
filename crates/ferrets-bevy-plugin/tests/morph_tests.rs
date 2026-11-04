@@ -4,7 +4,8 @@
 
 mod utils;
 
-use bevy::prelude::App;
+use bevy::prelude::{App, Mut};
+use ferrets_bevy_plugin::map;
 use ferrets_content::{
     attack::Slain,
     cost::Cost,
@@ -21,8 +22,9 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_nav_grid::{layer_mask::LayerMask, nav_grid::NavGrid};
 use ferrets_simulation::{
     beside::Lean,
     command::PlayerCommand,
@@ -40,7 +42,7 @@ use ferrets_simulation::{
     entity_def,
     game_loop::damage,
     map::Map,
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::Order,
     rally,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
@@ -55,13 +57,9 @@ use ferrets_simulation::{
 fn same_layer_growth_lands_under_continuous_model() {
     // Growing 1x1 -> 3x3 on the same layer recenters the anchor onto ground
     // the whelp's own claim covers: the change must lift that claim out of
-    // the destination's way — under the continuous model displacing it is a
-    // rebuild-owned no-op, so the lift has to take the claim where the
-    // rebuilt plane holds it.
+    // the destination's way.
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
-    // One tick so the rebuilt claim plane holds the whelp's footprint.
-    utils::run_ticks(&mut app, 1);
 
     utils::order_morph(&mut app, whelp, "giant");
     utils::run_ticks(&mut app, 15);
@@ -506,12 +504,8 @@ fn interim_form_settles_onto_cell_mover_stood_on() {
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
     // Part way across a cell boundary: the body rounds onto (11, 10) while the
-    // position floors into (10, 10). A tick lets the claim plane follow.
-    app.world_mut()
-        .get_mut::<LocationComponent>(whelp)
-        .unwrap()
-        .position = utils::part_way("10.6", "10.3");
-    utils::run_ticks(&mut app, 1);
+    // position floors into (10, 10).
+    movement_model::move_body(app.world_mut(), whelp, utils::part_way("10.6", "10.3"));
 
     utils::order_morph(&mut app, whelp, "wyrm");
     utils::run_ticks(&mut app, 1);
@@ -843,11 +837,7 @@ fn rooting_off_lattice_settles_position_onto_its_cells() {
 fn change_between_cells_keeps_position_of_form_that_moves() {
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
-    app.world_mut()
-        .get_mut::<LocationComponent>(whelp)
-        .unwrap()
-        .position = utils::part_way("10.6", "10.3");
-    utils::run_ticks(&mut app, 1);
+    movement_model::move_body(app.world_mut(), whelp, utils::part_way("10.6", "10.3"));
 
     // Ten ticks of changing, and both forms claim a single cell, so nothing
     // recenters either.
@@ -866,6 +856,69 @@ fn change_between_cells_keeps_position_of_form_that_moves() {
 //
 // ─── What stands underfoot ─────────────────────────────────────────────────────
 //
+
+#[test]
+fn lowered_gate_is_walked_over() {
+    let mut app = underfoot_app();
+    let (gate, _) = utils::create_owned(&mut app, "gate", 10, 10, 0);
+    let (digger, _) = utils::create_owned(&mut app, "digger", 8, 10, 0);
+
+    // Lowered, the gate claims none of its cells: the digger walks onto one.
+    utils::order_morph(&mut app, gate, "gate_lowered");
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(type_name_of(&app, gate), "gate_lowered");
+    utils::order_move(&mut app, digger, 11, 10);
+    utils::run_ticks(&mut app, 20);
+    assert_eq!(utils::cell_of(app.world(), digger), CellPos::new(11, 10));
+}
+
+#[test]
+fn raising_gate_asks_own_walker_off() {
+    let mut app = underfoot_app();
+    let (gate, _) = utils::create_owned(&mut app, "gate_lowered", 10, 10, 0);
+    let (digger, _) = utils::create_owned(&mut app, "digger", 11, 10, 0);
+
+    // The raised gate needs its four cells: the idle digger on one steps off
+    // and the gate rises.
+    utils::order_morph(&mut app, gate, "gate");
+    utils::run_ticks(&mut app, 30);
+    assert_eq!(type_name_of(&app, gate), "gate");
+    // The nearest cell off the gate's 2×2 at (10, 10): (11, 9) north, its tie
+    // with (12, 10) east going to the lower row.
+    assert_eq!(utils::cell_of(app.world(), digger), CellPos::new(11, 9));
+}
+
+#[test]
+fn raising_gate_asks_off_walker_that_moves_before_it() {
+    let mut app = underfoot_app_on(MovementModel::Continuous);
+    // Created first, the digger runs its orders before the gate's in a tick:
+    // by the time the gate judges its ground again, the digger has already
+    // stepped off it this tick, its claim moving with it.
+    let (digger, _) = utils::create_owned(&mut app, "digger", 11, 10, 0);
+    let (gate, _) = utils::create_owned(&mut app, "gate_lowered", 10, 10, 0);
+
+    utils::order_morph(&mut app, gate, "gate");
+    utils::run_ticks(&mut app, 30);
+    assert_eq!(type_name_of(&app, gate), "gate");
+    // The nearest cell off the gate, as under the cell model.
+    assert_eq!(utils::cell_of(app.world(), digger), CellPos::new(11, 9));
+}
+
+#[test]
+fn raising_gate_is_refused_while_enemy_stands_on_it() {
+    let mut app = underfoot_app();
+    let (gate, _) = utils::create_owned(&mut app, "gate_lowered", 10, 10, 0);
+    let (digger, _) = utils::create_owned(&mut app, "digger", 11, 10, 1);
+
+    // An enemy on the gate is not asked off: the raise is refused at once,
+    // not left waiting for the ground.
+    utils::order_morph(&mut app, gate, "gate");
+    utils::run_ticks(&mut app, 1);
+    assert!(utils::order_queue_is_empty(app.world_mut(), gate));
+    utils::run_ticks(&mut app, 60);
+    assert_eq!(type_name_of(&app, gate), "gate_lowered");
+    assert_eq!(utils::cell_of(app.world(), digger), CellPos::new(11, 10));
+}
 
 #[test]
 fn change_into_static_form_is_refused_over_burrowed_entity() {
@@ -1081,6 +1134,78 @@ fn canceled_change_of_berthed_worker_leaves_it_on_land_it_takes() {
 }
 
 //
+// ─── Reserved ground ──────────────────────────────────────────────────────────
+//
+
+#[test]
+fn reserving_change_claims_layers_its_standing_claim_lacks_under_it() {
+    // A 1×1 ground keeper changes into a 2×2 titan on ground and air: on its
+    // own cell the reservation claims air alone, its ground claim already
+    // holding the ground; the other three cells are claimed on both.
+    let mut app = titan_app();
+    let (keeper, _) = utils::create_owned(&mut app, "keeper", 10, 10, 0);
+    let own = utils::cell_of(app.world(), keeper);
+
+    utils::order_morph(&mut app, keeper, "titan");
+    utils::run_ticks(&mut app, 1);
+
+    let morph = app
+        .world()
+        .get::<MorphComponent>(keeper)
+        .expect("the change is under way");
+    let claims = &morph
+        .as_under_way()
+        .and_then(|under_way| under_way.reservation.as_ref())
+        .expect("the change reserves its ground")
+        .claims;
+    let air = LayerMask::from(utils::AIR);
+    let both = LayerMask::from(utils::GROUND) | utils::AIR;
+    assert_eq!(claims.len(), 4);
+    assert_eq!(
+        claims
+            .iter()
+            .filter(|&&(_, layers)| layers == air)
+            .map(|&(cell, _)| cell)
+            .collect::<Vec<_>>(),
+        vec![own]
+    );
+    assert_eq!(
+        claims.iter().filter(|&&(_, layers)| layers == both).count(),
+        3
+    );
+    let grid = app.world().resource::<Map>().nav_grid();
+    // One claim per layer on its own cell: its standing one on ground, the
+    // reservation's on air.
+    assert_eq!(grid.claim_count(utils::GROUND, own), 1);
+    assert_eq!(grid.claim_count(utils::AIR, own), 1);
+}
+
+#[test]
+fn body_changing_on_reserved_ground_stands_against_contact() {
+    let mut app = titan_app();
+    let (keeper, _) = utils::create_owned(&mut app, "keeper", 10, 10, 0);
+    let (shover, _) = utils::create_owned(&mut app, "whelp", 14, 10, 0);
+    utils::order_morph(&mut app, keeper, "titan");
+    utils::run_ticks(&mut app, 1);
+
+    // A whelp pressed into the keeper's body: the contact pushes the whelp
+    // off, and the keeper stands where its change reserved its ground.
+    movement_model::move_body(app.world_mut(), shover, utils::part_way("10.4", "10"));
+    utils::run_ticks(&mut app, 1);
+
+    // Two radii of 0.5, 0.4 apart, overlap by 0.5 + 0.5 - 0.4 = 0.6; at equal
+    // weight each body's share is half, 0.3: the whelp's moves it on to
+    // 10.4 + 0.3 = 10.7, the keeper's is dropped. The whelp takes only its
+    // own share until a standing body is a wall to it (plan Q105), when it
+    // would take all 0.6, to 11.0.
+    assert_eq!(utils::position_of(app.world(), keeper), utils::pos(10, 10));
+    assert_eq!(
+        utils::position_of(app.world(), shover),
+        utils::part_way("10.7", "10")
+    );
+}
+
+//
 // ─── A capture ────────────────────────────────────────────────────────────────
 //
 
@@ -1188,13 +1313,23 @@ fn dying_body_is_not_captured() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-/// One human on a cell-model map with a `mole`, a `vole` and a 2×2 `shrew`
+/// Two humans on a cell-model map with a `mole`, a `vole` and a 2×2 `shrew`
 /// that stand underfoot, the mole changing in place into the vole, reserving
-/// its ground, and into the shrew, judged as it lands; and a `digger` that
+/// its ground, and into the shrew, judged as it lands; a `digger` that
 /// changes into a static `den` on its own cell for 10 gold, reserving the
-/// ground. Session started.
+/// ground; and a static 2×2 `gate` that lowers into an underfoot `gate_lowered`
+/// and raises back, reserving its ground. Session started.
 fn underfoot_app() -> App {
-    let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    underfoot_app_on(MovementModel::Cell)
+}
+
+/// [`underfoot_app`] on a map of `model`.
+fn underfoot_app_on(model: MovementModel) -> App {
+    let mut app = utils::make_app(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    utils::install_map(&mut app, Projection::Isometric, model);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_resource("gold");
@@ -1253,6 +1388,29 @@ fn underfoot_app() -> App {
                 .with_pool(Pool::health(50))
                 .with_dying(2, []),
         );
+        let gate = |name: &str, solidity, into: &str, placement| {
+            EntityTypeDef::new(name)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    solidity,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(50))
+                .with_morphs([change(into, placement, Vec::new())])
+        };
+        registry.register(gate(
+            "gate",
+            Solidity::Solid,
+            "gate_lowered",
+            MorphPlacement::Revalidate,
+        ));
+        registry.register(gate(
+            "gate_lowered",
+            Solidity::Underfoot,
+            "gate",
+            MorphPlacement::Reserve,
+        ));
         registry.validate();
     }
     utils::start_game(&mut app);
@@ -1273,6 +1431,61 @@ fn change(into: &str, placement: MorphPlacement, costs: Vec<Cost>) -> MorphTrans
         Vec::new(),
         [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
     )
+}
+
+/// [`utils::morph_app`] on a continuous-model map with the air layer over
+/// the ground, with a `keeper` — the whelp — that changes in ten ticks,
+/// reserving its ground, into a standing 2×2 `titan` on ground and air.
+fn titan_app() -> App {
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        utils::register_air(&mut registry);
+        let mut keeper = registry
+            .entity("whelp")
+            .expect("the morph content declares a whelp")
+            .clone()
+            .with_morphs([MorphTransition::new(
+                "titan",
+                MorphCourse::direct(MorphInterrupted::Reverts),
+                Quantity::Constant(10),
+                MorphPlacement::Reserve,
+                MorphCancel::Refundable,
+                MorphReason::Change,
+                Vec::new(),
+                Vec::new(),
+                [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+            )]);
+        keeper.name = "keeper".to_string();
+        registry.register(keeper);
+        registry.register(
+            EntityTypeDef::new("titan")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    LayerMask::from(utils::GROUND) | utils::AIR,
+                )
+                .with_pool(Pool::health(60)),
+        );
+    }
+    let mut grid = NavGrid::new(32, 32, |_| utils::LAND);
+    grid.add_flat_layer(utils::GROUND, 1);
+    grid.add_flat_layer(utils::AIR, 2);
+    map::install_map(
+        app.world_mut(),
+        Map::new(
+            "test",
+            Projection::Isometric,
+            MovementModel::Continuous,
+            grid,
+            vec![],
+        ),
+    );
+    app.world_mut().resource_scope(|world, mut map: Mut<Map>| {
+        map.serve_movers(world.resource::<ContentRegistry>());
+    });
+    app
 }
 
 /// The type an entity currently is.

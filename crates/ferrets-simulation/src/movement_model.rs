@@ -3,11 +3,14 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_physics::body;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     components::{location::LocationComponent, movement::MoveComponent},
+    entity_def,
     map::Map,
+    occupancy::OccupancyClass,
 };
 
 /// How a game's units occupy space and resolve blocking between each other.
@@ -23,9 +26,9 @@ pub enum MovementModel {
     #[default]
     Cell,
     /// Units occupy radius circles and resolve contact by pushing each
-    /// other apart; positions are unconstrained points. The claim plane is
-    /// derived, rebuilt every tick from the cell under each body's center,
-    /// so long-range planning still sees where crowds stand.
+    /// other apart; positions are unconstrained points. Each body claims the
+    /// footprint its position anchors, its claim following it as it moves;
+    /// bodies may share cells.
     Continuous,
 }
 
@@ -36,6 +39,40 @@ pub(crate) enum Settling {
     Settled,
     /// It was at rest, and stays where it is.
     AtRest,
+}
+
+/// Moves a continuous-model body standing on the grid to `to`, its claim
+/// following it onto the footprint `to` anchors.
+///
+/// Panics under the cell model, and for a body that claims cells but stands
+/// off the grid.
+pub fn move_body(world: &mut World, entity: Entity, to: FixedUVec2) {
+    match world.resource::<Map>().movement_model() {
+        MovementModel::Cell => panic!("a cell-model body moves crossing by crossing"),
+        MovementModel::Continuous => {}
+    }
+    let held = entity_def::grid_mark(world, entity);
+    world
+        .get_mut::<LocationComponent>(entity)
+        .expect("a moving body stands somewhere")
+        .position = to;
+    let Some(mark) = held else {
+        // A passable body claims no cells.
+        return;
+    };
+    assert!(
+        entity_def::stands_on_grid(world, entity),
+        "a body moved with its claim stands on the grid"
+    );
+    match mark.class {
+        OccupancyClass::Claim => world.resource_mut::<Map>().step_claim(
+            mark.layers,
+            mark.footprint.size,
+            mark.footprint.origin,
+            body::anchor(to),
+        ),
+        OccupancyClass::Static => unreachable!("a body that moves claims its cells"),
+    }
 }
 
 /// Returns `true` if `position` is between two cell origins (a crossing is in progress).

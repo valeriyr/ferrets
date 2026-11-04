@@ -757,8 +757,7 @@ fn landing_reserves_its_ground_for_whole_window() {
 
 #[test]
 fn reservation_holds_under_cell_model() {
-    // Under the cell model claims are law and nothing rebuilds them each tick,
-    // so the reservation written at the order's start is exactly what must
+    // The reservation written at the order's start is exactly what must
     // still be standing when the change lands.
     let mut app = utils::demo_map_app(MovementModel::Cell);
     let (gryphon, _) = utils::create_entity(

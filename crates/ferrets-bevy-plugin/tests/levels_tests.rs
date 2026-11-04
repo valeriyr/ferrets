@@ -47,7 +47,7 @@ use ferrets_nav_grid::{
 };
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{location::LocationComponent, order_queue::OrderQueueComponent, stance::Stance},
+    components::{order_queue::OrderQueueComponent, stance::Stance},
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
@@ -58,7 +58,7 @@ use ferrets_simulation::{
     make_way,
     map::Map,
     map_data::MapData,
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::Order,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
@@ -661,10 +661,7 @@ fn reserving_change_moved_off_its_ground_lands_only_where_ground_takes_it() {
     utils::order_morph(&mut app, stayed, "cairn");
     utils::run_ticks(&mut app, 3);
 
-    app.world_mut()
-        .get_mut::<LocationComponent>(moved)
-        .expect("a settler stands on the map")
-        .position = utils::pos(7, 6);
+    movement_model::move_body(app.world_mut(), moved, utils::pos(7, 6));
     utils::run_ticks(&mut app, 12);
 
     assert_eq!(entity_def::type_name(app.world(), moved), "settler");
@@ -759,10 +756,11 @@ fn solid_static_footprint_never_rises_over_any_cell_mover_claiming_nothing_stand
     // it stands.
     let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
     let (wisp, _) = utils::create_owned(&mut app, "wisp", 2, 2, 0);
-    app.world_mut()
-        .get_mut::<LocationComponent>(wisp)
-        .expect("the wisp stands")
-        .position = FixedUVec2::new(utils::fixed("2.5"), utils::fixed("2"));
+    movement_model::move_body(
+        app.world_mut(),
+        wisp,
+        FixedUVec2::new(utils::fixed("2.5"), utils::fixed("2")),
+    );
     let place = |app: &mut App, x| {
         utils::create_entity(app.world_mut(), "cairn", utils::pos(x, 2), Some(0)).is_some()
     };
@@ -902,9 +900,9 @@ fn walker_disabled_across_scaffold_no_longer_clears_it() {
 
 #[test]
 fn change_cut_short_is_judged_where_walkers_stand_now_under_continuous_model() {
-    // A walker stands on the scaffold at (3, 3) through a tick, so the claim
-    // plane holds (3, 3) for it; it is then at (5, 3) as the change is cut
-    // short, and the kiln goes back where it stood.
+    // A walker stands on the scaffold at (3, 3) through a tick, its claim on
+    // (3, 3); it is then at (5, 3) as the change is cut short, its claim
+    // following it, and the kiln goes back where it stood.
     let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
     let (kiln, _) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
     utils::order_morph(&mut app, kiln, "furnace");
@@ -912,10 +910,7 @@ fn change_cut_short_is_judged_where_walkers_stand_now_under_continuous_model() {
     assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
     let (walker, _) = utils::create_owned(&mut app, "walker", 3, 3, 0);
     utils::run_ticks(&mut app, 1);
-    app.world_mut()
-        .get_mut::<LocationComponent>(walker)
-        .expect("a walker stands somewhere")
-        .position = utils::pos(5, 3);
+    movement_model::move_body(app.world_mut(), walker, utils::pos(5, 3));
 
     utils::soft_cancel_orders(app.world_mut(), kiln);
     utils::run_ticks(&mut app, 1);
@@ -1006,11 +1001,7 @@ fn reserving_change_through_static_interim_claims_where_it_lands() {
     // over x 3 and 4, clear of the cairn.
     let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
     let (seedling, _) = utils::create_owned(&mut app, "seedling", 3, 2, 0);
-    app.world_mut()
-        .get_mut::<LocationComponent>(seedling)
-        .unwrap()
-        .position = utils::part_way("3.7", "2");
-    utils::run_ticks(&mut app, 1);
+    movement_model::move_body(app.world_mut(), seedling, utils::part_way("3.7", "2"));
     let order = Order::Morph {
         type_name: "grove".into(),
     };

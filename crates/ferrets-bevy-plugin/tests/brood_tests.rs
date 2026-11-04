@@ -24,6 +24,7 @@ use ferrets_simulation::{
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
         entity_info::EntityInfoComponent,
+        location::LocationComponent,
         order_queue::OrderQueueComponent,
         rally::{RallyPointComponent, RallyTarget},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
@@ -1672,6 +1673,71 @@ fn broodlings_new_form_cannot_hold_are_destroyed() {
 }
 
 #[test]
+fn solid_broodlings_new_form_cannot_hold_perish_beside_their_berths() {
+    for model in [MovementModel::Cell, MovementModel::Continuous] {
+        let mut app = utils::brood_app(model);
+        let sty = utils::place(&mut app, "sty", 10, 10, 0);
+        utils::run_ticks(&mut app, 20);
+        assert_eq!(alive_of_type(&mut app, "runt").len(), 2);
+
+        // No berths on the bare sty: both solid runts give their seats up,
+        // are set down beside their berths and perish there.
+        order_morph(&mut app, sty, "bare_sty");
+        utils::run_ticks(&mut app, 11);
+        assert_eq!(type_name_of(&app, sty), "bare_sty");
+        assert_eq!(alive_of_type(&mut app, "runt").len(), 0);
+
+        // Two ticks of dying: each leaves its husk where it was set down.
+        utils::run_ticks(&mut app, 2);
+        assert_eq!(utils::count_of_type(app.world_mut(), "runt"), 0);
+        // The two berths sit at (10.5, 13.5) and (11, 13.5), off the sty's
+        // south edge: the first runt is set down on (10, 13), the second, its
+        // berth spanning (10, 13) and (11, 13), on the one still free.
+        assert_eq!(
+            husk_cells(&mut app),
+            vec![CellPos::new(10, 13), CellPos::new(11, 13)]
+        );
+    }
+}
+
+#[test]
+fn broodling_perishing_with_no_cell_to_stand_on_dies_off_map() {
+    for model in [MovementModel::Cell, MovementModel::Continuous] {
+        let mut app = utils::brood_app(model);
+        let sty = utils::place(&mut app, "sty", 10, 10, 0);
+        // Every cell but the sty's 3×3 is walled off: an orphan has nowhere
+        // to be set down.
+        {
+            let mut map = app.world_mut().resource_mut::<Map>();
+            for y in 0..32 {
+                for x in 0..32 {
+                    if !(10..13).contains(&x) || !(10..13).contains(&y) {
+                        map.set_static_occupied(utils::GROUND, CellPos::new(x, y), true);
+                    }
+                }
+            }
+        }
+        utils::run_ticks(&mut app, 20);
+        let runts = alive_of_type(&mut app, "runt");
+        assert_eq!(runts.len(), 2);
+
+        order_morph(&mut app, sty, "bare_sty");
+        utils::run_ticks(&mut app, 11);
+        assert_eq!(type_name_of(&app, sty), "bare_sty");
+        assert_eq!(alive_of_type(&mut app, "runt").len(), 0);
+        // Both are dying off the map.
+        for &runt in &runts {
+            assert!(entity_def::hidden(app.world(), runt));
+        }
+
+        // Dying off the map, they leave nothing.
+        utils::run_ticks(&mut app, 2);
+        assert_eq!(utils::count_of_type(app.world_mut(), "runt"), 0);
+        assert_eq!(husk_cells(&mut app), Vec::new());
+    }
+}
+
+#[test]
 fn linger_breeder_leaves_detached_broodlings_standing() {
     let mut app = utils::brood_app(MovementModel::Cell);
     let pen = utils::place(&mut app, "linger_pen", 10, 10, 0);
@@ -2162,4 +2228,17 @@ fn queued(app: &App, entity: Entity, matching: impl Fn(&Order) -> bool) -> bool 
         .0
         .iter()
         .any(|entry| matching(&entry.order))
+}
+
+/// The cells the husks lie on, in row-major order.
+fn husk_cells(app: &mut App) -> Vec<CellPos> {
+    let world = app.world_mut();
+    let mut cells: Vec<CellPos> = world
+        .query::<(&EntityInfoComponent, &LocationComponent)>()
+        .iter(world)
+        .filter(|(info, _)| info.type_name() == "husk")
+        .map(|(_, location)| CellPos::from(location.position))
+        .collect();
+    cells.sort_unstable_by_key(|cell| (cell.y, cell.x));
+    cells
 }

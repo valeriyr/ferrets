@@ -11,14 +11,10 @@ use crate::components::patience::Patience;
 /// Ground held ahead of a form change landing on it.
 #[derive(Debug, Clone)]
 pub struct MorphReservation {
-    /// Exactly the cells this change claimed — cells someone else already
-    /// held stay theirs — so releasing them never takes anything that was
-    /// not this change's to take. Not a rectangle: cells of the destination
-    /// footprint the entity's own standing claim covers are left under that
-    /// claim, and must survive a cancel.
-    pub cells: Vec<CellPos>,
-    /// The layers the cells are claimed on — the ones the destination occupies.
-    pub layers: LayerMask,
+    /// Each cell this change claimed, with the layers it claimed there: the
+    /// destination's layers but for those the entity's own standing claim
+    /// already holds on the cell.
+    pub claims: Vec<(CellPos, LayerMask)>,
 }
 
 /// A change of form under way.

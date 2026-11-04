@@ -43,6 +43,8 @@ pub const CONTENT: &str = r#"
     })
     define_domain("naval", { layer = GROUND, terrains = SHALLOW_WATER | DEEP_WATER, cliff_crossing = "ramp" })
     define_domain("deep_naval", { layer = GROUND, terrains = DEEP_WATER, cliff_crossing = "ramp" })
+    -- What stands in the shallows alone: a shipyard on its coast.
+    define_domain("shore", { layer = GROUND, terrains = SHALLOW_WATER, cliff_crossing = "ramp" })
     define_domain("air", { layer = AIR, terrains = "any" })
 
     define_race("human")
@@ -485,7 +487,7 @@ pub const CONTENT: &str = r#"
     -- Peasants work in the open and swarm: any number of them can share a site, a
     -- repair or a stand of trees, each adding its own tick of work, so a gang of
     -- them raises a building in a fraction of the time one would take.
-    worker("peasant", "human", { "town_hall", "training_camp", "farm", "blacksmith", "bunker" }, {
+    worker("peasant", "human", { "town_hall", "training_camp", "farm", "blacksmith", "bunker", "shipyard" }, {
         attendance = { present = { crew = "any" } },
         repair_presence = { present = { crew = "any" } },
         wood_presence = { present = { crew = "any" } },
@@ -540,6 +542,38 @@ pub const CONTENT: &str = r#"
         rise = { time = 100, pools = { health = "initial" } },
         researcher = { "iron_weapons", "vitality_drill" },
         tags = { "building" },
+    })
+    -- The shipyard stands in the shallows of a coast and sets the galleys it
+    -- trains down on the water beside it.
+    define_entity("shipyard", {
+        race = "human",
+        location = { domain = "shore", size = { 2, 2 }, solidity = "solid" },
+        stats = { sight_range = 7 },
+        pools = { health = { maximum = 500 } },
+        dying = { time = 2 },
+        price = { gold = 150, wood = 100 },
+        rise = { time = 100, pools = { health = "initial" } },
+        trainer = { trains = { "galley" } },
+        tags = { "building" },
+    })
+    -- The human warship: it shells the shore and what flies over the water
+    -- with a slow ball, as the lake boss's ships do.
+    define_entity("galley", {
+        race = "human",
+        location = { domain = "naval", size = 1, solidity = "solid" },
+        stats = {
+            speed = "0.25", turn_rate = 6, pivot_rate = 9, radius = "0.5", weight = 6,
+            damage = 12, attack_range = 5, acquire_range = 8, attack_period = 10, damage_point = 4,
+            sight_range = 12,
+            supply_cost = 2,
+        },
+        pools = { health = { maximum = 120 } },
+        dying = { time = 2 },
+        tags = { "mechanical" },
+        attack = { targets = GROUND | AIR, projectile = "cannonball" },
+        price = { gold = 120, wood = 60 },
+        train_time = 90,
+        selection = { priority = 10 },
     })
     define_entity("archer", {
         race = "human",
@@ -2331,6 +2365,10 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
+        -- Nothing builds or trains this form, so it carries the price and
+        -- pace of the one it changes from: what an SCV mends it against.
+        price = { gold = 400 },
+        train_time = 200,
         tags = { "building" },
         passives = { "on_fire" },
         selection = { priority = 6 },
@@ -2366,6 +2404,10 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
+        -- Nothing builds or trains this form, so it carries the price and
+        -- pace of the one it changes from: what an SCV mends it against.
+        price = { gold = 150 },
+        train_time = 100,
         tags = { "building" },
         passives = { "on_fire" },
         selection = { priority = 6 },
@@ -2401,6 +2443,10 @@ pub const CONTENT: &str = r#"
         },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
+        -- Nothing builds or trains this form, so it carries the price and
+        -- pace of the one it changes from: what an SCV mends it against.
+        price = { gold = 200, wood = 100 },
+        train_time = 120,
         tags = { "building" },
         passives = { "on_fire" },
         selection = { priority = 6 },
@@ -2513,6 +2559,10 @@ pub const CONTENT: &str = r#"
         annex = { alone = { work = "idles", life = "endures" }, claim = "seized" },
     })
 
+    -- A supply depot lowers into the ground in half a second and is walked
+    -- over by every side; raising it again asks idle own and allied units off
+    -- and is refused while an enemy, a busy unit or one holding its ground
+    -- stands on it. It keeps its supply either way.
     define_entity("supply_depot", {
         race = "terran",
         location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
@@ -2524,6 +2574,28 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         passives = { "on_fire" },
         berths = { rim = { points = rim(2, 2), slots = 1 } },
+        morphs = {
+            { into = "supply_depot_lowered", land_pool_carry = { health = "clamp" },
+              time = 10, placement = "revalidate", cancel = "committed" },
+        },
+    })
+    define_entity("supply_depot_lowered", {
+        race = "terran",
+        location = { domain = "land", size = { 2, 2 }, solidity = "underfoot" },
+        stats = { sight_range = 3, supply_provided = 6 },
+        pools = { health = { maximum = 200 } },
+        dying = { time = 2 },
+        -- Nothing builds or trains this form, so it carries the price and
+        -- pace of the one it changes from: what an SCV mends it against.
+        price = { gold = 40, wood = 20 },
+        train_time = 60,
+        tags = { "building" },
+        passives = { "on_fire" },
+        berths = { rim = { points = rim(2, 2), slots = 1 } },
+        morphs = {
+            { into = "supply_depot", land_pool_carry = { health = "clamp" },
+              time = 10, placement = "reserve", cancel = "committed" },
+        },
     })
 
     -- Raised over a gold mine and mined in its place: an SCV walks inside and

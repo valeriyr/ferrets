@@ -12,12 +12,11 @@ use ferrets_content::{
     registry::ContentRegistry,
     splash::{SplashDef, SplashShape},
 };
-use ferrets_geometry::{cell_size::CellSize, projection::Projection};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
 use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
-    components::location::LocationComponent,
     impacts::PendingImpacts,
     map::Map,
     movement_model::MovementModel,
@@ -286,13 +285,8 @@ fn cell_aimed_shot_misses_target_that_moves_away() {
 
     utils::attack(&mut app, sieger, runner_id);
     utils::run_ticks(&mut app, 6);
-    // Step the runner off the aimed cell while the shell is still in the air. The
-    // test is about where the hit resolves, so it moves the unit directly rather
-    // than routing a move order.
-    app.world_mut()
-        .get_mut::<LocationComponent>(runner)
-        .expect("the runner has a location")
-        .position = utils::pos(20, 4);
+    // Step the runner off the aimed cell while the shell is still in the air.
+    spawn::relocate(app.world_mut(), &[(runner, CellPos::new(20, 4))]);
     utils::run_ticks(&mut app, 20);
 
     assert_eq!(

@@ -1209,7 +1209,6 @@ fn tunnel_under_construction_grays_its_build_button() {
         drone,
         RiseAttendance::Unattended { founder: drone },
         &[],
-        &[],
     )
     .expect("the tunnel fits at (20, 20)");
     utils::select(&mut app, tunnel, SelectMode::Replace);
@@ -1242,7 +1241,6 @@ fn bound_tunnel_grays_its_build_button_naming_its_other_end() {
         FieldReach::Initial,
         tunnel,
         RiseAttendance::Unattended { founder: tunnel },
-        &[],
         &[],
     )
     .expect("the other end fits at (30, 20)");

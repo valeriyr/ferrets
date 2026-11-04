@@ -209,9 +209,9 @@ fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
 
 #[test]
 fn walk_rounds_water_corner_without_creeping_at_it() {
-    // North out of the river ford (the river's deep channel is x=48, open only
-    // at y=17..=21): the body has to round its corner at (48,16) to reach
-    // (49,13).
+    // North out of the river ford (the river's deep channel is x 47..=49, open
+    // only at y 17..=21): the body has to round its corner at (49, 16) to
+    // reach (50, 13) on the bank.
     //
     // Aiming diagonally past that corner puts the wall across the way rather
     // than beside it, so the surviving axis carries only the aim's sideways
@@ -239,21 +239,21 @@ fn walk_rounds_water_corner_without_creeping_at_it() {
         .unwrap()
         .push(
             Order::Move {
-                target: FixedUVec2::new(FixedU64::from_num(49), FixedU64::from_num(13)),
+                target: FixedUVec2::new(FixedU64::from_num(50), FixedU64::from_num(13)),
                 size: CellSize::ONE,
                 range: 0,
             },
             None,
         );
 
-    // Six cells at a peasant's pace with room for the one turn: 21 ticks with
-    // the corner rounded, 25 while creeping at it.
-    utils::run_ticks(&mut app, 22);
+    // Six cells north and two east at a peasant's pace: 18 ticks with the
+    // corner rounded, 19 while creeping at it.
+    utils::run_ticks(&mut app, 18);
 
     let arrived = utils::position_of(app.world_mut(), walker);
     assert_eq!(
         utils::cell_of(arrived),
-        (49, 13),
+        (50, 13),
         "the walk was still at {arrived:?}, creeping at the corner"
     );
 }

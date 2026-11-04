@@ -783,7 +783,7 @@ fn walker_steps_to_edge_it_can_touch_target_across() {
 fn claim_wall_blocks_path() {
     // S X G   y=0   X = claimed (1,0) in a one-row corridor
     let mut grid = utils::grid(3, 1);
-    grid.set_claimed_by(utils::GROUND, utils::nav(1, 0), true);
+    grid.add_claim(utils::GROUND, utils::nav(1, 0));
 
     let path = find_iso(&grid, utils::world(0, 0), utils::world(2, 0), 0);
 
@@ -800,8 +800,8 @@ fn diagonal_blocked_between_claimed_cells() {
     // between two claimed cells is refused, and (0,2) has no other
     // reachable neighbor.
     let mut grid = utils::grid(3, 3);
-    grid.set_claimed_by(utils::GROUND, utils::nav(0, 1), true);
-    grid.set_claimed_by(utils::GROUND, utils::nav(1, 2), true);
+    grid.add_claim(utils::GROUND, utils::nav(0, 1));
+    grid.add_claim(utils::GROUND, utils::nav(1, 2));
 
     let path = find_iso(&grid, utils::world(1, 1), utils::world(0, 2), 0);
 

@@ -359,6 +359,16 @@ pub fn changing(world: &World, entity: Entity) -> bool {
         .is_some_and(|morph| morph.is_under_way())
 }
 
+/// Whether a change of form under way on `entity` holds ground reserved for
+/// the form it lands in.
+pub fn reserving(world: &World, entity: Entity) -> bool {
+    world
+        .entity(entity)
+        .get::<MorphComponent>()
+        .and_then(MorphComponent::as_under_way)
+        .is_some_and(|under_way| under_way.reservation.is_some())
+}
+
 /// Whether a change of form is under way on `entity` while it still wears the
 /// form the change started from: a change with no interim form.
 pub fn changing_in_origin(world: &World, entity: Entity) -> bool {

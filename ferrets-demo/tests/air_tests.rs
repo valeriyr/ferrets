@@ -459,9 +459,6 @@ fn wide_flier_claims_its_whole_footprint() {
     )
     .expect("the zeppelin spawns");
 
-    // One tick, so the continuous model rebuilds the claim plane from bodies.
-    utils::run_ticks(&mut app, 1);
-
     let world = app.world();
     let air = world
         .resource::<ContentRegistry>()

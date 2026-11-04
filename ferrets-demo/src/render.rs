@@ -666,6 +666,9 @@ enum Shape {
     /// The missile turret — a square pad; the rack on it is drawn from the
     /// gun it mounts, like the fortress's.
     Pad,
+    /// A lowered supply depot — a darker square sunk into the ground with a
+    /// lighter grate across it, walked over.
+    Grate,
     /// The warren — a wide mound with three dark holes across its face.
     Warren,
     /// A burrow — a lighter rim around a dark hole going down.
@@ -699,7 +702,7 @@ fn shape_for(type_name: &str) -> Shape {
         "medic" | "shaman" | "necromancer" => Shape::Cross,
         "observer" => Shape::Observer,
         "arbiter" => Shape::Arbiter,
-        "ship" => Shape::Ship,
+        "ship" | "galley" => Shape::Ship,
         "training_camp"
         | "war_camp"
         | "spawning_pit"
@@ -707,7 +710,8 @@ fn shape_for(type_name: &str) -> Shape {
         | "barracks"
         | "barracks_aloft"
         | "crypt"
-        | "temple_of_the_damned" => Shape::Hexagon,
+        | "temple_of_the_damned"
+        | "shipyard" => Shape::Hexagon,
         "sea_fortress" => Shape::Fortress,
         "gryphon" => Shape::Gryphon { aloft: false },
         "gryphon_aloft" => Shape::Gryphon { aloft: true },
@@ -725,6 +729,7 @@ fn shape_for(type_name: &str) -> Shape {
         "watch_tower" => Shape::WatchTower,
         "guard_tower" | "photon_cannon" => Shape::GuardTower,
         "missile_turret" => Shape::Pad,
+        "supply_depot_lowered" => Shape::Grate,
         "spirit_tower" => Shape::SpiritTower,
         "nerubian_tower" => Shape::NerubianTower,
         "tumor" | "cocoon" | "hive_cocoon" | "egg" => Shape::Pod,
@@ -1540,6 +1545,20 @@ pub fn attach_sprites(
                 // drawn from the gun it mounts.
                 let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.7;
                 entity.insert(Sprite::from_color(color, px));
+            }
+            Shape::Grate => {
+                // The depot sunk level with the ground: a darker square the
+                // size of its footprint, a lighter bar across each third.
+                let px = Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85;
+                entity.insert(Sprite::from_color(color.darker(0.35), px));
+                entity.with_children(|parent| {
+                    for third in [-1.0, 1.0] {
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.1), Vec2::new(px.x, px.y * 0.08)),
+                            Transform::from_translation(Vec3::new(0.0, third * px.y / 6.0, 0.1)),
+                        ));
+                    }
+                });
             }
         }
         // An ancient on the move carries its roots: four darker squares at the
@@ -3406,6 +3425,7 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         | Shape::Refinery
         | Shape::Wraith
         | Shape::Pad
+        | Shape::Grate
         | Shape::TunnelEnd
         | Shape::Tank { .. } => GhostShape::Rect {
             extent: Vec2::new(size.width as f32, size.height as f32) * CELL_PX * 0.85,

@@ -185,9 +185,8 @@ const CONTINUOUS_STUCK_TICKS: u32 = 15;
 /// Advance a Move order by one tick under [`MovementModel::Continuous`].
 ///
 /// The mover walks its planned waypoints as a free position: no crossings,
-/// no blocked checks, no claim bookkeeping — contact is the pushing pass's
-/// concern, and it also rebuilds the claim plane from the settled bodies
-/// each tick.
+/// no blocked checks — contact is the pushing pass's concern — and its
+/// claim follows it onto each footprint its position anchors.
 fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     let (target, size, range) = order.move_params().expect("Move order must have params");
 
@@ -520,11 +519,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
         }
         turn::toward(world, entity, wanted, turn::Rate::Walking);
     }
-    world
-        .entity_mut(entity)
-        .get_mut::<LocationComponent>()
-        .unwrap()
-        .position = new_pos;
+    movement_model::move_body(world, entity, new_pos);
     // Touching the ordered spot completes a point order on the spot, within
     // the same tick: waiting for the next tick's arrival check would let
     // the pushing pass shove the body off first, and a contested point
@@ -955,7 +950,7 @@ fn claim_aware_route(
     let own = if solidity.claims_cells() {
         world
             .resource_mut::<Map>()
-            .take_claim(shape.layers, from, shape.size)
+            .lift_claim(shape.layers, from, shape.size)
     } else {
         Vec::new()
     };

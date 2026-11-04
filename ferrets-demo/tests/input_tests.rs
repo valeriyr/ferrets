@@ -271,11 +271,11 @@ fn ghost_refuses_building_across_cliff_and_over_ramp() {
 
     // The east plateau rises at column 56, its ramp at (55, 28) to (55, 30):
     // a 2×2 at (55, 24) spans the cliff, one at (54, 28) covers the ramp, one
-    // at (58, 24) stands on the plateau and one at (50, 24) on low ground.
+    // at (58, 24) stands on the plateau and one at (52, 24) on low ground.
     assert!(!fits(55, 24));
     assert!(!fits(54, 28));
     assert!(fits(58, 24));
-    assert!(fits(50, 24));
+    assert!(fits(52, 24));
 }
 
 #[test]

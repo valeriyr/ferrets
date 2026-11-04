@@ -84,6 +84,8 @@ const DEEP_RADIUS_SQ: i64 = 49;
 /// through the lake, between shallow banks, each arm broken by a five-cell
 /// ford.
 const RIVER_AXIS: u32 = 48;
+/// How many cells of deep water flank a river's axis on each side.
+const RIVER_DEEP: u32 = 1;
 /// How many cells of shallow bank flank a river's deep water on each side.
 const RIVER_BANK: u32 = 1;
 /// The fords: the spans of shallow water across the near-edge and far-edge
@@ -322,8 +324,9 @@ fn ground_level(x: u32, y: u32) -> u32 {
     }
 }
 
-/// The water a river gives the cell: deep on a middle axis, shallow on its
-/// banks and across a ford, and none beyond the banks.
+/// The water a river gives the cell: deep on a middle axis and the cells
+/// beside it, shallow on its banks and across a ford, and none beyond the
+/// banks.
 fn river_water(x: u32, y: u32) -> Water {
     let ford = |along: u32| {
         (FORD_NEAR.0..=FORD_NEAR.1).contains(&along) || (FORD_FAR.0..=FORD_FAR.1).contains(&along)
@@ -337,9 +340,9 @@ fn river_water(x: u32, y: u32) -> Water {
     ]
     .into_iter()
     .map(|(across, on_ford)| match (across, on_ford) {
-        (across, _) if across > RIVER_BANK => Water::Dry,
+        (across, _) if across > RIVER_DEEP + RIVER_BANK => Water::Dry,
         (_, true) => Water::Shallow,
-        (0, false) => Water::Deep,
+        (across, false) if across <= RIVER_DEEP => Water::Deep,
         (_, false) => Water::Shallow,
     })
     .max()

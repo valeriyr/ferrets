@@ -1044,10 +1044,10 @@ fn map_builds_against_content_with_sea_lake_rivers_and_levels() {
         registry.terrain("shallow_water"),
         "the lake's rim"
     );
-    // One across the vertical arm's axis, a bank the river makes shallow;
-    // 1² + 3² = 10 from the lake's middle, within its deep water's 49: the
+    // Two across the vertical arm's axis, a bank the river makes shallow;
+    // 2² + 3² = 13 from the lake's middle, within its deep water's 49: the
     // deeper wins.
-    assert_eq!(terrain(47, 45), registry.terrain("deep_water"));
+    assert_eq!(terrain(46, 45), registry.terrain("deep_water"));
     // Low ground at 1, the east plateau at 2, the mountain on it at 3, and
     // the low half of its west ramp rising east onto it.
     assert_eq!(level(10, 30), Some(1));
@@ -1211,9 +1211,9 @@ fn only_naga_crosses_river_off_its_fords() {
         live.nav_grid()
             .fits(CellPos::new(x, y), shape_of(&registry, name))
     };
-    // The vertical arm at row 30: banks at columns 47 and 49 either side of
-    // the deep water on the axis, 48; row 19 is on the near ford.
-    let (bank, deep, ford) = ((47, 30), (48, 30), (48, 19));
+    // The vertical arm at row 30: banks at columns 46 and 50 either side of
+    // the deep water, 47 to 49 about the axis, 48; row 19 is on the near ford.
+    let (bank, deep, ford) = ((46, 30), (48, 30), (48, 19));
 
     assert!(fits("grunt", bank.0, bank.1), "a soldier wades the bank");
     assert!(fits("grunt", ford.0, ford.1), "the ford is land");
@@ -1257,6 +1257,32 @@ fn river_channel_runs_into_lake_deep_water() {
             deep,
             "(48, {y}) breaks the channel"
         );
+    }
+}
+
+#[test]
+fn river_runs_three_deep_between_shallow_banks_and_fords_five_across() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let live = Map::from_data(&map::data(), &registry);
+    let terrain = |x, y| live.nav_grid().terrain(CellPos::new(x, y));
+    let (land, shallow, deep) = (
+        registry.terrain("land"),
+        registry.terrain("shallow_water"),
+        registry.terrain("deep_water"),
+    );
+
+    // Across the vertical arm at row 30, off its fords: deep one cell either
+    // side of the axis at 48 (47..=49), a shallow bank one cell beyond each
+    // (46 and 50), land past them.
+    let across = [land, shallow, deep, deep, deep, shallow, land];
+    for (x, expected) in (45..=51).zip(across) {
+        assert_eq!(terrain(x, 30), expected, "({x}, 30)");
+    }
+    // The near ford at row 19: shallow over the deep water and the banks
+    // alike, 46..=50.
+    let ford = [land, shallow, shallow, shallow, shallow, shallow, land];
+    for (x, expected) in (45..=51).zip(ford) {
+        assert_eq!(terrain(x, 19), expected, "({x}, 19)");
     }
 }
 
@@ -1780,11 +1806,19 @@ fn every_terran_production_building_flies_but_depot() {
         assert!(up.can_move(), "and it moves");
     }
 
-    // The depot is the exception the name promises: it stays on the ground.
+    // The depot is the exception the name promises: it stays on the ground,
+    // changing only into its lowered form.
     let depot = registry
         .entity("supply_depot")
         .expect("supply_depot defined");
-    assert!(depot.morphs.is_empty());
+    assert_eq!(
+        depot
+            .morphs
+            .iter()
+            .map(|change| change.into_type())
+            .collect::<Vec<_>>(),
+        ["supply_depot_lowered"]
+    );
     assert!(!depot.can_move());
 }
 
@@ -1986,6 +2020,121 @@ fn each_demo_unit_passive_holds_on_its_requirement() {
             registry.entity_buff_def(id).lasting,
             Lasting::While(requirement),
             "{passive} holds on its own requirement"
+        );
+    }
+}
+
+#[test]
+fn shipyard_stands_in_shallows_and_trains_galleys() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let shallow = registry
+        .terrain("shallow_water")
+        .expect("shallow water is registered");
+    let shore = registry.domain("shore").expect("shore is registered");
+    assert_eq!(
+        registry.domain_def(shore).terrains(),
+        Terrains::Only(shallow.into())
+    );
+
+    let shipyard = registry.entity("shipyard").expect("shipyard is registered");
+    let location = shipyard.location.expect("a shipyard stands somewhere");
+    assert_eq!(location.domain(), shore);
+    assert_eq!(location.size(), CellSize::new(2, 2));
+    assert_eq!(location.solidity(), Solidity::Solid);
+    assert_eq!(shipyard.price, price::from([("gold", 150), ("wood", 100)]));
+    assert_eq!(
+        shipyard
+            .trainer
+            .as_ref()
+            .expect("the shipyard trains")
+            .trains()
+            .collect::<Vec<_>>(),
+        ["galley"]
+    );
+    let peasant = registry.entity("peasant").expect("peasant is registered");
+    assert!(
+        peasant
+            .builder
+            .as_ref()
+            .expect("the peasant builds")
+            .builds()
+            .any(|name| name == "shipyard")
+    );
+
+    let galley = registry.entity("galley").expect("galley is registered");
+    assert_eq!(
+        galley.location.expect("a galley sails").domain(),
+        registry.domain("naval").expect("naval is registered")
+    );
+    assert_eq!(galley.price, price::from([("gold", 120), ("wood", 60)]));
+    assert_eq!(galley.train_time, Some(90));
+    assert_eq!(
+        galley.base_stat(EntityStatId::SUPPLY_COST),
+        Some(FixedU64::from_num(2))
+    );
+}
+
+#[test]
+fn supply_depot_lowers_underfoot_and_raises_reserving_its_ground() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let raised = registry
+        .entity("supply_depot")
+        .expect("supply_depot is registered");
+    let lowered = registry
+        .entity("supply_depot_lowered")
+        .expect("supply_depot_lowered is registered");
+
+    assert_eq!(
+        raised.location.expect("a depot stands").solidity(),
+        Solidity::Solid
+    );
+    assert_eq!(
+        lowered.location.expect("a depot stands").solidity(),
+        Solidity::Underfoot
+    );
+    // Half a second each way at 20 Hz, free; raising reserves the ground.
+    let [lower] = raised.morphs.as_slice() else {
+        panic!("the raised depot changes only into its lowered form");
+    };
+    assert_eq!(lower.into_type(), "supply_depot_lowered");
+    assert_eq!(lower.time(), Quantity::Constant(10));
+    assert_eq!(lower.placement(), MorphPlacement::Revalidate);
+    let [raise] = lowered.morphs.as_slice() else {
+        panic!("the lowered depot changes only into its raised form");
+    };
+    assert_eq!(raise.into_type(), "supply_depot");
+    assert_eq!(raise.time(), Quantity::Constant(10));
+    assert_eq!(raise.placement(), MorphPlacement::Reserve);
+    // It keeps its supply of 6 either way.
+    assert_eq!(
+        raised.base_stat(EntityStatId::SUPPLY_PROVIDED),
+        Some(FixedU64::from_num(6))
+    );
+    assert_eq!(
+        lowered.base_stat(EntityStatId::SUPPLY_PROVIDED),
+        Some(FixedU64::from_num(6))
+    );
+}
+
+#[test]
+fn terran_changed_forms_are_mended_like_buildings_they_change_from() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    for (form, origin) in [
+        ("supply_depot_lowered", "supply_depot"),
+        ("command_center_aloft", "command_center"),
+        ("barracks_aloft", "barracks"),
+        ("factory_aloft", "factory"),
+    ] {
+        let form_def = registry.entity(form).expect("the form is registered");
+        let origin_def = registry.entity(origin).expect("the origin is registered");
+        assert_eq!(
+            form_def.price, origin_def.price,
+            "{form} bills like {origin}"
+        );
+        assert_eq!(
+            form_def.production_time(),
+            origin_def.production_time(),
+            "{form} is mended at {origin}'s pace"
         );
     }
 }

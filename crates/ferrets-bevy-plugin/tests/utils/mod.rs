@@ -1042,7 +1042,8 @@ fn brood_change(into: &str) -> MorphTransition {
 /// - `hatch` seats four, breeds a `grub` every 10 ticks up to three, and its
 ///   grubs perish with it; it changes into `great_hatch` (opens with two)
 ///   through a `shell` (which seats but breeds nothing), into `bare_hatch`
-///   (no berths) and into `tight_hatch` (two seats, limit two). `ready_hatch` is a hatch owing two
+///   (no berths) and into `tight_hatch` (two seats, limit two). The great
+///   hatch changes back into a `hatch`. `ready_hatch` is a hatch owing two
 ///   grubs when it stands, built by a `digger` in 20 ticks; `stat_hatch`
 ///   reads its period from the `brood_period` stat, 6. `rug_hatch` breeds as
 ///   a hatch and changes for 10 gold, refunded when called off, into a
@@ -1058,8 +1059,9 @@ fn brood_change(into: &str) -> MorphTransition {
 ///   are set down; it changes into `bare_pen` (no berths), as `inner_pen`
 ///   does, whose two berths lie on its middle cell. `reseat_pen` breeds
 ///   piglets it takes in from within three cells, and changes into `roomy_pen`
-///   (the same seats and terms) through a seatless `pen_shell`. The great
-///   hatch changes back into a `hatch`.
+///   (the same seats and terms) through a seatless `pen_shell`.
+/// - `sty` seats two and breeds solid `runt`s that perish with their seats,
+///   each leaving a `husk`; it changes into `bare_sty` (no berths).
 /// - `cart` is a hold; `sow` rides and breeds `hog`s into two seats.
 /// - `delver` breeds an orbiting `mite` into two seats and builds a
 ///   `ready_hatch`, harvests a gold `lode` and mends from inside, banking at
@@ -1195,6 +1197,13 @@ pub fn brood_app(model: MovementModel) -> App {
                 .with_morphs([brood_change("bare_pen")]),
         );
         registry.register(brood_building("bare_pen"));
+        registry.register(
+            brood_building("sty")
+                .with_berths(brood_berths(2))
+                .with_breeder("runt", Quantity::Constant(10), 2, 0, OrphanFate::Perish)
+                .with_morphs([brood_change("bare_sty")]),
+        );
+        registry.register(brood_building("bare_sty"));
         let reseat = OrphanFate::Linger(Lingering::Reseat { distance: 3 });
         registry.register(
             brood_building("reseat_pen")
@@ -1390,6 +1399,19 @@ pub fn brood_app(model: MovementModel) -> App {
                 },
                 requires: Vec::new(),
             },
+        );
+        registry.register(
+            EntityTypeDef::new("husk")
+                .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Passable, GROUND)
+                .with_tags(["remains"])
+                .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(400)),
+        );
+        registry.register(
+            EntityTypeDef::new("runt")
+                .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
+                .with_pool(Pool::health(20))
+                .with_dying(2, leaves("husk"))
+                .with_broodling(Attachment::new("brood", BerthStance::Still)),
         );
         registry.register(
             EntityTypeDef::new("piglet")

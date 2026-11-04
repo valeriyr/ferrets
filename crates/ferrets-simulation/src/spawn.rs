@@ -84,7 +84,7 @@ use crate::{
     links::{self, LinkKey, LinkPassengers, Membership},
     map::Map,
     movement_model::{self, MovementModel},
-    occupancy::{GridMark, OccupancyClass},
+    occupancy::OccupancyClass,
     order::Order,
     rally,
     ruleset::RemainsLimit,
@@ -170,7 +170,7 @@ pub fn create_entity(
     reach: FieldReach,
     arrival: Arrival,
 ) -> Option<(Entity, SimulationId)> {
-    create_entity_clear_of(world, type_name, position, owner, reach, arrival, &[], &[])
+    create_entity_clear_of(world, type_name, position, owner, reach, arrival, &[])
 }
 
 /// Creates one of the map's placements, each pool `starts` names started
@@ -263,8 +263,8 @@ pub fn spawn_warped(
 }
 
 /// Creates a construction site `builder` placed, attended as `attendance` says,
-/// on ground judged as though what `lifted` marks were off the grid and none
-/// of `ignored` stood on the map, and announces it as founded.
+/// on ground judged as though none of `ignored` stood on the map, and
+/// announces it as founded.
 ///
 /// Returns `None` if `type_name` is not registered or the ground there does
 /// not take it ([`ground::can_place`]). Panics when the type never rises.
@@ -277,7 +277,6 @@ pub fn spawn_founded(
     reach: FieldReach,
     builder: SimulationId,
     attendance: RiseAttendance,
-    lifted: &[GridMark],
     ignored: &[Entity],
 ) -> Option<(Entity, SimulationId)> {
     spawn_clear_of(
@@ -291,7 +290,6 @@ pub fn spawn_founded(
             origin: RiseOrigin::Founded { payer: owner },
         },
         SpawnCause::Founded { builder },
-        lifted,
         ignored,
     )
 }
@@ -932,27 +930,15 @@ pub(crate) fn unseat(world: &mut World, entity: Entity) -> Option<AttachedCompon
     Some(attached)
 }
 
-/// Frees the footprint an entity holds on the grid. An entity already off the
-/// grid — hidden, or attached to a job — holds nothing to free.
-///
-/// The entity is otherwise untouched, so a caller that lifts a footprint to
-/// test the ground under it puts it back with [`restore_footprint`] or takes
-/// the entity off the map itself.
+/// Frees the footprint an entity holds on the grid, leaving the entity
+/// otherwise untouched. An entity already off the grid — hidden, or attached
+/// to a job — holds nothing to free.
 pub(crate) fn lift_footprint(world: &mut World, entity: Entity) {
     if !entity_def::stands_on_grid(world, entity) {
         return;
     }
-    let def = entity_def::of(world, entity);
-    let location_def = def
-        .location
-        .expect("only entities with LocationDef hold a footprint");
-    let class = OccupancyClass::of(def);
-    world.resource_scope(|world, mut map: Mut<Map>| {
-        let location = world
-            .get::<LocationComponent>(entity)
-            .expect("only entities with LocationComponent hold a footprint");
-        map.displace_if_some(entity_def::grid_mark_of(location, location_def, class));
-    });
+    let mark = entity_def::grid_mark(world, entity);
+    world.resource_mut::<Map>().displace_if_some(mark);
 }
 
 /// Stamps back the footprint [`lift_footprint`] took off an entity that
@@ -961,17 +947,8 @@ pub(crate) fn restore_footprint(world: &mut World, entity: Entity) {
     if !entity_def::stands_on_grid(world, entity) {
         return;
     }
-    let def = entity_def::of(world, entity);
-    let location_def = def
-        .location
-        .expect("only entities with LocationDef hold a footprint");
-    let class = OccupancyClass::of(def);
-    world.resource_scope(|world, mut map: Mut<Map>| {
-        let location = world
-            .get::<LocationComponent>(entity)
-            .expect("only entities with LocationComponent hold a footprint");
-        map.place_if_some(entity_def::grid_mark_of(location, location_def, class));
-    });
+    let mark = entity_def::grid_mark(world, entity);
+    world.resource_mut::<Map>().place_if_some(mark);
 }
 
 /// Whether a body coming back onto the map was set down.
@@ -979,7 +956,7 @@ pub(crate) fn restore_footprint(world: &mut World, entity: Entity) {
 pub enum SetDown {
     /// It stands on the map: set down now, or standing already.
     Placed,
-    /// No cell within reach of the set-down takes it; it stays off the map.
+    /// No cell within reach of the set-down takes it; it is not set down.
     NoCell,
 }
 
@@ -993,16 +970,7 @@ pub fn place_back_beside(world: &mut World, entity: Entity, beside: Beside, lean
     if entity_def::stands_on_grid(world, entity) {
         return SetDown::Placed;
     }
-    let location_def = entity_def::of(world, entity)
-        .location
-        .expect("only entities with LocationDef can be placed back");
-    match cell_back_beside(world, entity, beside, lean) {
-        Some(cell) => {
-            place_back_at(world, entity, cell, &location_def);
-            SetDown::Placed
-        }
-        None => SetDown::NoCell,
-    }
+    stand_beside(world, entity, beside, lean)
 }
 
 /// Stands the hidden `entity` back out of the holder `holder` on the free
@@ -1180,12 +1148,9 @@ pub(crate) fn step_out(world: &mut World, entity: Entity, cell: CellPos) {
 /// [`game_loop::pending_reveal::process_pending_reveals`] stands it up as soon
 /// as a cell opens.
 pub(crate) fn stand_or_retry(world: &mut World, entity: Entity, beside: Beside, lean: Lean) {
-    let location_def = entity_def::of(world, entity)
-        .location
-        .expect("only entities with LocationDef can stand");
-    match cell_back_beside(world, entity, beside, lean) {
-        Some(cell) => place_back_at(world, entity, cell, &location_def),
-        None => wait_off_map(world, entity, beside, lean),
+    match stand_beside(world, entity, beside, lean) {
+        SetDown::Placed => {}
+        SetDown::NoCell => wait_off_map(world, entity, beside, lean),
     }
 }
 
@@ -1422,9 +1387,7 @@ fn stand_at(
 /// The entity immediately leaves the alive set: it is removed from every
 /// player's selection, all queued orders are force-canceled, and a `Die` order
 /// is queued. The entity stays in the world as dying — still holding its
-/// footprint on the nav grid under the cell model, while the continuous
-/// rebuild stops counting its body — until the `Die` order completes and
-/// frees it.
+/// footprint on the nav grid — until the `Die` order completes and frees it.
 ///
 /// Takes `entity` off the map, announcing nothing — the counterpart of
 /// [`create_entity`], as [`despawn_entity`] is of the `spawn_*` functions.
@@ -1985,9 +1948,9 @@ fn settle_passenger(
 
 /// Settles every broodling `breeder` counts on the orphan terms it breeds on
 /// with `origin` as the form its change was declared on, taking them off its
-/// brood: perishing ones die in id order, lingering ones are set down by the
-/// berths they sat at, the tie cut either way. Nothing for a breeder that
-/// breeds nothing on either form.
+/// brood: perishing ones die in the order they joined it, lingering ones are
+/// set down by the berths they sat at, the tie cut either way. Nothing for a
+/// breeder that breeds nothing on either form.
 pub(crate) fn settle_broodlings(world: &mut World, breeder: Entity, origin: EntityTypeId) {
     let Some(fate) = brood::terms_on(world, breeder, origin).map(BreederDef::orphans) else {
         return;
@@ -2020,9 +1983,10 @@ pub(crate) fn settle_broodlings(world: &mut World, breeder: Entity, origin: Enti
 }
 
 /// Detaches a broodling that has given its seat up and that the form
-/// `breeder` wears does not hold, on `fate`'s terms: perishing, it dies
-/// **unseated**; lingering, its tie is cut and it is set down beside `berth`,
-/// the berth it sat at.
+/// `breeder` wears does not hold, on `fate`'s terms: perishing, it is set
+/// down beside `berth`, the berth it sat at, and dies **unseated** there — or,
+/// with no free cell to stand on, off the map; lingering, its tie is cut and
+/// it is set down beside that berth.
 fn detach_broodling(
     world: &mut World,
     breeder: Entity,
@@ -2032,7 +1996,13 @@ fn detach_broodling(
     fate: OrphanFate,
 ) {
     match fate {
-        OrphanFate::Perish => despawn_entity(world, entity, DeathCause::Unseated { of }),
+        OrphanFate::Perish => {
+            match stand_beside(world, entity, berth, Lean::Nothing) {
+                SetDown::Placed => {}
+                SetDown::NoCell => mark_hidden(world, entity, Inside::Nothing),
+            }
+            despawn_entity(world, entity, DeathCause::Unseated { of });
+        }
         OrphanFate::Linger(_) => {
             brood::untie(world, breeder, entity);
             stand_or_retry(world, entity, berth, Lean::Nothing);
@@ -2495,13 +2465,11 @@ fn spawn(
         arrival,
         cause,
         &[],
-        &[],
     )
 }
 
-/// [`create_entity`] on ground judged as though what `lifted` marks were off
-/// the grid and none of `ignored` stood on the map.
-#[allow(clippy::too_many_arguments)]
+/// [`create_entity`] on ground judged as though none of `ignored` stood on the
+/// map.
 fn create_entity_clear_of(
     world: &mut World,
     type_name: &str,
@@ -2509,7 +2477,6 @@ fn create_entity_clear_of(
     owner: Option<PlayerId>,
     reach: FieldReach,
     arrival: Arrival,
-    lifted: &[GridMark],
     ignored: &[Entity],
 ) -> Option<(Entity, SimulationId)> {
     debug_assert!(
@@ -2528,7 +2495,7 @@ fn create_entity_clear_of(
         (def.location?, OccupancyClass::of(def))
     };
     let location = LocationComponent::new(position, DEFAULT_FACING);
-    if !ground::can_place(world, &location, location_def, occupancy, lifted, ignored) {
+    if !ground::can_place(world, &location, location_def, occupancy, &[], ignored) {
         return None;
     }
 
@@ -2539,8 +2506,7 @@ fn create_entity_clear_of(
     Some((entity, id))
 }
 
-/// [`spawn`] on ground judged as though what `lifted` marks were off the grid
-/// and none of `ignored` stood on the map.
+/// [`spawn`] on ground judged as though none of `ignored` stood on the map.
 #[allow(clippy::too_many_arguments)]
 fn spawn_clear_of(
     world: &mut World,
@@ -2550,12 +2516,10 @@ fn spawn_clear_of(
     reach: FieldReach,
     arrival: Arrival,
     cause: SpawnCause,
-    lifted: &[GridMark],
     ignored: &[Entity],
 ) -> Option<(Entity, SimulationId)> {
-    let (entity, id) = create_entity_clear_of(
-        world, type_name, position, owner, reach, arrival, lifted, ignored,
-    )?;
+    let (entity, id) =
+        create_entity_clear_of(world, type_name, position, owner, reach, arrival, ignored)?;
     tunnels::bind_at_birth(world, entity, cause);
     announce(world, id, cause);
     Some((entity, id))
@@ -2662,6 +2626,22 @@ fn check_starts(registry: &ContentRegistry, def: &EntityTypeDef, starts: &[(Pool
             def.name
         );
         declared.validate_initial(*initial, &format!("'{}' starts the {name} pool", def.name));
+    }
+}
+
+/// Stands an entity off the grid on the nearest free cell beside `beside`,
+/// leaning as `lean` says, or leaves it untouched with [`SetDown::NoCell`]
+/// when none within the search radius takes it.
+fn stand_beside(world: &mut World, entity: Entity, beside: Beside, lean: Lean) -> SetDown {
+    let location_def = entity_def::of(world, entity)
+        .location
+        .expect("only entities with LocationDef can stand");
+    match cell_back_beside(world, entity, beside, lean) {
+        Some(cell) => {
+            place_back_at(world, entity, cell, &location_def);
+            SetDown::Placed
+        }
+        None => SetDown::NoCell,
     }
 }
 

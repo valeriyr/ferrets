@@ -42,7 +42,7 @@ use ferrets_physics::body;
 use super::{
     buffs,
     orders::{self, Processing, Refusal},
-    pushing, stats,
+    stats,
 };
 use crate::{
     berths,
@@ -637,7 +637,7 @@ fn begin(
     // The ground ahead is claimed last, around what the entity now marks.
     if let Some((anchor, to)) = reservation {
         let standing = entity_def::grid_mark(world, entity);
-        let cells = world.resource_mut::<Map>().reserve_claim(
+        let claims = world.resource_mut::<Map>().reserve_claim(
             to.occupies(),
             body::anchor(anchor),
             to.size(),
@@ -650,10 +650,7 @@ fn begin(
             MorphStage::UnderWay(under_way) => under_way,
             MorphStage::Clearing(_) => unreachable!("the change was put on under way above"),
         };
-        under_way.reservation = Some(MorphReservation {
-            cells,
-            layers: to.occupies(),
-        });
+        under_way.reservation = Some(MorphReservation { claims });
     }
     OrderState::InProcessing
 }
@@ -1107,11 +1104,8 @@ fn land(
 /// fields and the grid about its anchor, a reserved one and a return the grid
 /// alone, each looking past the footprint the entity holds now; a nearby
 /// landing searches out from the footprint for ground that takes the form,
-/// looking past it the same way. Only then does the old footprint come off
-/// and the new one go on. A static footprint is displaced and placed;
-/// a mover's claim is lifted from where the claim plane holds it — the rounded
-/// anchor the continuous rebuild stamps, the settled cell itself under the
-/// cell model.
+/// looking past it the same way. Only then is the old mark displaced and the
+/// new one placed.
 #[allow(clippy::too_many_arguments)]
 fn reoccupy(
     world: &mut World,
@@ -1211,10 +1205,7 @@ fn reoccupy(
     }
 
     let mut map = world.resource_mut::<Map>();
-    lift_standing_presence(
-        &mut map,
-        entity_def::grid_mark_of(&standing, from, old_class),
-    );
+    map.displace_if_some(entity_def::grid_mark_of(&standing, from, old_class));
     map.place_if_some(entity_def::grid_mark_of(
         &LocationComponent::new(anchor, facing),
         to,
@@ -1402,13 +1393,6 @@ fn return_to_origin(
     if !left_its_form {
         return Returned::Back;
     }
-    // The claim plane is last rebuilt where the bodies stood then; a return
-    // is judged where they stand now, and the plane stays rebuilt for the
-    // rest of the tick.
-    match world.resource::<Map>().movement_model() {
-        MovementModel::Continuous => pushing::rebuild_claims(world),
-        MovementModel::Cell => {}
-    }
     let origin = world.resource::<ContentRegistry>().def(from).name.clone();
     let interim = interim_of(world, transition);
     let fills: Vec<(PoolId, PoolFill)> = revert
@@ -1486,7 +1470,7 @@ fn release_reservation(world: &mut World, under_way: &MorphUnderWay) {
     };
     world
         .resource_mut::<Map>()
-        .release_claim(reservation.layers, &reservation.cells);
+        .release_reservation(&reservation.claims);
 }
 
 //
@@ -1634,20 +1618,6 @@ fn fields_allow(
 ) -> bool {
     let def = world.resource::<ContentRegistry>().def(type_id);
     fields::allows_placement(world, owner, def, body::anchor(anchor))
-}
-
-/// Takes the entity's standing presence — `standing`, or nothing for a body
-/// that marks no cells — off the grid.
-fn lift_standing_presence(map: &mut Map, standing: Option<GridMark>) {
-    let Some(mark) = standing else {
-        return;
-    };
-    match mark.class {
-        OccupancyClass::Static => map.displace(mark),
-        OccupancyClass::Claim => {
-            map.take_claim(mark.layers, mark.footprint.origin, mark.footprint.size);
-        }
-    }
 }
 
 /// Writes `value` into `entity`'s `pool` through the checked fold write,

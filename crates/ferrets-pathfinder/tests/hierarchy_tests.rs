@@ -515,7 +515,7 @@ fn unit_claims_are_invisible_to_hierarchy() {
     let mut hierarchy = utils::build_ground(&grid, 4);
 
     for y in 0..4 {
-        grid.set_claimed_by(utils::GROUND, utils::nav(4, y), true);
+        grid.add_claim(utils::GROUND, utils::nav(4, y));
         hierarchy.mark_dirty(utils::nav(4, y), utils::GROUND);
     }
     hierarchy.refresh(&grid);

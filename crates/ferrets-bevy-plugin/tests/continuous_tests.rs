@@ -17,9 +17,8 @@ use ferrets_math::FixedU64;
 use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::location::LocationComponent,
     map::Map,
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::AttackTarget,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
 };
@@ -493,11 +492,9 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
 fn wide_body_claims_whole_footprint() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
-    // A resting 2x2 body claims all four cells of its footprint — the claim
-    // plane is rebuilt as wide as the body moves, not one cell under its
-    // anchor.
+    // A resting 2x2 body claims all four cells of its footprint, not one
+    // cell under its anchor.
     let _ = utils::create_owned(&mut app, "wagon", 5, 5, 0);
-    utils::run_ticks(&mut app, 2);
 
     let world = app.world_mut();
     let grid = world.resource::<Map>().nav_grid();
@@ -525,11 +522,7 @@ fn push_never_sets_footprint_past_map_edge() {
     let mut app = slim_wagon_app();
     let (wagon, _) = utils::create_owned(&mut app, "slim_wagon", 30, 5, 0);
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
-    app.world_mut()
-        .entity_mut(soldier)
-        .get_mut::<LocationComponent>()
-        .unwrap()
-        .position = utils::pos(30, 5);
+    movement_model::move_body(app.world_mut(), soldier, utils::pos(30, 5));
 
     utils::run_ticks(&mut app, 300);
 
@@ -550,14 +543,9 @@ fn mixed_size_bodies_push_apart() {
     // pushing on one side.
     let (wagon, _) = utils::create_owned(&mut app, "wagon", 5, 5, 0);
     // Spawned clear — placement rightly refuses the claimed footprint — and
-    // moved into the overlap directly; the claim plane re-derives from the
-    // bodies either way.
+    // moved into the overlap directly, its claim following it.
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
-    app.world_mut()
-        .entity_mut(soldier)
-        .get_mut::<LocationComponent>()
-        .unwrap()
-        .position = utils::pos(6, 6);
+    movement_model::move_body(app.world_mut(), soldier, utils::pos(6, 6));
 
     utils::run_ticks(&mut app, 300);
 
@@ -592,11 +580,11 @@ fn heavier_body_is_carried_less_than_lighter_of_same_size() {
     // Spawned clear — placement rightly refuses the claimed cell — then set
     // half a cell into the ox, half the radii sum of the two bodies.
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
-    app.world_mut()
-        .entity_mut(soldier)
-        .get_mut::<LocationComponent>()
-        .unwrap()
-        .position = utils::position_bits(0x5_8000_0000, 0x5_0000_0000);
+    movement_model::move_body(
+        app.world_mut(),
+        soldier,
+        utils::position_bits(0x5_8000_0000, 0x5_0000_0000),
+    );
 
     utils::run_ticks(&mut app, 300);
 
@@ -634,7 +622,7 @@ fn wide_walk_reaches_goal() {
 }
 
 #[test]
-fn claims_are_rebuilt_from_bodies() {
+fn claim_follows_walking_body() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
     let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
@@ -649,8 +637,8 @@ fn claims_are_rebuilt_from_bodies() {
     );
     utils::run_ticks(&mut app, 200);
 
-    // The claim plane is derived from the settled bodies: the cell under
-    // the body is claimed, the spawn cell long released.
+    // The claim follows the body: the cell under it is claimed, the spawn
+    // cell released.
     let world = app.world_mut();
     let cell = utils::cell_of(world, soldier);
     assert_eq!(cell, CellPos::new(12, 2));

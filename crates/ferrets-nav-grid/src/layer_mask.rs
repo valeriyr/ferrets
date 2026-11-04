@@ -19,6 +19,18 @@ pub struct LayerMask(u32);
 impl LayerMask {
     /// An empty mask with no layers set.
     pub const EMPTY: Self = Self(0);
+
+    /// Each layer in the mask, lowest bit first.
+    pub fn layers(self) -> impl Iterator<Item = LayerId> {
+        let mut rest = self.0;
+        std::iter::from_fn(move || {
+            (rest != 0).then(|| {
+                let bit = rest & rest.wrapping_neg();
+                rest &= !bit;
+                LayerId::new(bit)
+            })
+        })
+    }
 }
 
 impl From<u32> for LayerMask {

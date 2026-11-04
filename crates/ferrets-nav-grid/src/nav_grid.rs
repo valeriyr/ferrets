@@ -41,8 +41,13 @@ pub struct NavGrid {
     /// `occupancy[y * width + x]` — the set of layers a standing footprint
     /// occupies at that cell.
     occupancy: Vec<LayerMask>,
-    /// `claims[y * width + x]` — the set of layers a unit holds at that cell.
+    /// `claims[y * width + x]` — the set of layers some claim holds at that
+    /// cell.
     claims: Vec<LayerMask>,
+    /// Each registered layer's claim counts, indexed by the layer's bit,
+    /// `y * width + x` within: how many claims hold the cell on the layer.
+    /// `None` for a bit no layer is registered at.
+    claim_counts: Vec<Option<Vec<u16>>>,
 }
 
 /// A layer's relief over the whole grid.
@@ -69,7 +74,13 @@ impl NavGrid {
             reliefs: vec![None; u32::BITS as usize],
             occupancy: vec![LayerMask::EMPTY; width as usize * height as usize],
             claims: vec![LayerMask::EMPTY; width as usize * height as usize],
+            claim_counts: vec![None; u32::BITS as usize],
         }
+    }
+
+    /// The layers registered on the grid.
+    pub fn layers(&self) -> LayerMask {
+        self.registered
     }
 
     /// Returns the grid width in cells.
@@ -312,21 +323,59 @@ impl NavGrid {
         }
     }
 
-    /// Sets whether a unit holds a cell on all layers matched by `mask`.
+    /// Adds one claim on a cell on every layer in `mask`.
     ///
     /// Panics for a cell off the grid or an empty mask.
-    pub fn set_claimed_by(&mut self, mask: impl Into<LayerMask>, pos: CellPos, claimed: bool) {
+    pub fn add_claim(&mut self, mask: impl Into<LayerMask>, pos: CellPos) {
         let mask = mask.into();
 
         self.assert_registered(mask);
         assert!(mask != LayerMask::EMPTY, "a claim holds some layer");
         let i = self.index(pos).expect("a claim stands on the grid");
 
-        if claimed {
-            self.claims[i] |= mask;
-        } else {
-            self.claims[i] &= !mask;
+        for layer in mask.layers() {
+            let count = &mut self.claim_counts[layer.trailing_zeros() as usize]
+                .as_mut()
+                .expect("a claim holds registered layers")[i];
+            *count = count
+                .checked_add(1)
+                .expect("a cell holds fewer claims than a count can carry");
         }
+        self.claims[i] |= mask;
+    }
+
+    /// Takes one claim off a cell on every layer in `mask`.
+    ///
+    /// Panics for a cell off the grid, an empty mask, or a layer in `mask`
+    /// no claim holds the cell on.
+    pub fn remove_claim(&mut self, mask: impl Into<LayerMask>, pos: CellPos) {
+        let mask = mask.into();
+
+        self.assert_registered(mask);
+        assert!(mask != LayerMask::EMPTY, "a claim holds some layer");
+        let i = self.index(pos).expect("a claim stands on the grid");
+
+        for layer in mask.layers() {
+            let count = &mut self.claim_counts[layer.trailing_zeros() as usize]
+                .as_mut()
+                .expect("a claim holds registered layers")[i];
+            *count = count
+                .checked_sub(1)
+                .expect("a claim taken off a cell is one that holds it");
+            if *count == 0 {
+                self.claims[i] &= !LayerMask::from(layer);
+            }
+        }
+    }
+
+    /// How many claims hold the cell on `layer`.
+    ///
+    /// Cells off the grid hold none. Panics if `layer` is not registered.
+    pub fn claim_count(&self, layer: LayerId, pos: CellPos) -> u16 {
+        let counts = self.claim_counts[layer.trailing_zeros() as usize]
+            .as_ref()
+            .unwrap_or_else(|| panic!("layer {layer} is not registered"));
+        self.index(pos).map_or(0, |i| counts[i])
     }
 
     /// Returns `true` if the position is occupied — by a standing footprint or
@@ -341,12 +390,6 @@ impl NavGrid {
         self.index(pos)
             .map(|i| (self.occupancy[i] | self.claims[i]) & mask != LayerMask::EMPTY)
             .unwrap_or(true)
-    }
-
-    /// Clears every unit claim on every layer, leaving terrain and standing
-    /// occupancy untouched — for rebuilding the claim plane from current positions.
-    pub fn clear_claims(&mut self) {
-        self.claims.fill(LayerMask::EMPTY);
     }
 
     /// Returns `true` if a unit holds the position on **any** layer in
@@ -519,6 +562,8 @@ impl NavGrid {
         );
         self.registered |= layer;
         self.reliefs[layer.trailing_zeros() as usize] = Some(relief);
+        self.claim_counts[layer.trailing_zeros() as usize] =
+            Some(vec![0; self.width as usize * self.height as usize]);
     }
 
     /// The relief of a registered layer.

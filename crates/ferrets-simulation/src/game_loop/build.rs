@@ -387,21 +387,20 @@ fn found(
     // A builder that disappears into its work leaves the map now, and one
     // that attaches to the site leaves the grid, either freeing any of
     // the site's cells it stood on; the attached one sits in its berths
-    // once the site stands. The site is judged for them as the judge
-    // above set them aside: the cells they held may still read as claimed
-    // until the claims are rebuilt. The site is not raised yet, so the
-    // builder is inside nothing until it takes the site up.
-    let (lifted, ignored): (&[GridMark], Vec<Entity>) = match attendance(world, entity) {
+    // once the site stands. Off the grid, it marks nothing the site is
+    // judged past. The site is not raised yet, so the builder is inside
+    // nothing until it takes the site up.
+    let ignored: Vec<Entity> = match attendance(world, entity) {
         BuilderAttendance::Crew(WorkPresence::Hidden { .. }) | BuilderAttendance::Consumed => {
             spawn::hide_entity(world, entity, Inside::Nothing);
-            (&builder_mark, Vec::new())
+            Vec::new()
         }
         BuilderAttendance::Crew(WorkPresence::Attached(_)) => {
             spawn::free_to_seat(world, entity);
-            (&builder_mark, vec![entity])
+            vec![entity]
         }
         BuilderAttendance::Crew(WorkPresence::Present { .. }) | BuilderAttendance::Unattended => {
-            (&[], Vec::new())
+            Vec::new()
         }
     };
 
@@ -417,7 +416,6 @@ fn found(
         FieldReach::Initial,
         builder,
         rise_attendance.clone(),
-        lifted,
         &ignored,
     )
     .unwrap_or_else(|| unreachable!("the ground was judged to take the site this tick"));

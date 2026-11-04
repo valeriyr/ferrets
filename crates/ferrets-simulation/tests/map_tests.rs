@@ -925,7 +925,7 @@ fn outer_corner_without_its_low_cell_panics() {
 //
 
 #[test]
-fn taken_claim_frees_its_cells_and_restores_exactly() {
+fn lifted_claim_frees_its_cells_and_restores_exactly() {
     let mut map = wall_test_map();
     let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
     map.place(mark(
@@ -934,7 +934,7 @@ fn taken_claim_frees_its_cells_and_restores_exactly() {
         OccupancyClass::Claim,
     ));
 
-    let held = map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
+    let held = map.lift_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
 
     assert_eq!(held.len(), 4, "the whole held footprint is released");
     for &cell in &held {
@@ -948,33 +948,38 @@ fn taken_claim_frees_its_cells_and_restores_exactly() {
 }
 
 #[test]
-fn taken_claim_reports_only_cells_that_were_held() {
-    // Half the footprint queried carries no claim — routine under the
-    // continuous model, whose plane is a once-per-tick summary trailing the
-    // bodies: taking must release and report only what was held, so
-    // restoring cannot mint claims out of thin air.
+fn lifted_claim_keeps_cell_another_body_shares() {
+    // Two continuous bodies share (2, 0): lifting one's claim for a search
+    // leaves the other's, so the search still reads the cell as held.
+    let mut map = continuous_test_map();
+    let unit = shape(CellSize::ONE);
+    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    map.place(mark(&location, unit, OccupancyClass::Claim));
+    map.place(mark(&location, unit, OccupancyClass::Claim));
+
+    let held = map.lift_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::ONE);
+
+    // Two claims, one lifted: 2 - 1 = 1.
+    assert_eq!(
+        map.nav_grid().claim_count(GROUND_LAYER, CellPos::new(2, 0)),
+        1
+    );
+    map.restore_claim(GROUND_LAYER.into(), &held);
+    assert_eq!(
+        map.nav_grid().claim_count(GROUND_LAYER, CellPos::new(2, 0)),
+        2
+    );
+}
+
+#[test]
+#[should_panic(expected = "a claim taken off a cell is one that holds it")]
+fn lifting_partially_claimed_rect_panics() {
     let mut map = continuous_test_map();
     let unit = shape(CellSize::new(1, 2));
     let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
     map.place(mark(&location, unit, OccupancyClass::Claim));
 
-    let held = map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
-
-    assert_eq!(held, vec![CellPos::new(2, 0), CellPos::new(2, 1)]);
-}
-
-#[test]
-#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
-#[should_panic(
-    expected = "a settled claimant's footprint must be fully claimed under the cell model"
-)]
-fn taking_partially_claimed_rect_panics_under_cell_model() {
-    let mut map = wall_test_map();
-    let unit = shape(CellSize::new(1, 2));
-    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
-    map.place(mark(&location, unit, OccupancyClass::Claim));
-
-    map.take_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
+    map.lift_claim(GROUND_LAYER.into(), CellPos::new(2, 0), CellSize::new(2, 2));
 }
 
 #[test]
@@ -1011,7 +1016,49 @@ fn reservation_leaves_reserver_own_claim_where_it_stands() {
         Some(standing),
     );
 
-    assert_eq!(reserved, vec![CellPos::new(3, 0)]);
+    assert_eq!(reserved, vec![(CellPos::new(3, 0), GROUND_LAYER.into())]);
+}
+
+#[test]
+fn reservation_claims_layers_reserver_does_not_hold_where_it_stands() {
+    // A 1×1 ground mover at (2, 0) reserves a 2×1 footprint on ground and
+    // air: its own cell is left under its ground claim and reserved on air
+    // alone, (3, 0) on both.
+    let mut map = two_layer_test_map();
+    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let standing = mark(&location, shape(CellSize::ONE), OccupancyClass::Claim);
+    map.place(standing);
+
+    let both = LayerMask::from(GROUND_LAYER) | AIR_LAYER;
+    let reserved = map.reserve_claim(
+        both,
+        CellPos::new(2, 0),
+        CellSize::new(2, 1),
+        Some(standing),
+    );
+
+    assert_eq!(
+        reserved,
+        vec![
+            (CellPos::new(2, 0), AIR_LAYER.into()),
+            (CellPos::new(3, 0), both),
+        ]
+    );
+    // One claim per cell and layer: the standing one on ground, the
+    // reservation's on air.
+    assert_eq!(
+        map.nav_grid().claim_count(GROUND_LAYER, CellPos::new(2, 0)),
+        1
+    );
+    assert_eq!(map.nav_grid().claim_count(AIR_LAYER, CellPos::new(2, 0)), 1);
+
+    map.release_reservation(&reserved);
+    assert_eq!(
+        map.nav_grid().claim_count(GROUND_LAYER, CellPos::new(2, 0)),
+        1
+    );
+    assert_eq!(map.nav_grid().claim_count(AIR_LAYER, CellPos::new(2, 0)), 0);
+    assert_eq!(map.nav_grid().claim_count(AIR_LAYER, CellPos::new(3, 0)), 0);
 }
 
 #[test]
@@ -1036,7 +1083,7 @@ fn reservation_over_cell_another_claims_panics() {
 
 #[test]
 #[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
-#[should_panic(expected = "restoring a taken claim must find its cells free")]
+#[should_panic(expected = "restoring a lifted claim must find its cells free")]
 fn restoring_over_standing_claim_panics() {
     let mut map = wall_test_map();
     let unit = shape(CellSize::ONE);
@@ -1051,53 +1098,70 @@ fn restoring_over_standing_claim_panics() {
 //
 
 #[test]
-#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
-#[should_panic(expected = "releasing a reservation must find its cells claimed")]
+#[should_panic(expected = "a claim taken off a cell is one that holds it")]
 fn releasing_unclaimed_cells_panics() {
     let mut map = wall_test_map();
-    map.release_claim(GROUND_LAYER.into(), &[CellPos::new(2, 0)]);
+    map.release_reservation(&[(CellPos::new(2, 0), GROUND_LAYER.into())]);
 }
 
 //
-// ─── Rebuilding the claim plane ───────────────────────────────────────────────
+// ─── Bodies sharing cells ─────────────────────────────────────────────────────
 //
 
 #[test]
-fn rebuilt_claims_stamp_footprints_and_reassert_reservations() {
+fn shared_cell_stays_claimed_until_its_last_body_leaves() {
+    // Two continuous bodies on (3, 0): the first stepping to (4, 0) leaves
+    // the cell held by the second, which is then displaced.
     let mut map = continuous_test_map();
-    // A claim from the previous tick vanishes with the wipe.
     let unit = shape(CellSize::ONE);
-    let location = LocationComponent::new(world_pos(0, 0), Facing::SOUTH);
-    map.place(mark(&location, unit, OccupancyClass::Claim));
+    let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
+    let standing = mark(&location, unit, OccupancyClass::Claim);
+    map.place(standing);
+    map.place(standing);
 
-    map.rebuild_claims(
-        &[(GROUND_LAYER.into(), CellSize::new(2, 1), CellPos::new(3, 0))],
-        &[(GROUND_LAYER.into(), vec![CellPos::new(6, 1)])],
+    map.step_claim(
+        GROUND_LAYER.into(),
+        CellSize::ONE,
+        CellPos::new(3, 0),
+        CellPos::new(4, 0),
     );
 
+    // Two claims on (3, 0), one stepped off: 2 - 1 = 1; (4, 0): 0 + 1 = 1.
+    assert_eq!(
+        map.nav_grid().claim_count(GROUND_LAYER, CellPos::new(3, 0)),
+        1
+    );
+    assert_eq!(
+        map.nav_grid().claim_count(GROUND_LAYER, CellPos::new(4, 0)),
+        1
+    );
+
+    map.displace(standing);
+
+    // The last body leaves: 1 - 1 = 0.
+    assert_eq!(
+        map.nav_grid().claim_count(GROUND_LAYER, CellPos::new(3, 0)),
+        0
+    );
     assert!(
         !map.nav_grid()
-            .is_claimed_by(GROUND_LAYER, CellPos::new(0, 0))
-    );
-    assert!(
-        map.nav_grid()
             .is_claimed_by(GROUND_LAYER, CellPos::new(3, 0))
-    );
-    assert!(
-        map.nav_grid()
-            .is_claimed_by(GROUND_LAYER, CellPos::new(4, 0))
-    );
-    assert!(
-        map.nav_grid()
-            .is_claimed_by(GROUND_LAYER, CellPos::new(6, 1))
     );
 }
 
 #[test]
-#[should_panic(expected = "the claim plane is never rebuilt under the cell model")]
-fn rebuilding_claims_panics_under_cell_model() {
-    let mut map = wall_test_map();
-    map.rebuild_claims(&[], &[]);
+fn ground_past_lifted_body_stays_held_by_body_sharing_its_cell() {
+    // Two continuous bodies on (3, 0): looking past one, the cell is still
+    // the other's; looking past both, it is free.
+    let mut map = continuous_test_map();
+    let unit = shape(CellSize::ONE);
+    let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
+    let standing = mark(&location, unit, OccupancyClass::Claim);
+    map.place(standing);
+    map.place(standing);
+
+    assert!(!map.is_free_over_lifted(&location, unit, &[standing]));
+    assert!(map.is_free_over_lifted(&location, unit, &[standing, standing]));
 }
 
 //
@@ -1168,6 +1232,8 @@ fn static_write_on_no_layer_panics_naming_its_contract() {
 
 /// The ground layer every hierarchy test uses.
 const GROUND_LAYER: LayerId = LayerId::new(1);
+/// The air layer [`two_layer_test_map`] registers beside the ground.
+const AIR_LAYER: LayerId = LayerId::new(2);
 /// The terrain the test maps are made of.
 const LAND: TerrainId = TerrainId::new(1);
 /// The lake's terrain, registered second.
@@ -1258,8 +1324,20 @@ fn land_registry() -> ContentRegistry {
     registry
 }
 
-/// An 8×2 map under the continuous model, whose claim plane is a rebuilt
-/// summary rather than law.
+/// An 8×2 cell-model map with the ground and air layers registered.
+fn two_layer_test_map() -> Map {
+    let mut nav_grid = grid(8, 2);
+    nav_grid.add_flat_layer(AIR_LAYER, 1);
+    Map::new(
+        "test",
+        Projection::Isometric,
+        MovementModel::Cell,
+        nav_grid,
+        vec![],
+    )
+}
+
+/// An 8×2 map under the continuous model, where bodies may share a cell.
 fn continuous_test_map() -> Map {
     Map::new(
         "test",

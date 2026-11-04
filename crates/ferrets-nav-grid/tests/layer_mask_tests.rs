@@ -126,3 +126,22 @@ fn display_shows_binary() {
     assert_eq!(format!("{}", LayerMask::from(0b0110u32)), "0b110");
     assert_eq!(format!("{}", LayerMask::from(0b1u32)), "0b1");
 }
+
+//
+// ─── Layers ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn layers_yield_each_set_bit_lowest_first() {
+    let mask = LayerMask::from(0b1010_0100u32);
+
+    assert_eq!(
+        mask.layers().collect::<Vec<_>>(),
+        vec![
+            LayerId::new(0b100),
+            LayerId::new(0b10_0000),
+            LayerId::new(0b1000_0000)
+        ]
+    );
+    assert_eq!(LayerMask::EMPTY.layers().count(), 0);
+}

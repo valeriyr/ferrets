@@ -13,12 +13,10 @@ use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_physics::terrain;
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{
-        location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
-    },
+    components::{movement::MoveComponent, order_queue::OrderQueueComponent},
     entity_def,
     map::Map,
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::Order,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
@@ -60,11 +58,11 @@ fn body_pressed_into_water_corner_rounds_it_on_land() {
         .collect();
     let mut app = utils::dry_orders_app(MovementModel::Continuous, &water, |_, _| {});
     let (landlubber, _) = utils::create_owned(&mut app, "landlubber", 12, 5, 0);
-    app.world_mut()
-        .entity_mut(landlubber)
-        .get_mut::<LocationComponent>()
-        .unwrap()
-        .position = utils::part_way("10.68", "5.08");
+    movement_model::move_body(
+        app.world_mut(),
+        landlubber,
+        utils::part_way("10.68", "5.08"),
+    );
     walk_to_spot(&mut app, landlubber, utils::pos(4, 5));
     let shape = {
         let world = app.world();
@@ -251,11 +249,7 @@ fn body_clipped_into_footprint_walks_itself_free() {
     // the static footprint — staged directly, since placement reads claims at
     // the rounded anchor and cannot see circle edges. Deep enough that no
     // single step clears it, so draining is the only way out.
-    app.world_mut()
-        .entity_mut(runner)
-        .get_mut::<LocationComponent>()
-        .unwrap()
-        .position = FixedUVec2::new(FixedU64::from_num(7.45), FixedU64::from_num(7));
+    movement_model::move_body(app.world_mut(), runner, utils::part_way("7.45", "7"));
 
     app.world_mut()
         .entity_mut(runner)
@@ -618,11 +612,7 @@ fn game_whose_map_serves_no_mover_does_not_start() {
 fn runner_clipping_keep_corner(app: &mut App) -> Entity {
     utils::create_owned(app, "keep", 8, 6, 0);
     let (runner, _) = utils::create_owned(app, "runner", 12, 5, 0);
-    app.world_mut()
-        .entity_mut(runner)
-        .get_mut::<LocationComponent>()
-        .unwrap()
-        .position = utils::part_way("10.68", "5.08");
+    movement_model::move_body(app.world_mut(), runner, utils::part_way("10.68", "5.08"));
     runner
 }
 

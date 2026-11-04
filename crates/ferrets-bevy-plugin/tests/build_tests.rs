@@ -46,7 +46,7 @@ use ferrets_simulation::{
         orders::{self, Refusal},
     },
     map::Map,
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::{AttackTarget, BuildTask, Order},
     resources::PlayerResources,
     session::{GameSession, player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
@@ -663,10 +663,11 @@ fn builder_lying_across_site_edge_steps_wholly_off_it() {
     // stands on as arrived, and raises the site.
     let mut app = utils::continuous_orders_app();
     let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
-    app.world_mut()
-        .get_mut::<LocationComponent>(mason)
-        .expect("the mason stands")
-        .position = FixedUVec2::new(utils::fixed("9.5"), utils::fixed("10"));
+    movement_model::move_body(
+        app.world_mut(),
+        mason,
+        FixedUVec2::new(utils::fixed("9.5"), utils::fixed("10")),
+    );
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, mason_id);
@@ -720,9 +721,8 @@ fn builder_steps_off_its_site_wherever_it_walks_whatever_its_placement_rules() {
 
 #[test]
 fn consumed_builder_raises_site_it_stands_on_under_continuous_model() {
-    // Under the continuous model a body's claim is rebuilt after the orders
-    // run: the larva leaving the grid as it founds the depot on (10, 10) is
-    // set aside for the site's own placement too.
+    // Under the continuous model the larva, leaving the grid as it founds the
+    // depot on (10, 10), frees its cell for the site.
     let mut app = utils::continuous_orders_app();
     let (_, larva_id) = utils::create_owned(&mut app, "larva", 10, 10, 0);
     utils::grant_gold(&mut app, 80);

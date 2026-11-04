@@ -96,6 +96,10 @@
 //!                      gives away
 //! note_idleness      — again, once every order of the tick has run: record how
 //!                      long each order queue has stood empty
+//! process_garrison_attacks, process_turrets — exclusive systems; the fights
+//!                      outside the order lifecycle
+//! resolve_pushing    — exclusive system; continuous-model bodies push each
+//!                      other apart, each claim following its body
 //! process_impacts    — exclusive system; land shots whose flight time has elapsed,
 //!                      where the same-tick delivery path lands its damage
 //! process_pending_reveals — exclusive system; retry reappearing entities that finished
@@ -117,6 +121,9 @@
 //! process_entity_ai  — per-entity AI think (throttled, every N ticks) [not yet implemented]
 //! check_game_result  — apply the finish policy; may end the session (last player
 //!                      standing, or a scripted scenario's verdict)
+//! check_claim_plane  — exclusive system; in debug builds, assert the claim plane
+//!                      holds exactly the claims of the bodies on the grid and
+//!                      the reservations of changes under way
 //! tick_counter       — advance the simulation tick
 //! ```
 //!
@@ -583,7 +590,9 @@ impl Plugin for SimulationPlugin {
                         systems::process_lifetimes,
                     )
                         .chain(),
-                    systems::check_game_result,
+                    // Every pass that writes claims has run: the claim plane
+                    // is checked against the bodies on it.
+                    (systems::check_game_result, systems::check_claim_plane).chain(),
                     systems::tick_counter,
                 )
                     .chain()

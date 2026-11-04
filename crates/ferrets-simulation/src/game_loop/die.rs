@@ -1,10 +1,7 @@
 //! Die order implementation.
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
-use bevy_ecs::{
-    entity::Entity,
-    world::{Mut, World},
-};
+use bevy_ecs::{entity::Entity, world::World};
 
 use ferrets_content::dying::DyingDef;
 
@@ -14,14 +11,11 @@ use crate::{
     beside::Beside,
     components::{
         dying::{DiedComponent, DyingComponent, Passing},
-        location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
     },
     entity_def,
     entity_index::EntityIndex,
     landing,
-    map::Map,
-    occupancy::OccupancyClass,
     order::Order,
     overbuild,
     spawn::{self, Fallen},
@@ -97,7 +91,8 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     let id = entity_def::simulation_id(world, entity);
     world.resource_mut::<EntityIndex>().remove_remains(id);
 
-    free_footprint(world, entity);
+    // The footprint held through the dying phase is freed.
+    spawn::lift_footprint(world, entity);
     // What the entity leaves comes out by the berth it held through its
     // dying phase — a seated worker dies in its seat — read before the berth
     // goes back to the job, or out of the cells it stood on; a death off the
@@ -113,24 +108,6 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     overbuild::uncover_source(world, entity);
     leave_bequests(world, entity, passing, beside);
     Processing::state(OrderState::Finished)
-}
-
-/// Frees the footprint the entity has held through its dying phase, so the
-/// remains it leaves behind (or anyone else) can take the cells.
-///
-/// An entity off the grid — hidden, or attached to a job — holds nothing.
-fn free_footprint(world: &mut World, entity: Entity) {
-    if !entity_def::stands_on_grid(world, entity) {
-        return;
-    }
-
-    let def = entity_def::of(world, entity);
-    let location_def = def.location.unwrap();
-    let class = OccupancyClass::of(def);
-    world.resource_scope(|world, mut map: Mut<Map>| {
-        let location = world.get::<LocationComponent>(entity).unwrap();
-        map.displace_if_some(entity_def::grid_mark_of(location, location_def, class));
-    });
 }
 
 /// Hands on what the entity's type leaves for the death it died.
