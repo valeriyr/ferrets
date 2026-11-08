@@ -111,11 +111,11 @@ fn ground_building_does_not_block_flight() {
     for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
         let footprint = CellPos::new(CLEAR_GROUND.0 + dx, CLEAR_GROUND.1 + dy);
         assert!(
-            live.nav_grid().is_occupied_by(ground, footprint),
+            live.nav_grid().is_occupied(ground, footprint),
             "the farm does not hold its own ground at {footprint:?}"
         );
         assert!(
-            !live.nav_grid().is_occupied_by(air, footprint),
+            !live.nav_grid().is_occupied(air, footprint),
             "the farm closed the air at {footprint:?}, but it occupies the ground alone"
         );
     }
@@ -147,11 +147,11 @@ fn tall_building_blocks_flight() {
         for dx in 0..3 {
             let footprint = CellPos::new(origin.0 + dx, origin.1 + dy);
             assert!(
-                live.nav_grid().is_occupied_by(ground, footprint),
+                live.nav_grid().is_occupied(ground, footprint),
                 "the fortress does not hold the ground layer at {footprint:?}"
             );
             assert!(
-                live.nav_grid().is_occupied_by(air, footprint),
+                live.nav_grid().is_occupied(air, footprint),
                 "the fortress left the air open at {footprint:?}, so nothing on the map \
                  obstructs flight"
             );
@@ -469,7 +469,7 @@ fn wide_flier_claims_its_whole_footprint() {
         for dx in 0..2 {
             assert!(
                 live.nav_grid()
-                    .is_claimed_by(air, CellPos::new(anchor.0 + dx, anchor.1 + dy)),
+                    .is_claimed(air, CellPos::new(anchor.0 + dx, anchor.1 + dy)),
                 "the 2x2 flier does not hold ({}, {})",
                 anchor.0 + dx,
                 anchor.1 + dy

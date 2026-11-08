@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use bevy_ecs::{entity::Entity, resource::Resource, world::World};
-use ferrets_content::{entity_stats::EntityStatId, location::Solidity, registry::ContentRegistry};
+use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
@@ -16,6 +16,7 @@ use ferrets_pathfinder::{
     astar,
     hierarchy::ClusterPos,
     hpa::{self, Crossing, PathShape, PlanTarget},
+    mover_profile::{Blockers, MoverProfile},
 };
 use ferrets_physics::{body, terrain};
 
@@ -36,6 +37,7 @@ use crate::{
     movement_model::{self, MovementModel, Settling},
     order::Order,
     session::GameSession,
+    simulation_id::SimulationId,
 };
 
 /// Ticks to wait for a blocked cell to clear before recalculating the path.
@@ -108,12 +110,20 @@ impl MovePlanShare {
     }
 }
 
-/// Whether `entity` may start a Move: its type moves and it operates.
+/// Whether `entity` may start a Move (see [`may_walk`]).
 pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
+    may_walk(world, entity)
+}
+
+/// Whether `entity` may start an order that walks: its type moves, no
+/// breeder holds it in a berth, and it operates.
+pub fn may_walk(world: &World, entity: Entity) -> Result<(), Refusal> {
     if !entity_def::of(world, entity).can_move() {
         return Err(Refusal::Incapable);
     }
-    orders::requires_operating(world, entity)
+    orders::requires_operating(world, entity)?;
+    // One attending a job is let out by the job's order being called off.
+    orders::requires_unheld(world, entity)
 }
 
 /// Called once when a Move order becomes the front `New` entry.
@@ -125,6 +135,10 @@ pub fn prepare(entity: Entity, order: &Order, world: &mut World) -> OrderState {
     if can_start(world, entity, order).is_err() {
         return OrderState::Finished;
     }
+    assert!(
+        !entity_def::attached(world, entity),
+        "a body attending a job walks only once the job's order lets it out"
+    );
     insert_driver(entity, world);
     OrderState::InProcessing
 }
@@ -195,6 +209,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
         .expect("movable entities have a speed stat");
     let location_def = entity_def::of(world, entity).location.unwrap();
     let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
+    let holder = entity_def::simulation_id(world, entity);
 
     let Some(mut move_component) = world.entity_mut(entity).take::<MoveComponent>() else {
         return OrderState::Finished;
@@ -257,15 +272,8 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
                     move_component.frustration,
                 )
                 && settled_body_over(world, entity, shape, waypoint)
-                && let Some(route) = claim_aware_route(
-                    world,
-                    shape,
-                    location_def.solidity(),
-                    position,
-                    target,
-                    size,
-                    range,
-                )
+                && let Some(route) =
+                    claim_aware_route(world, shape, holder, position, target, size, range)
                 && !route.is_empty()
             {
                 move_component.take_route(route);
@@ -350,7 +358,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
                 world,
                 &mut move_component,
                 shape,
-                location_def.solidity(),
+                holder,
                 position,
                 target,
                 size,
@@ -609,6 +617,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
         .expect("movable entities have a speed stat");
     let location_def = entity_def::of(world, entity).location.unwrap();
     let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
+    let holder = entity_def::simulation_id(world, entity);
 
     let Some(mut move_component) = world.entity_mut(entity).take::<MoveComponent>() else {
         return OrderState::Finished;
@@ -681,7 +690,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
             world,
             &mut move_component,
             shape,
-            location_def.solidity(),
+            holder,
             position,
             target,
             size,
@@ -699,10 +708,12 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     // Start a crossing into the next cell.
     let next_cell = *move_component.path.last().unwrap();
 
-    if !world
-        .resource::<Map>()
-        .can_step_footprint(shape, CellPos::from(position), next_cell)
-    {
+    if !world.resource::<Map>().can_step_footprint(
+        shape,
+        holder,
+        CellPos::from(position),
+        next_cell,
+    ) {
         return resolve_blocked_crossing(
             entity,
             world,
@@ -710,6 +721,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
             position,
             speed,
             shape,
+            holder,
             target,
             size,
             range,
@@ -738,13 +750,9 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
 
     // Claim the footprint entered and release the one left behind, before any
     // position change. Claims live on the grid's unit plane, invisible to the
-    // hierarchy. Passable entities never claim cells.
+    // hierarchy.
     let current_cell = CellPos::from(position);
-    if location_def.solidity().claims_cells() {
-        world
-            .resource_mut::<Map>()
-            .step_claim(shape.layers, shape.size, current_cell, next_cell);
-    }
+    movement_model::step_claim(world, entity, next_cell);
 
     move_component.moving_from = current_cell;
 
@@ -791,7 +799,7 @@ fn next_segment(
     world: &mut World,
     move_component: &mut MoveComponent,
     shape: MoverShape,
-    solidity: Solidity,
+    holder: SimulationId,
     position: FixedUVec2,
     target: FixedUVec2,
     size: CellSize,
@@ -840,7 +848,7 @@ fn next_segment(
     let projection = world.resource::<Map>().projection();
     if move_component.avoid_claims {
         move_component.avoid_claims = false;
-        return claim_aware_route(world, shape, solidity, position, target, size, range);
+        return claim_aware_route(world, shape, holder, position, target, size, range);
     }
 
     // A fresh plan: reuse the tick's shared corridor for this goal and start
@@ -929,47 +937,28 @@ fn next_segment(
     )
 }
 
-/// A flat route to the goal that treats every unit claim as a wall.
+/// A flat route to the goal that treats every unit claim but `holder`'s own
+/// as a wall.
 fn claim_aware_route(
-    world: &mut World,
+    world: &World,
     shape: MoverShape,
-    solidity: Solidity,
+    holder: SimulationId,
     position: FixedUVec2,
     target: FixedUVec2,
     size: CellSize,
     range: u32,
 ) -> Option<Vec<CellPos>> {
-    let from = body::anchor(position);
-    let projection = world.resource::<Map>().projection();
-    // The mover's own footprint claim would wall this claim-honoring search in
-    // at its start — a wide mover overlaps its own claim from every
-    // neighboring anchor — so it is lifted for exactly this query and put
-    // straight back. A passable mover claims nothing, so there is nothing to
-    // lift; cells under its body may be someone else's claim, and lifting
-    // those would route it through ground others hold.
-    let own = if solidity.claims_cells() {
-        world
-            .resource_mut::<Map>()
-            .lift_claim(shape.layers, from, shape.size)
-    } else {
-        Vec::new()
-    };
-    let path = {
-        let map = world.resource::<Map>();
-        astar::find_path(
-            map.nav_grid(),
-            projection,
-            position,
-            shape,
-            target,
-            size,
-            range,
-        )
-    };
-    world
-        .resource_mut::<Map>()
-        .restore_claim(shape.layers, &own);
-    path.map(|path| path.into_iter().map(CellPos::from).collect())
+    let map = world.resource::<Map>();
+    astar::find_path(
+        map.nav_grid(),
+        map.projection(),
+        position,
+        MoverProfile::new(shape, Blockers::AllBut(holder.0)),
+        target,
+        size,
+        range,
+    )
+    .map(|path| path.into_iter().map(CellPos::from).collect())
 }
 
 /// The range a walk accepts right now: point moves grow with frustration so
@@ -1055,6 +1044,7 @@ fn resolve_blocked_crossing(
     position: FixedUVec2,
     speed: FixedU64,
     shape: MoverShape,
+    holder: SimulationId,
     target: FixedUVec2,
     size: CellSize,
     range: u32,
@@ -1201,12 +1191,8 @@ fn resolve_blocked_crossing(
             // in. Detouring back onto that same cell only stalls: a
             // claim-aware route to another cell that serves the goal is taken
             // at once. With none, the walk waits as on any held step.
-            let solidity = entity_def::of(world, entity)
-                .location
-                .expect("walkers have a location")
-                .solidity();
             if let Some(route) =
-                claim_aware_route(world, shape, solidity, position, target, size, range)
+                claim_aware_route(world, shape, holder, position, target, size, range)
                 && !route.is_empty()
             {
                 move_component.take_route(route);
@@ -1263,8 +1249,7 @@ fn resolve_blocked_crossing(
 }
 
 /// Starts both crossings of a head-on swap: this entity toward `next_cell`,
-/// the blocker toward `current_cell`. Claim bits stay untouched — the
-/// exchange leaves each cell claimed by its new owner.
+/// the blocker toward `current_cell`, each taking the other's claim.
 #[allow(clippy::too_many_arguments)]
 fn swap_crossings(
     entity: Entity,
@@ -1281,6 +1266,7 @@ fn swap_crossings(
     size: CellSize,
     range: u32,
 ) -> OrderState {
+    movement_model::swap_claims(world, entity, blocker);
     let next_pos = FixedUVec2::from(next_cell);
     let current_pos = FixedUVec2::from(current_cell);
 
@@ -1310,7 +1296,7 @@ fn swap_crossings(
         turn::toward(world, blocker, wanted, turn::Rate::Walking);
     }
 
-    // This entity's own crossing, without the usual claim juggling.
+    // This entity's own crossing; its claim was traded above.
     move_component.moving_from = current_cell;
     move_component.forgive();
     let new_pos = projection.step_toward(position, next_pos, speed);
@@ -1465,10 +1451,9 @@ fn resting_ally_within(
 /// The cells a step of `shape` from `from` to `to` enters: those of the
 /// footprint at `to` outside the one at `from`.
 fn entered_cells(shape: MoverShape, from: CellPos, to: CellPos) -> Vec<CellPos> {
-    let left = CellRect::new(from, shape.size);
     CellRect::new(to, shape.size)
-        .cells()
-        .filter(|&cell| !left.contains(cell))
+        .minus(CellRect::new(from, shape.size))
+        .flat_map(CellRect::cells)
         .collect()
 }
 

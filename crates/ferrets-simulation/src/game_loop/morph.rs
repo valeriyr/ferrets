@@ -52,7 +52,7 @@ use crate::{
         entity_info::EntityInfoComponent,
         last_hit::LastHitComponent,
         location::LocationComponent,
-        morph::{MorphComponent, MorphReservation, MorphStage, MorphUnderWay},
+        morph::{MorphComponent, MorphStage, MorphUnderWay},
         movement::MoveComponent,
         order_queue::{CancelPolicy, OrderState},
         patience::Waiting,
@@ -72,7 +72,7 @@ use crate::{
     movement_model::{self, MovementModel},
     occupancy::{GridMark, OccupancyClass},
     order::Order,
-    rally, requirements,
+    rally, requirements, reservation,
     session::player_id::PlayerId,
     simulation_id::SimulationId,
     spawn::{self, BroodlingSeat, FieldReach, StandingActs},
@@ -415,7 +415,7 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
             Some(OccupancyClass::Static) => ground::ground_holders(world, &[entity]),
             Some(OccupancyClass::Claim) | None => Vec::new(),
         };
-        let berth = berths::held_berth(world, entity);
+        let berth = berths::seated_berth(world, entity);
         let around = entity_def::beside_rect(world, entity, berth);
         let lander = Lander {
             def: stands,
@@ -448,6 +448,7 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
         .get::<LocationComponent>()
         .filter(|_| step_out.is_none() && on_grid);
     let own_class = OccupancyClass::of(entity_def::of(world, entity));
+    let holder = entity_def::simulation_id(world, entity);
     // The body never stands in its own way, standing or stepped out; the
     // movers whose `marks` are lifted, `bodies`, are set aside with it.
     let takes = |worn_id: EntityTypeId,
@@ -457,7 +458,7 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
                  bodies: &[Entity]| {
         let placed = LocationComponent::new(anchor, spawn::DEFAULT_FACING);
         let lifted: Vec<GridMark> = own
-            .and_then(|location| entity_def::grid_mark_of(location, from, own_class))
+            .and_then(|location| entity_def::grid_mark_of(holder, location, from, own_class))
             .into_iter()
             .chain(marks.iter().copied())
             .collect();
@@ -485,6 +486,7 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
             owner,
             footprint,
             worn.occupies(),
+            OccupancyClass::of(world.resource::<ContentRegistry>().def(worn_id)),
             &[entity],
             |marks, bodies| takes(worn_id, worn, anchor, marks, bodies),
         ) {
@@ -636,12 +638,12 @@ fn begin(
     );
     // The ground ahead is claimed last, around what the entity now marks.
     if let Some((anchor, to)) = reservation {
-        let standing = entity_def::grid_mark(world, entity);
-        let claims = world.resource_mut::<Map>().reserve_claim(
+        let held = reservation::reserve(
+            world,
+            entity,
             to.occupies(),
             body::anchor(anchor),
             to.size(),
-            standing,
         );
         let mut morph = world
             .get_mut::<MorphComponent>(entity)
@@ -650,7 +652,7 @@ fn begin(
             MorphStage::UnderWay(under_way) => under_way,
             MorphStage::Clearing(_) => unreachable!("the change was put on under way above"),
         };
-        under_way.reservation = Some(MorphReservation { claims });
+        under_way.reservation = Some(held);
     }
     OrderState::InProcessing
 }
@@ -871,7 +873,7 @@ fn land(
                 .resource::<EntityIndex>()
                 .alive(id)
                 .expect("a counted broodling is alive");
-            (id, berths::held_berth(world, broodling))
+            (id, berths::seated_berth(world, broodling))
         })
         .collect();
 
@@ -1144,6 +1146,7 @@ fn reoccupy(
         .unwrap_or(spawn::DEFAULT_FACING);
     let standing = LocationComponent::new(position, facing);
     let owner = entity_def::owner(world, entity);
+    let holder = entity_def::simulation_id(world, entity);
 
     // Whether the ground takes the new form at `anchor`, looking past the
     // footprint the entity holds now: its own presence never stands in its
@@ -1156,7 +1159,7 @@ fn reoccupy(
                 &placed,
                 to,
                 new_class,
-                entity_def::grid_mark_of(&standing, from, old_class).as_slice(),
+                entity_def::grid_mark_of(holder, &standing, from, old_class).as_slice(),
                 &[entity],
             )
     };
@@ -1181,7 +1184,7 @@ fn reoccupy(
         Landing::Nearby => {
             // Its own presence never stands in its way: the search looks past
             // the cells it holds now.
-            let standing_mark = entity_def::grid_mark_of(&standing, from, old_class);
+            let standing_mark = entity_def::grid_mark_of(holder, &standing, from, old_class);
             let around = entity_def::standing_rect(world, entity);
             let lander = Lander {
                 def: world.resource::<ContentRegistry>().def(type_id),
@@ -1204,13 +1207,16 @@ fn reoccupy(
         return Some(anchor);
     }
 
-    let mut map = world.resource_mut::<Map>();
-    map.displace_if_some(entity_def::grid_mark_of(&standing, from, old_class));
-    map.place_if_some(entity_def::grid_mark_of(
-        &LocationComponent::new(anchor, facing),
-        to,
-        new_class,
-    ));
+    spawn::remark(
+        world,
+        entity_def::grid_mark_of(holder, &standing, from, old_class),
+        entity_def::grid_mark_of(
+            holder,
+            &LocationComponent::new(anchor, facing),
+            to,
+            new_class,
+        ),
+    );
     Some(anchor)
 }
 
@@ -1444,11 +1450,12 @@ fn return_to_origin(
         .get::<LocationComponent>()
         .expect("a form changing back on the grid stands")
         .clone();
+    let holder = entity_def::simulation_id(world, entity);
     let worn_class = OccupancyClass::of(entity_def::of(world, entity));
     let origin_class = OccupancyClass::of(world.resource::<ContentRegistry>().def(from));
     let takes = |world: &World, marks: &[GridMark], bodies: &[Entity]| {
         let placed = LocationComponent::new(anchor, standing.facing);
-        let lifted: Vec<GridMark> = entity_def::grid_mark_of(&standing, worn, worn_class)
+        let lifted: Vec<GridMark> = entity_def::grid_mark_of(holder, &standing, worn, worn_class)
             .into_iter()
             .chain(marks.iter().copied())
             .collect();
@@ -1457,20 +1464,26 @@ fn return_to_origin(
             .collect();
         ground::can_place(world, &placed, to, origin_class, &lifted, &ignored)
     };
-    match make_way::shove_off(world, owner, footprint, to.occupies(), &[entity], takes) {
+    match make_way::shove_off(
+        world,
+        owner,
+        footprint,
+        to.occupies(),
+        origin_class,
+        &[entity],
+        takes,
+    ) {
         Shoved::Cleared if returns(world) => Returned::Back,
         Shoved::Cleared | Shoved::Held => Returned::Refused,
     }
 }
 
-/// Lets go of the ground a reserving change held.
+/// Lets go of the ground a reserving change `under_way` held.
 fn release_reservation(world: &mut World, under_way: &MorphUnderWay) {
-    let Some(reservation) = &under_way.reservation else {
+    let Some(held) = &under_way.reservation else {
         return;
     };
-    world
-        .resource_mut::<Map>()
-        .release_reservation(&reservation.claims);
+    reservation::release(world, held);
 }
 
 //

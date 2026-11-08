@@ -7,9 +7,9 @@ use ferrets_geometry::{
     projection::{self, Projection, Step},
 };
 use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
+use ferrets_nav_grid::nav_grid::NavGrid;
 
-use crate::mover_profile::{Blockers, MoverProfile};
+use crate::mover_profile::MoverProfile;
 
 /// Movement directions: (dx, dy). Costs depend on [`Projection`].
 const DIRECTIONS: [(i32, i32); 8] = [
@@ -23,8 +23,9 @@ const DIRECTIONS: [(i32, i32); 8] = [
     (1, 1),
 ];
 
-/// Finds the shortest path for `shape` from `start` toward the footprint
-/// covering `goal_size` cells from `goal`.
+/// Finds the shortest path for `profile`'s shape from `start` toward the
+/// footprint covering `goal_size` cells from `goal`, around what its blockers
+/// say blocks it.
 ///
 /// The path is a sequence of **anchor** cells: each is a position the shape's
 /// whole footprint fits at, so a wide mover never routes through a gap it
@@ -39,12 +40,12 @@ pub fn find_path(
     grid: &NavGrid,
     projection: Projection,
     start: FixedUVec2,
-    shape: MoverShape,
+    profile: MoverProfile,
     goal: FixedUVec2,
     goal_size: CellSize,
     stop_distance: u32,
 ) -> Option<Vec<FixedUVec2>> {
-    let profile = MoverProfile::new(shape, Blockers::All);
+    let shape = profile.shape;
 
     let start = CellPos::from(start);
     let goal = CellPos::from(goal);
@@ -56,7 +57,7 @@ pub fn find_path(
 
     // Stopping at no distance at all means standing somewhere on the destination
     // footprint, which cannot happen with every cell of it occupied.
-    if stop_distance == 0 && goal_rect.cells().all(|cell| !grid.cell_fits(cell, shape)) {
+    if stop_distance == 0 && goal_rect.cells().all(|cell| !profile.cell_fits(grid, cell)) {
         return None;
     }
 

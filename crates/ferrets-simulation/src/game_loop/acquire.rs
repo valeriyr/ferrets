@@ -29,8 +29,8 @@ pub enum Pursuit {
     /// It fights from where it stands: what lies in range qualifies.
     Holds,
     /// It closes on what it engages: only what it gets within its weapons'
-    /// reach of from where it stands qualifies — for a mover, from a cell in a
-    /// region it walks to.
+    /// reach of from where it stands qualifies — for one that may close (see
+    /// [`entity_def::may_close`]), from a cell in a region it walks to.
     Closes,
 }
 

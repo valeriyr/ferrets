@@ -29,6 +29,7 @@ use crate::{
     movement_model::MovementModel,
     occupancy::{GridMark, OccupancyClass},
     session::player_id::PlayerId,
+    simulation_id::SimulationId,
 };
 use ferrets_content::{
     entity_stats::EntityStatId, entity_type_def::EntityTypeDef, layer::LayerLevel,
@@ -359,44 +360,7 @@ impl Map {
                     OccupancyClass::Claim => layers,
                 });
             let beyond = to.layers & !static_lifted;
-            beyond == LayerMask::EMPTY || !self.nav_grid.is_statically_occupied_by(beyond, cell)
-        })
-    }
-
-    /// Returns `true` if every cell in a footprint of `to` at `placed` is free
-    /// on its layers but for what `lifted` marks there, whatever the ground
-    /// under it. Each mark in `lifted` stands on the grid.
-    pub fn is_free_over_lifted(
-        &self,
-        placed: &LocationComponent,
-        to: MoverShape,
-        lifted: &[GridMark],
-    ) -> bool {
-        let layers = to.layers;
-        let anchor = body::anchor(placed.position);
-        CellRect::new(anchor, to.size).cells().all(|cell| {
-            if !self.nav_grid.is_occupied_by(layers, cell) {
-                return true;
-            }
-            let covering = || lifted.iter().filter(|mark| mark.footprint.contains(cell));
-            let static_lifted = covering().fold(LayerMask::EMPTY, |held, mark| match mark.class {
-                OccupancyClass::Static => held | mark.layers,
-                OccupancyClass::Claim => held,
-            });
-            let beyond_static = layers & !static_lifted;
-            // Every claim on each layer here is one a lifted body holds.
-            let claims_lifted = layers.layers().all(|layer| {
-                let held = covering()
-                    .filter(|mark| match mark.class {
-                        OccupancyClass::Claim => mark.layers & layer != LayerMask::EMPTY,
-                        OccupancyClass::Static => false,
-                    })
-                    .count();
-                usize::from(self.nav_grid.claim_count(layer, cell)) <= held
-            });
-            (beyond_static == LayerMask::EMPTY
-                || !self.nav_grid.is_statically_occupied_by(beyond_static, cell))
-                && claims_lifted
+            beyond == LayerMask::EMPTY || !self.nav_grid.is_statically_occupied(beyond, cell)
         })
     }
 
@@ -423,31 +387,59 @@ impl Map {
         )
     }
 
-    /// Marks every cell `mark` covers as occupied on its layers, on the plane
-    /// its class selects.
-    pub fn place(&mut self, mark: GridMark) {
+    /// Puts `mark` on the grid: its holder's claim on every cell it covers, or
+    /// a standing footprint on the static plane, as its class selects.
+    ///
+    /// Under the cell model a claim takes only cells no one claims; debug
+    /// builds assert it.
+    pub fn claim(&mut self, mark: GridMark) {
         self.set_mark(mark, true);
     }
 
-    /// Clears every cell `mark` covers on its layers, on the plane its class
-    /// selects.
-    pub fn displace(&mut self, mark: GridMark) {
+    /// Takes `mark` off the grid, as [`claim`](Self::claim) put it there.
+    ///
+    /// Panics for a claimed cell `mark`'s holder does not hold.
+    pub fn unclaim(&mut self, mark: GridMark) {
         self.set_mark(mark, false);
     }
 
-    /// [`place`](Self::place)s `mark` when there is one; a body whose
-    /// solidity claims no cells has none.
-    pub fn place_if_some(&mut self, mark: Option<GridMark>) {
-        if let Some(mark) = mark {
-            self.place(mark);
+    /// Moves a body's mark from `from` to `to`. On one plane only the cells
+    /// and layers that change hands are written: what `from` holds that `to`
+    /// does not is let go, what `to` holds that `from` did not is taken.
+    /// Across planes `from` is taken off whole and `to` put on whole.
+    ///
+    /// Panics for marks of two holders; a claim taken follows
+    /// [`claim`](Self::claim)'s cell-model contract.
+    pub fn move_claim(&mut self, from: GridMark, to: GridMark) {
+        assert_eq!(from.holder, to.holder, "a mark moves within one holder");
+        match (from.class, to.class) {
+            (OccupancyClass::Static, OccupancyClass::Static)
+            | (OccupancyClass::Claim, OccupancyClass::Claim) => {}
+            (OccupancyClass::Static, OccupancyClass::Claim)
+            | (OccupancyClass::Claim, OccupancyClass::Static) => {
+                self.unclaim(from);
+                self.claim(to);
+                return;
+            }
         }
-    }
-
-    /// [`displace`](Self::displace)s `mark` when there is one; a body whose
-    /// solidity claims no cells has none.
-    pub fn displace_if_some(&mut self, mark: Option<GridMark>) {
-        if let Some(mark) = mark {
-            self.displace(mark);
+        let covering = |mark: GridMark, cell: CellPos| {
+            if mark.footprint.contains(cell) {
+                mark.layers
+            } else {
+                LayerMask::EMPTY
+            }
+        };
+        for cell in from.footprint.cells() {
+            let left = from.layers & !covering(to, cell);
+            if left != LayerMask::EMPTY {
+                self.write_cell(from.holder, from.class, left, cell, false);
+            }
+        }
+        for cell in to.footprint.cells() {
+            let entered = to.layers & !covering(from, cell);
+            if entered != LayerMask::EMPTY {
+                self.write_cell(to.holder, to.class, entered, cell, true);
+            }
         }
     }
 
@@ -459,8 +451,8 @@ impl Map {
     ///
     /// This is the runtime path for static occupancy that belongs to no
     /// entity footprint — map fixtures and scripted blockers; entity
-    /// footprints go through [`place`](Self::place) and
-    /// [`displace`](Self::displace), which carry their own
+    /// footprints go through [`claim`](Self::claim) and
+    /// [`unclaim`](Self::unclaim), which carry their own
     /// bookkeeping through this same write. Valid under both movement
     /// models: unlike the claim plane, the static plane keeps one discipline
     /// everywhere.
@@ -487,191 +479,66 @@ impl Map {
         // Asserted against the static plane alone: this writes only static
         // bits, and a mover's claim over the cell says nothing about them.
         debug_assert!(
-            self.nav_grid.is_statically_occupied_by(layers, pos) != occupied,
+            self.nav_grid.is_statically_occupied(layers, pos) != occupied,
             "a static write must flip the cell: blocking needs it free, \
              freeing needs it blocked"
         );
-        self.nav_grid.set_occupied_by(layers, pos, occupied);
+        self.nav_grid.set_occupied(layers, pos, occupied);
         self.hierarchy.mark_dirty(pos, layers);
     }
 
-    /// Whether a footprint of `shape` could step from the rect at `from` to
-    /// the neighboring one at `to`: every cell of the destination the mover
-    /// does not already hold must be ground it may stand on (see
-    /// [`NavGrid::cell_fits`]) and free, the step must cross only edges its
-    /// cliff crossing allows, and the destination footprint must hold
-    /// together (see [`NavGrid::holds_together`]).
-    ///
-    /// The mover's own cells are excluded rather than released and re-tested,
-    /// because a step of one cell keeps most of its footprint where it was and
-    /// would otherwise read its own claim as a blockage.
-    pub fn can_step_footprint(&self, shape: MoverShape, from: CellPos, to: CellPos) -> bool {
-        Self::entered_cells(shape.size, from, to).all(|cell| self.nav_grid.cell_fits(cell, shape))
-            && self.nav_grid.can_step(from, to, shape)
-            && self.nav_grid.holds_together(to, shape)
-    }
-
-    /// Moves a mover's claim from the footprint at `from` to the one at `to`,
-    /// releasing what it leaves and claiming what it enters.
-    ///
-    /// Only the cells that actually change hands are written; the overlap a
-    /// step keeps is never released. Under the continuous model the cells
-    /// entered may already hold other claims.
-    ///
-    /// Panics for a cell left that no claim holds.
-    ///
-    /// See also [`lift_claim`](Self::lift_claim) for briefly lifting a claim
-    /// out of a search's way.
-    pub fn step_claim(&mut self, layers: LayerMask, size: CellSize, from: CellPos, to: CellPos) {
-        for cell in Self::entered_cells(size, to, from) {
-            self.nav_grid.remove_claim(layers, cell);
-        }
-        for cell in Self::entered_cells(size, from, to) {
-            match self.movement_model {
-                MovementModel::Cell => debug_assert!(
-                    !self.nav_grid.is_claimed_by(layers, cell),
-                    "a crossing must claim free cells"
-                ),
-                MovementModel::Continuous => {}
-            }
-            self.nav_grid.add_claim(layers, cell);
-        }
-    }
-
-    /// Takes one claim off every cell of the `size` footprint at `origin` on
-    /// `layers`, returning the cells, which
-    /// [`restore_claim`](Self::restore_claim) claims again. Under the
-    /// continuous model a cell another body shares stays claimed.
-    ///
-    /// Panics for a cell of the footprint that no claim holds.
-    pub fn lift_claim(
-        &mut self,
-        layers: LayerMask,
-        origin: CellPos,
-        size: CellSize,
-    ) -> Vec<CellPos> {
-        let held: Vec<CellPos> = CellRect::new(origin, size).cells().collect();
-        for &cell in &held {
-            self.nav_grid.remove_claim(layers, cell);
-        }
-        held
-    }
-
-    /// Puts back the claims a [`lift_claim`](Self::lift_claim) took off.
-    ///
-    /// Under the cell model expects the cells free, as the lift left them;
-    /// panics in debug builds otherwise.
-    pub fn restore_claim(&mut self, layers: LayerMask, cells: &[CellPos]) {
-        for &cell in cells {
-            match self.movement_model {
-                MovementModel::Cell => debug_assert!(
-                    !self.nav_grid.is_claimed_by(layers, cell),
-                    "restoring a lifted claim must find its cells free"
-                ),
-                MovementModel::Continuous => {}
-            }
-            self.nav_grid.add_claim(layers, cell);
-        }
-    }
-
-    /// Claims every cell of the `size` footprint at `origin` on `layers`,
-    /// returning each cell claimed with the layers claimed on it so
-    /// [`release_reservation`](Self::release_reservation) can let them go.
-    ///
-    /// This is how ground is secured ahead of standing on it: the claims read
-    /// as occupied to placement, spawning, and claim-honoring movement. The
-    /// layers `standing` — what the reserving entity marks where it stands
-    /// now — already claims on a cell stay under that claim and are not
-    /// claimed again.
-    ///
-    /// Expects every other layer of every cell unclaimed; panics in debug
-    /// builds otherwise.
-    pub fn reserve_claim(
-        &mut self,
-        layers: LayerMask,
-        origin: CellPos,
-        size: CellSize,
-        standing: Option<GridMark>,
-    ) -> Vec<(CellPos, LayerMask)> {
-        let mut claimed = Vec::new();
-        for cell in CellRect::new(origin, size).cells() {
-            let own = standing
-                .filter(|mark| mark.footprint.contains(cell))
-                .map_or(LayerMask::EMPTY, |mark| match mark.class {
-                    OccupancyClass::Claim => mark.layers,
-                    OccupancyClass::Static => LayerMask::EMPTY,
-                });
-            let ahead = layers & !own;
-            if ahead == LayerMask::EMPTY {
-                continue;
-            }
-            debug_assert!(
-                !self.nav_grid.is_claimed_by(ahead, cell),
-                "a reservation finds a cell claimed only under the reserver's own standing claim"
-            );
-            self.nav_grid.add_claim(ahead, cell);
-            claimed.push((cell, ahead));
-        }
-        claimed
-    }
-
-    /// Takes off the claims a [`reserve_claim`](Self::reserve_claim) took:
-    /// each cell on the layers it was claimed on.
-    ///
-    /// Panics for a cell no claim holds on one of its layers.
-    pub fn release_reservation(&mut self, claims: &[(CellPos, LayerMask)]) {
-        for &(cell, layers) in claims {
-            self.nav_grid.remove_claim(layers, cell);
-        }
-    }
-
-    /// The cells of the `size` footprint at `to` that the one at `from` does not
-    /// already cover, in row-major order.
-    fn entered_cells(size: CellSize, from: CellPos, to: CellPos) -> impl Iterator<Item = CellPos> {
-        (0..size.height).flat_map(move |dy| {
-            (0..size.width).filter_map(move |dx| {
-                let cell = CellPos::new(to.x + dx, to.y + dy);
-                let covered = cell.x >= from.x
-                    && cell.x < from.x + size.width
-                    && cell.y >= from.y
-                    && cell.y < from.y + size.height;
-                (!covered).then_some(cell)
-            })
-        })
+    /// Whether a footprint of `shape` held by `holder` could step from the
+    /// rect at `from` to the neighboring one at `to`: the destination must
+    /// [fit](NavGrid::fits_for) `holder` — ground it may stand on, free of
+    /// everything but `holder`'s own claims, holding together — and the step
+    /// must cross only edges its cliff crossing allows.
+    pub fn can_step_footprint(
+        &self,
+        shape: MoverShape,
+        holder: SimulationId,
+        from: CellPos,
+        to: CellPos,
+    ) -> bool {
+        self.nav_grid.fits_for(to, shape, holder.0) && self.nav_grid.can_step(from, to, shape)
     }
 
     /// Marks or clears every cell `mark` covers, as `occupied` says.
-    ///
-    /// Static marks dirty the hierarchy; claims never do.
     fn set_mark(&mut self, mark: GridMark, occupied: bool) {
-        let layers = mark.layers;
         for cell in mark.footprint.cells() {
-            match mark.class {
-                // Solid footprints exclude each other and placement is
-                // validated against terrain, so the flip the static
-                // write asserts holds for footprints under both models.
-                OccupancyClass::Static => {
-                    self.set_static_occupied(layers, cell, occupied);
+            self.write_cell(mark.holder, mark.class, mark.layers, cell, occupied);
+        }
+    }
+
+    /// Marks or clears one cell on `layers` for `holder`, on the plane `class`
+    /// selects. Static writes dirty the hierarchy; claims never do.
+    fn write_cell(
+        &mut self,
+        holder: SimulationId,
+        class: OccupancyClass,
+        layers: LayerMask,
+        cell: CellPos,
+        occupied: bool,
+    ) {
+        match class {
+            // Solid footprints exclude each other and placement is validated
+            // against terrain, so the flip the static write asserts holds for
+            // footprints under both models.
+            OccupancyClass::Static => self.set_static_occupied(layers, cell, occupied),
+            OccupancyClass::Claim => {
+                // One claimant per cell per layer is the cell model's
+                // contract; under the continuous model bodies share cells,
+                // each holding a claim of its own there.
+                match (self.movement_model, occupied) {
+                    (MovementModel::Cell, true) => debug_assert!(
+                        !self.nav_grid.is_claimed(layers, cell),
+                        "a cell-model claim takes a cell no one claims"
+                    ),
+                    (MovementModel::Cell, false) | (MovementModel::Continuous, _) => {}
                 }
-                OccupancyClass::Claim => {
-                    // One claimant per cell per layer is the cell model's
-                    // contract; under the continuous model bodies share
-                    // cells, each holding a claim of its own there.
-                    match self.movement_model {
-                        MovementModel::Cell => {
-                            debug_assert!(
-                                self.nav_grid.is_claimed_by(layers, cell) != occupied,
-                                "a claim write must flip the cell: claiming needs it \
-                                     free, releasing needs it held"
-                            );
-                        }
-                        MovementModel::Continuous => {}
-                    }
-                    if occupied {
-                        self.nav_grid.add_claim(layers, cell);
-                    } else {
-                        self.nav_grid.remove_claim(layers, cell);
-                    }
+                if occupied {
+                    self.nav_grid.add_claim(layers, cell, holder.0);
+                } else {
+                    self.nav_grid.remove_claim(layers, cell, holder.0);
                 }
             }
         }
@@ -731,8 +598,7 @@ fn check_slope(grid: &NavGrid, layer: LayerId, whose: &str, cell: CellPos) {
     }
     let (mut at, mut changes) = (start, 0);
     while let Some(next) = in_band(neighbor(grid, at, rises)) {
-        let (Some(level), Some(next_level)) =
-            (grid.cell_level(layer, at), grid.cell_level(layer, next))
+        let (Some(level), Some(next_level)) = (grid.level(layer, at), grid.level(layer, next))
         else {
             unreachable!("cells on the grid have a level");
         };

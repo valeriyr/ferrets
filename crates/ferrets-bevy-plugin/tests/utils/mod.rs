@@ -1036,6 +1036,14 @@ fn brood_change(into: &str) -> MorphTransition {
     )
 }
 
+/// [`brood_app_for`] for one human player, session started.
+pub fn brood_app(model: MovementModel) -> App {
+    brood_app_for(
+        vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)],
+        model,
+    )
+}
+
 /// Creates an app for the brood suite: breeders of a 3×3 footprint with five
 /// brood berths along their southern foot, and what they bear.
 ///
@@ -1069,9 +1077,9 @@ fn brood_change(into: &str) -> MorphTransition {
 ///   brood berths.
 /// - Buildings take two ticks to die, grubs one, movers two.
 ///
-/// One human player, session started.
-pub fn brood_app(model: MovementModel) -> App {
-    let mut app = make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+/// Seated on `slots`, session started.
+pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
+    let mut app = make_app(slots);
     install_map(&mut app, Projection::Isometric, model);
     {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
@@ -1799,7 +1807,7 @@ pub fn set_all_cells_statically_occupied(world: &mut World, occupied: bool) {
     for y in 0..height {
         for x in 0..width {
             let cell = CellPos::new(x, y);
-            if map.nav_grid().is_statically_occupied_by(GROUND, cell) != occupied {
+            if map.nav_grid().is_statically_occupied(GROUND, cell) != occupied {
                 map.set_static_occupied(GROUND, cell, occupied);
             }
         }
@@ -2066,7 +2074,7 @@ pub fn install_choke_point_map(app: &mut App) {
     grid.add_flat_layer(GROUND, 1);
     for y in 0..CHOKE_POINT_SIZE {
         if !CHOKE_POINT_GAP.contains(&y) {
-            grid.set_occupied_by(GROUND, CellPos::new(CHOKE_POINT_SIZE / 2, y), true);
+            grid.set_occupied(GROUND, CellPos::new(CHOKE_POINT_SIZE / 2, y), true);
         }
     }
     map::install_map(

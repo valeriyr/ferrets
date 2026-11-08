@@ -7,8 +7,9 @@ use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
 /// Which blockers a navigation query honors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Blockers {
-    /// Static occupancy and unit claims alike.
-    All,
+    /// Static occupancy and every unit claim but the one holder's whose
+    /// route is sought.
+    AllBut(u32),
     /// Static occupancy only — unit claims are ignored.
     Static,
 }
@@ -34,8 +35,17 @@ impl MoverProfile {
     /// under its blocker mode.
     pub(crate) fn fits(self, grid: &NavGrid, anchor: CellPos) -> bool {
         match self.blockers {
-            Blockers::All => grid.fits(anchor, self.shape),
+            Blockers::AllBut(holder) => grid.fits_for(anchor, self.shape, holder),
             Blockers::Static => grid.fits_statically(anchor, self.shape),
+        }
+    }
+
+    /// Returns `true` if one cell of the profile's shape at `cell` on `grid`
+    /// is open under its blocker mode.
+    pub(crate) fn cell_fits(self, grid: &NavGrid, cell: CellPos) -> bool {
+        match self.blockers {
+            Blockers::AllBut(holder) => grid.cell_fits_for(cell, self.shape, holder),
+            Blockers::Static => grid.cell_fits_statically(cell, self.shape),
         }
     }
 }

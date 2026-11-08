@@ -37,6 +37,7 @@ pub mod rally;
 pub mod reach;
 mod regions;
 pub mod requirements;
+pub mod reservation;
 pub mod resources;
 pub mod ruleset;
 pub mod scenario;

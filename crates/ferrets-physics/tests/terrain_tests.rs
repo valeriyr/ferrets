@@ -325,7 +325,7 @@ fn walled_grid(walls: &[(u32, u32)]) -> NavGrid {
     let mut grid = NavGrid::new(8, 8, |_| utils::LAND);
     grid.add_flat_layer(utils::GROUND, 1);
     for &(x, y) in walls {
-        grid.set_occupied_by(utils::GROUND, CellPos::new(x, y), true);
+        grid.set_occupied(utils::GROUND, CellPos::new(x, y), true);
     }
     grid
 }

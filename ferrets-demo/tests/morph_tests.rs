@@ -51,11 +51,11 @@ fn taking_off_swaps_occupied_layer() {
         for dx in 0..2 {
             let cell = CellPos::new(CLEAR.0 + dx, CLEAR.1 + dy);
             assert!(
-                !live.nav_grid().is_occupied_by(ground, cell),
+                !live.nav_grid().is_occupied(ground, cell),
                 "the airborne form still holds the ground at {cell:?}"
             );
             assert!(
-                live.nav_grid().is_occupied_by(air, cell),
+                live.nav_grid().is_occupied(air, cell),
                 "the airborne form does not hold the air at {cell:?}"
             );
         }
@@ -99,7 +99,7 @@ fn landing_is_refused_when_ground_is_taken() {
         world
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(air, CellPos::new(CLEAR.0, CLEAR.1)),
+            .is_occupied(air, CellPos::new(CLEAR.0, CLEAR.1)),
         "a refused landing left the unit off the map"
     );
 }

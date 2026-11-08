@@ -98,7 +98,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     // goes back to the job, or out of the cells it stood on; a death off the
     // map hands nothing on.
     let beside = if entity_def::attached(world, entity) {
-        Some(berths::held_berth(world, entity))
+        Some(berths::seated_berth(world, entity))
     } else if entity_def::hidden(world, entity) {
         None
     } else {

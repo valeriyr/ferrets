@@ -20,7 +20,7 @@ use crate::{
     landing::{self, Bound, ComesFrom, Lander},
     map::Map,
     movement_model::{self, Settling},
-    occupancy::GridMark,
+    occupancy::{GridMark, OccupancyClass},
     order::Order,
     session::{GameSession, player_id::PlayerId},
     spawn,
@@ -108,18 +108,19 @@ pub fn clears(world: &World, mover: Entity, side: Option<PlayerId>) -> bool {
     allied(world, mover, side) && (gives_way(world, mover) || walks_off(world, mover))
 }
 
-/// What stands between a placement on `footprint`, on `layers`, and its
-/// ground, for `side`: [`Clearance::Clear`] when `takes` judges the ground to
-/// take it as it stands; [`Clearance::Clears`] when it takes it with the movers
-/// standing there set aside — their marks lifted and the bodies ignored —
-/// every one of them either yielding to `side` or an own or allied walker
-/// already on its way; [`Clearance::Held`] otherwise.
-/// The movers are read in id order, none of `except`.
+/// What stands between a placement on `footprint`, on `layers` of the plane
+/// `occupancy` selects, and its ground, for `side`: [`Clearance::Clear`] when
+/// `takes` judges the ground to take it as it stands; [`Clearance::Clears`]
+/// when it takes it with the movers standing there set aside — their marks
+/// lifted and the bodies ignored — every one of them either yielding to
+/// `side` or an own or allied walker already on its way; [`Clearance::Held`]
+/// otherwise. The movers are read in id order, none of `except`.
 pub(crate) fn clearance(
     world: &World,
     side: Option<PlayerId>,
     footprint: CellRect,
     layers: LayerMask,
+    occupancy: OccupancyClass,
     except: &[Entity],
     takes: impl Fn(&[GridMark], &[Entity]) -> bool,
 ) -> Clearance {
@@ -128,7 +129,7 @@ pub(crate) fn clearance(
     }
     let mut marks: Vec<GridMark> = Vec::new();
     let mut bodies: Vec<Entity> = Vec::new();
-    for mover in movers_on(world, footprint, layers, except) {
+    for (mover, _) in movers_on(world, footprint, layers, occupancy, except) {
         if !clears(world, mover, side) {
             return Clearance::Held;
         }
@@ -162,24 +163,28 @@ pub(crate) fn ask(
     }
 }
 
-/// Sets every mover standing over `footprint`, on any of `layers`, but
-/// `except`, down at once off it, each on the nearest cell the set-down search
-/// gives it clear of the footprint and of the cells the others are given:
-/// [`Shoved::Cleared`] when every one of them clears for `side` (see
-/// [`clears`]), `takes` judges the ground to take what needs it with them set
-/// aside — their marks lifted and the bodies ignored — and each finds such a
-/// cell; [`Shoved::Held`] otherwise, and nobody is moved. A walker is settled
-/// off any crossing first, and its walk plans again from where it is set
-/// down.
+/// Sets every mover standing over `footprint`, on any of `layers` of the
+/// plane `occupancy` selects, but `except`, down at once off it, each on the
+/// nearest cell the set-down search gives it clear of the footprint and of
+/// the cells the others are given: [`Shoved::Cleared`] when every one of them
+/// clears for `side` (see [`clears`]), `takes` judges the ground to take what
+/// needs it with them set aside — their marks lifted and the bodies ignored —
+/// and each finds such a cell; [`Shoved::Held`] otherwise, and nobody is
+/// moved. A walker is settled off any crossing first, and its walk plans again
+/// from where it is set down.
 pub(crate) fn shove_off(
     world: &mut World,
     side: Option<PlayerId>,
     footprint: CellRect,
     layers: LayerMask,
+    occupancy: OccupancyClass,
     except: &[Entity],
     takes: impl Fn(&World, &[GridMark], &[Entity]) -> bool,
 ) -> Shoved {
-    let movers = movers_on(world, footprint, layers, except);
+    let movers: Vec<Entity> = movers_on(world, footprint, layers, occupancy, except)
+        .into_iter()
+        .map(|(mover, _)| mover)
+        .collect();
     if movers.is_empty() || !movers.iter().all(|&mover| clears(world, mover, side)) {
         return Shoved::Held;
     }
@@ -294,18 +299,12 @@ fn blocking_landing(
         CellPos::new(0, 0),
         CellSize::new(map.nav_grid().width(), map.nav_grid().height()),
     );
+    let occupancy = OccupancyClass::of(lander.def);
     let clearing: Vec<(Entity, CellRect, Option<GridMark>)> =
-        movers_on(world, whole, layers, ignored)
+        movers_on(world, whole, layers, occupancy, ignored)
             .into_iter()
-            .filter(|&mover| clears(world, mover, side))
-            .map(|mover| {
-                let mark = entity_def::grid_mark(world, mover);
-                let held = match mark {
-                    Some(mark) => mark.footprint,
-                    None => entity_def::standing_rect(world, mover),
-                };
-                (mover, held, mark)
-            })
+            .filter(|&(mover, _)| clears(world, mover, side))
+            .map(|(mover, measured)| (mover, measured, entity_def::grid_mark(world, mover)))
             .collect();
     if clearing.is_empty() {
         return None;
@@ -313,23 +312,23 @@ fn blocking_landing(
     let lifted: Vec<GridMark> = lifted
         .iter()
         .copied()
-        .chain(clearing.iter().filter_map(|&(_, _, mark)| mark))
+        .chain(clearing.iter().filter_map(|(_, _, mark)| *mark))
         .collect();
     let ignored: Vec<Entity> = ignored
         .iter()
         .copied()
-        .chain(clearing.iter().map(|&(mover, _, _)| mover))
+        .chain(clearing.iter().map(|(mover, _, _)| *mover))
         .collect();
     let cell = landing::set_down(world, lander, &lifted, &ignored, |_, footprint| {
         clearing
             .iter()
-            .any(|(_, held, _)| held.intersects(footprint))
+            .any(|(_, measured, _)| measured.intersects(footprint))
     })?;
     let footprint = CellRect::new(cell, location.size());
     // Every mover in `clearing` is `side`'s own or allied already.
     let on_it = clearing
         .into_iter()
-        .filter(|&(mover, held, _)| held.intersects(footprint) && gives_way(world, mover))
+        .filter(|(mover, measured, _)| measured.intersects(footprint) && gives_way(world, *mover))
         .map(|(mover, _, _)| mover)
         .collect();
     Some((footprint, on_it))
@@ -370,40 +369,32 @@ fn ask_each_off(world: &mut World, side: Option<PlayerId>, asks: &[(Entity, Cell
 }
 
 /// The movers standing on the grid over `footprint`, on any of `layers`, but
-/// `except`, in id order: those claiming cells by the footprint they mark, the
-/// rest by the cells they stand across.
+/// `except`, in id order, each with the cells a placement on the plane
+/// `occupancy` selects measures it by (see [`entity_def::measured_rect`]).
 fn movers_on(
     world: &World,
     footprint: CellRect,
     layers: LayerMask,
+    occupancy: OccupancyClass,
     except: &[Entity],
-) -> Vec<Entity> {
+) -> Vec<(Entity, CellRect)> {
     world
         .resource::<EntityIndex>()
         .alive_iter()
         .map(|(_, &entity)| entity)
-        .filter(|&entity| {
+        .filter_map(|entity| {
             if except.contains(&entity) || !entity_def::stands_on_grid(world, entity) {
-                return false;
+                return None;
             }
             let def = entity_def::of(world, entity);
-            let Some(location) = def.location else {
-                return false;
-            };
-            def.can_move()
-                && location.occupies() & layers != LayerMask::EMPTY
-                && held_rect(world, entity).intersects(footprint)
+            let location = def.location?;
+            if !def.can_move() || location.occupies() & layers == LayerMask::EMPTY {
+                return None;
+            }
+            let measured = entity_def::measured_rect(world, entity, occupancy);
+            measured.intersects(footprint).then_some((entity, measured))
         })
         .collect()
-}
-
-/// The cells a mover on the grid holds: the footprint it marks when it claims
-/// its cells, else the cells it stands across.
-fn held_rect(world: &World, mover: Entity) -> CellRect {
-    match entity_def::grid_mark(world, mover) {
-        Some(mark) => mark.footprint,
-        None => entity_def::standing_rect(world, mover),
-    }
 }
 
 /// Sends `occupant` off for `side` as [`ask`] does, its walk goal's footprint

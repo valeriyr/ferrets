@@ -88,6 +88,89 @@ fn wide_body_across_boundary_stands_on_cells_of_full_span() {
 }
 
 //
+// ─── Covered rect ─────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn footprint_on_lattice_covers_its_own_cells() {
+    assert_eq!(
+        body::covered_rect(utils::position("5", "5"), CellSize::new(2, 1)),
+        CellRect::new(CellPos::new(5, 5), CellSize::new(2, 1)),
+    );
+}
+
+#[test]
+fn footprint_short_of_half_cell_covers_cell_ahead() {
+    // At x 9.3 a 1×1 lies over 9.3 to 10.3: cells 9 and 10, where the
+    // standing rect (floored 9 ∪ rounded 9) names 9 alone.
+    assert_eq!(
+        body::covered_rect(utils::position("9.3", "4"), CellSize::ONE),
+        CellRect::new(CellPos::new(9, 4), CellSize::new(2, 1)),
+    );
+}
+
+#[test]
+fn footprint_past_corner_covers_four_cells() {
+    // 9.3 to 10.3 on x, 4.8 to 5.8 on y: cells 9–10 by 4–5.
+    assert_eq!(
+        body::covered_rect(utils::position("9.3", "4.8"), CellSize::ONE),
+        CellRect::new(CellPos::new(9, 4), CellSize::new(2, 2)),
+    );
+}
+
+#[test]
+fn wide_footprint_across_boundary_covers_full_span() {
+    // A 2×2 at x 5.6 lies over 5.6 to 7.6: cells 5, 6 and 7.
+    assert_eq!(
+        body::covered_rect(utils::position("5.6", "5"), CellSize::new(2, 2)),
+        CellRect::new(CellPos::new(5, 5), CellSize::new(3, 2)),
+    );
+}
+
+#[test]
+fn circle_short_of_half_cell_spans_cell_ahead() {
+    // A 1×1 at x 9.3 with a half-cell radius: its middle at 9.8, its circle
+    // from 9.3 to 10.3, so cells 9 and 10 on x and row 4 alone on y.
+    assert_eq!(
+        body::circle_rect(
+            utils::position("9.3", "4"),
+            CellSize::ONE,
+            utils::cells("0.5")
+        ),
+        CellRect::new(CellPos::new(9, 4), CellSize::new(2, 1)),
+    );
+}
+
+#[test]
+fn circle_rect_spans_corner_its_circle_misses() {
+    // A 1×1 at (9.1, 9.1): middle (9.6, 9.6), circle from 9.1 to 10.1 on each
+    // axis, so the box spans 9–10 by 9–10. The far corner (10, 10) lies
+    // √(0.4² + 0.4²) ≈ 0.57 from the middle, past the 0.5 radius: the circle
+    // overlaps three of the box's four cells.
+    let position = utils::position("9.1", "9.1");
+    let radius = utils::cells("0.5");
+
+    assert_eq!(
+        body::circle_rect(position, CellSize::ONE, radius),
+        CellRect::new(CellPos::new(9, 9), CellSize::new(2, 2)),
+    );
+    assert_eq!(
+        body::overlapped_cells(position, CellSize::ONE, radius),
+        vec![CellPos::new(9, 9), CellPos::new(10, 9), CellPos::new(9, 10)],
+    );
+}
+
+#[test]
+fn circle_of_no_radius_spans_cell_its_middle_lies_in() {
+    // A 1×1 at (5.5, 5.5) with no radius: its middle (6, 6) lies on the corner
+    // four cells share, in (6, 6), the one cell its box spans.
+    assert_eq!(
+        body::circle_rect(utils::position("5.5", "5.5"), CellSize::ONE, FixedU64::ZERO),
+        CellRect::cell(CellPos::new(6, 6)),
+    );
+}
+
+//
 // ─── Overlapped cells ─────────────────────────────────────────────────────────
 //
 
@@ -103,7 +186,7 @@ fn body_on_lattice_anchor_overlaps_one_cell() {
         body::overlapped_cells(
             utils::position("5", "5"),
             CellSize::ONE,
-            FixedU64::from_num(0.5)
+            utils::cells("0.5")
         ),
         vec![CellPos::new(5, 5)]
     );
@@ -116,7 +199,7 @@ fn body_straddling_border_overlaps_both_cells() {
         body::overlapped_cells(
             utils::position("5.3", "5"),
             CellSize::ONE,
-            FixedU64::from_num(0.5)
+            utils::cells("0.5")
         ),
         vec![CellPos::new(5, 5), CellPos::new(6, 5)]
     );
@@ -129,7 +212,7 @@ fn body_near_corner_overlaps_four_cells() {
         body::overlapped_cells(
             utils::position("5.3", "5.3"),
             CellSize::ONE,
-            FixedU64::from_num(0.5)
+            utils::cells("0.5")
         ),
         vec![
             CellPos::new(5, 5),
@@ -145,12 +228,7 @@ fn body_near_corner_overlaps_four_cells() {
 #[test]
 fn wide_body_overlaps_its_block() {
     assert_eq!(
-        body::overlapped_cells(
-            utils::position("5", "5"),
-            CellSize::ONE,
-            FixedU64::from_num(1.0)
-        )
-        .len(),
+        body::overlapped_cells(utils::position("5", "5"), CellSize::ONE, FixedU64::ONE).len(),
         9
     );
 }
@@ -188,7 +266,7 @@ fn multi_cell_body_overlaps_exactly_its_footprint() {
         body::overlapped_cells(
             utils::position("5", "5"),
             CellSize::new(2, 2),
-            FixedU64::from_num(1.0)
+            FixedU64::ONE
         ),
         vec![
             CellPos::new(5, 5),

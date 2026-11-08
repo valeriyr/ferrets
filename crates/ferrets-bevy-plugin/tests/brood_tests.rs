@@ -7,38 +7,57 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
+    affiliation::Affiliation,
     attack::{AttackDef, Delivery, Slain, Weapon},
+    brood::OrphanFate,
+    build::BuilderAttendance,
+    entity_buffs::{EntityBuffDef, Lasting},
+    entity_effect::EntityEffect,
+    entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    kinds::Kinds,
     location::Solidity,
     pool::Pool,
     projectile::{Aim, ProjectileDef},
+    quantity::Quantity,
     registry::ContentRegistry,
+    repair::{RepairCost, RepairRate},
+    resource::{Banking, HarvestData},
+    skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Whom},
+    stack_rule::StackRule,
+    transport::{PassengerConduct, PassengerFate},
+    work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, fixed_urect::FixedURect};
 use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_simulation::{
     brood,
-    command::{PlayerCommand, SelectMode},
+    command::{PlayerCommand, SelectMode, SkillTarget},
     components::{
         attached::AttachedComponent,
         brood::{BredComponent, BroodComponent},
         entity_info::EntityInfoComponent,
+        last_hit::LastHitComponent,
         location::LocationComponent,
-        order_queue::OrderQueueComponent,
+        order_queue::{IdlenessComponent, OrderQueueComponent},
         rally::{RallyPointComponent, RallyTarget},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
+        rise::RiseAttendance,
         stance::Stance,
     },
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent, SpawnCause},
-    game_loop::orders::{self, Refusal},
+    game_loop::{
+        cast::{self, Aiming, CastRefusal},
+        orders::{self, Refusal},
+    },
     impacts::{FiredFrom, Following, PendingImpact, PendingImpacts},
     map::Map,
     movement_model::MovementModel,
-    order::{BuildTask, Order},
-    session::GameSession,
+    order::{AttackTarget, BuildTask, Order},
+    session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn::{self, Boarding},
     statistics::Statistics,
@@ -241,10 +260,10 @@ fn seated_broodlings_hold_no_cells() {
 
     let cell = utils::cell_of(app.world(), grub);
     let map = app.world().resource::<Map>();
-    assert!(!map.nav_grid().is_occupied_by(utils::GROUND, cell));
+    assert!(!map.nav_grid().is_occupied(utils::GROUND, cell));
     assert!(
         !map.nav_grid()
-            .is_claimed_by(LayerMask::from(utils::GROUND), cell)
+            .is_claimed(LayerMask::from(utils::GROUND), cell)
     );
 }
 
@@ -332,6 +351,248 @@ fn broodlings_without_speed_refuse_move() {
         orders::can_start(app.world(), grub, &order),
         Err(Refusal::Incapable)
     );
+}
+
+#[test]
+fn seated_broodling_that_walks_refuses_move() {
+    // A pup, a broodling that walks, sits in its kennel's berth: Move is
+    // refused as busy, and a player's move, flushing its queue, leaves it
+    // seated where it sits.
+    let (mut app, pup) = kennel_with_seated_pup();
+    let seated = utils::position_of(app.world(), pup);
+    let order = Order::Move {
+        target: utils::pos(20, 20),
+        size: CellSize::ONE,
+        range: 0,
+    };
+    assert_eq!(
+        orders::can_start(app.world(), pup, &order),
+        Err(Refusal::Busy)
+    );
+
+    let pup_id = entity_def::simulation_id(app.world(), pup);
+    utils::select(&mut app, pup_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(20, 20),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 5);
+
+    assert!(entity_def::attached(app.world(), pup));
+    assert_eq!(utils::position_of(app.world(), pup), seated);
+}
+
+#[test]
+fn held_broodling_refuses_every_walking_order() {
+    // The pup its kennel holds is refused, as busy, every order that walks.
+    let (mut app, pup) = kennel_with_seated_pup();
+    let kennel = alive_of_type(&mut app, "kennel")[0];
+    let kennel_id = entity_def::simulation_id(app.world(), kennel);
+
+    for order in [
+        Order::Move {
+            target: utils::pos(20, 20),
+            size: CellSize::ONE,
+            range: 0,
+        },
+        Order::AttackMove {
+            target: utils::pos(20, 20),
+        },
+        Order::Patrol {
+            target: utils::pos(20, 20),
+        },
+        Order::Follow { target: kennel_id },
+        Order::Guard { target: kennel_id },
+    ] {
+        assert_eq!(
+            orders::can_start(app.world(), pup, &order),
+            Err(Refusal::Busy),
+            "{order:?}"
+        );
+    }
+}
+
+#[test]
+fn held_broodling_refuses_work() {
+    // Working would seat the pup at the job, or take others aboard it: the
+    // berth its kennel holds it in lets it go only when the kennel does, so
+    // every order that works is refused as busy — each aimed at what a free
+    // pup would take: gold, a site, a wounded mound and a rider to carry.
+    let (mut app, pup) = kennel_with_seated_pup();
+    let lode = utils::place(&mut app, "lode", 20, 20, 0);
+    let lode_id = entity_def::simulation_id(app.world(), lode);
+    let (_, site_id) =
+        utils::create_rising(&mut app, "ready_hatch", 25, 25, 0, RiseAttendance::Halted);
+    let mound = utils::place(&mut app, "mound", 20, 4, 0);
+    let mound_id = entity_def::simulation_id(app.world(), mound);
+    utils::wound(&mut app, mound, "10");
+    app.world_mut().resource_mut::<ContentRegistry>().register(
+        utils::walker("rider", utils::GROUND_DOMAIN)
+            .with_pool(Pool::health(10))
+            .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE),
+    );
+    let rider = utils::place(&mut app, "rider", 4, 20, 0);
+    let rider_id = entity_def::simulation_id(app.world(), rider);
+
+    for order in [
+        Order::Harvest { target: lode_id },
+        Order::Build {
+            task: BuildTask::found("ready_hatch", utils::pos(20, 20)),
+        },
+        Order::Build {
+            task: BuildTask::Join { site: site_id },
+        },
+        Order::Repair { target: mound_id },
+        Order::Load { target: rider_id },
+    ] {
+        assert_eq!(
+            orders::can_start(app.world(), pup, &order),
+            Err(Refusal::Busy),
+            "{order:?}"
+        );
+    }
+}
+
+#[test]
+fn held_broodling_gives_up_attack_out_of_reach_in_its_berth() {
+    // Told to attack a mound ten cells off, past the six it notices, the held
+    // pup cannot walk to it: the order ends on the tick it starts, nothing
+    // walking, and the pup stays where its berth seats it.
+    let (mut app, pup) = kennel_with_seated_pup();
+    let seated = utils::position_of(app.world(), pup);
+    let mound = utils::place(&mut app, "mound", 20, 20, 0);
+    let mound_id = entity_def::simulation_id(app.world(), mound);
+    let pup_id = entity_def::simulation_id(app.world(), pup);
+
+    utils::attack(&mut app, pup_id, mound_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), pup));
+    assert!(entity_def::attached(app.world(), pup));
+    assert_eq!(utils::position_of(app.world(), pup), seated);
+}
+
+#[test]
+fn held_broodling_holds_attack_on_target_it_notices_out_of_reach() {
+    // A mound four cells off is past the held pup's one-cell weapon but
+    // inside the six cells it notices: the pup cannot close, so it holds the
+    // attack where its berth seats it, as a gun that cannot walk does,
+    // waiting for the target to come in reach.
+    let (mut app, pup) = kennel_with_seated_pup();
+    let seated = utils::position_of(app.world(), pup);
+    let seat = utils::cell_of(app.world(), pup);
+    let mound = utils::place(&mut app, "mound", seat.x + 4, seat.y, 0);
+    let mound_id = entity_def::simulation_id(app.world(), mound);
+    let pup_id = entity_def::simulation_id(app.world(), pup);
+
+    utils::attack(&mut app, pup_id, mound_id);
+    utils::run_ticks(&mut app, 8);
+
+    assert!(!utils::order_queue_is_empty(app.world_mut(), pup));
+    assert!(entity_def::attached(app.world(), pup));
+    assert_eq!(utils::position_of(app.world(), pup), seated);
+    assert_eq!(utils::health_as_u32(&app, mound), 100);
+}
+
+#[test]
+fn held_broodling_on_defend_leaves_enemy_past_its_seat_alone() {
+    // An enemy four cells off is inside the six cells the held pup notices
+    // but past its one-cell weapon. Acquiring on Defend, the pup judges what
+    // it reaches from its seat, where it acts: it picks nothing, its queue
+    // empty through ten ticks — several acquisition periods.
+    let (mut app, pup) = kennel_with_two_players();
+    let seat = utils::cell_of(app.world(), pup);
+    utils::place(&mut app, "dummy", seat.x + 4, seat.y, 1);
+
+    utils::run_ticks(&mut app, 10);
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), pup));
+    assert!(entity_def::attached(app.world(), pup));
+}
+
+#[test]
+fn held_broodling_on_defend_engages_enemy_in_reach_of_its_seat() {
+    // An enemy one cell south of the seat lies within the held pup's one-cell
+    // weapon: acquiring on Defend, it attacks from its berth, with no way home
+    // queued behind the attack for a body that may not walk.
+    let (mut app, pup) = kennel_with_two_players();
+    let seat = utils::cell_of(app.world(), pup);
+    let seated = utils::position_of(app.world(), pup);
+    let dummy = utils::place(&mut app, "dummy", seat.x, seat.y + 1, 1);
+    let dummy_id = entity_def::simulation_id(app.world(), dummy);
+
+    utils::run_ticks(&mut app, 10);
+
+    assert!(queued(&app, pup, |order| matches!(
+        order,
+        Order::Attack { target, .. } if *target == AttackTarget::Entity(dummy_id)
+    )));
+    assert!(!queued(&app, pup, |order| matches!(
+        order,
+        Order::AttackMove { .. }
+    )));
+    assert!(entity_def::attached(app.world(), pup));
+    assert_eq!(utils::position_of(app.world(), pup), seated);
+}
+
+#[test]
+fn held_broodling_casts_only_on_what_its_seat_reaches() {
+    // `nip` reaches three cells and lands at once. A free caster would walk
+    // to its aim; the held pup casts from where it sits, so a pup four cells
+    // past its seat is refused before the order is given, one three off is
+    // not.
+    let (mut app, pup) = kennel_with_seated_pup();
+    let seat = utils::cell_of(app.world(), pup);
+    let far = utils::place(&mut app, "pup", seat.x, seat.y + 4, 0);
+    let near = utils::place(&mut app, "pup", seat.x, seat.y + 3, 0);
+    utils::run_ticks(&mut app, 1);
+    let nip = utils::skill_id(&app, "nip");
+    let judge = |app: &App, target: Entity| {
+        cast::judge_issue(
+            app.world(),
+            0,
+            pup,
+            nip,
+            Aiming::Picked(Some(SkillTarget::Entity(entity_def::simulation_id(
+                app.world(),
+                target,
+            )))),
+        )
+    };
+
+    assert_eq!(judge(&app, far), Err(CastRefusal::OutOfReach));
+    assert_eq!(judge(&app, near), Ok(()));
+}
+
+#[test]
+fn held_broodling_on_flee_stays_idle_in_its_berth_when_hit() {
+    // A biter one cell south of the seat strikes the held pup on Flee. The
+    // pup may not walk away, so no run is given it: it stays seated, idle
+    // since before the first strike.
+    let (mut app, pup) = kennel_with_two_players();
+    let seated = utils::position_of(app.world(), pup);
+    let seat = utils::cell_of(app.world(), pup);
+    let pup_id = entity_def::simulation_id(app.world(), pup);
+    utils::select(&mut app, pup_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::Flee,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    let idle = idleness_of(&app, pup);
+
+    utils::place(&mut app, "biter", seat.x, seat.y + 1, 1);
+    utils::run_ticks(&mut app, 20);
+
+    assert!(app.world().get::<LastHitComponent>(pup).is_some(), "struck");
+    assert_eq!(idleness_of(&app, pup), idle);
+    assert!(entity_def::attached(app.world(), pup));
+    assert_eq!(utils::position_of(app.world(), pup), seated);
 }
 
 #[test]
@@ -725,10 +986,7 @@ fn interim_form_holds_ground_its_own_solidity_says() {
     utils::run_ticks(&mut app, 1);
     let cell = utils::cell_of(app.world(), grub);
     let map = app.world().resource::<Map>();
-    assert!(
-        map.nav_grid()
-            .is_statically_occupied_by(utils::GROUND, cell)
-    );
+    assert!(map.nav_grid().is_statically_occupied(utils::GROUND, cell));
 }
 
 #[test]
@@ -2210,10 +2468,7 @@ fn free_cells(app: &mut App, origin: CellPos, size: CellSize) {
     for dy in 0..size.height {
         for dx in 0..size.width {
             let cell = CellPos::new(origin.x + dx, origin.y + dy);
-            if map
-                .nav_grid()
-                .is_statically_occupied_by(utils::GROUND, cell)
-            {
+            if map.nav_grid().is_statically_occupied(utils::GROUND, cell) {
                 map.set_static_occupied(utils::GROUND, cell, false);
             }
         }
@@ -2241,4 +2496,140 @@ fn husk_cells(app: &mut App) -> Vec<CellPos> {
         .collect();
     cells.sort_unstable_by_key(|cell| (cell.y, cell.x));
     cells
+}
+
+/// Whether `entity` has been idle, and since when, as last noted.
+fn idleness_of(app: &App, entity: Entity) -> IdlenessComponent {
+    *app.world()
+        .get::<IdlenessComponent>(entity)
+        .expect("a simulation entity notes its idleness")
+}
+
+/// The brood roster under the cell model plus a `kennel` — the `sow` breeding
+/// `pup`s, broodlings that walk, see ten cells, fight at one cell noticing
+/// six, mend, harvest gold, raise a `ready_hatch`, carry a passenger and cast
+/// `nip`, landing at once within three cells — standing at (10, 10), and the
+/// pup its first breeding seats, held in a berth.
+fn kennel_with_seated_pup() -> (App, Entity) {
+    kennel_with_seated_pup_for(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)])
+}
+
+/// [`kennel_with_seated_pup`] for player 0 against player 1, with a `dummy`
+/// that only stands and a `biter` that strikes for one at one cell.
+fn kennel_with_two_players() -> (App, Entity) {
+    let (mut app, pup) = kennel_with_seated_pup_for(vec![
+        PlayerSlot::occupied(0, PlayerType::Human, None, None),
+        PlayerSlot::occupied(1, PlayerType::Human, None, None),
+    ]);
+    let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+    registry.register(utils::walker("dummy", utils::GROUND_DOMAIN).with_pool(Pool::health(100)));
+    registry.register(
+        utils::walker("biter", utils::GROUND_DOMAIN)
+            .with_pool(Pool::health(100))
+            .with_sight_range(5)
+            .with_attack(utils::weapon(utils::GROUND), 1, 1, 3, 4, 2),
+    );
+    (app, pup)
+}
+
+/// [`kennel_with_seated_pup`] seated on `slots`, the kennel player 0's.
+fn kennel_with_seated_pup_for(slots: Vec<PlayerSlot>) -> (App, Entity) {
+    let mut app = utils::brood_app_for(slots, MovementModel::Cell);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        let nipped = registry.register_entity_buff(
+            "nipped",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Conceal],
+                lasting: Lasting::For(100),
+                stack_rule: StackRule::Ignore,
+                interrupted_by: Vec::new(),
+            },
+        );
+        let nip = registry.register_skill(
+            "nip",
+            SkillDef {
+                cooldown: 10,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    casting: Casting::Instant,
+                    effect: EntityCastEffect::ApplyBuff {
+                        buff: nipped,
+                        on: Recipient::Standing {
+                            whom: Whom {
+                                side: Affiliation::Own,
+                                kinds: Kinds::Any,
+                            },
+                            reach: Reach::Within(Quantity::Constant(3)),
+                        },
+                    },
+                },
+                requires: Vec::new(),
+            },
+        );
+        registry.register(
+            utils::walker("pup", utils::GROUND_DOMAIN)
+                .with_pool(Pool::health(20))
+                .with_sight_range(10)
+                .with_attack(utils::weapon(utils::GROUND), 10, 1, 6, 4, 2)
+                .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
+                .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
+                .with_repairer(
+                    Kinds::Any,
+                    RepairRate::PerTick(FixedU64::ONE),
+                    WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    },
+                    false,
+                    RepairCost::Free,
+                    None,
+                )
+                .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
+                .with_resource_carrier([(
+                    "gold",
+                    HarvestData::new(
+                        5,
+                        5,
+                        20,
+                        WorkPresence::Present {
+                            crew: CrewLimit::ONE,
+                        },
+                        Banking::Direct,
+                        Kinds::Any,
+                    ),
+                )])
+                .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
+                .with_builder(
+                    ["ready_hatch"],
+                    BuilderAttendance::Crew(WorkPresence::Present {
+                        crew: CrewLimit::ONE,
+                    }),
+                )
+                .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::ONE)
+                .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+                .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+                .with_transporter(
+                    Kinds::Any,
+                    Affiliation::Own,
+                    PassengerFate::Eject,
+                    PassengerConduct::Shelter,
+                )
+                .with_skills([nip])
+                .with_broodling(Attachment::new("brood", BerthStance::Still)),
+        );
+        let mut kennel = registry
+            .entity("sow")
+            .expect("the brood content declares a sow")
+            .clone()
+            .with_breeder("pup", Quantity::Constant(10), 2, 0, OrphanFate::Perish);
+        kennel.name = "kennel".to_string();
+        registry.register(kennel);
+    }
+    utils::place(&mut app, "kennel", 10, 10, 0);
+    utils::run_ticks(&mut app, 20);
+    let pup = alive_of_type(&mut app, "pup")[0];
+    assert!(entity_def::attached(app.world(), pup));
+    (app, pup)
 }

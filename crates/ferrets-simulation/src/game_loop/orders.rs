@@ -246,6 +246,16 @@ pub(super) fn requires_operating(world: &World, entity: Entity) -> Result<(), Re
     }
 }
 
+/// The refusal an order hands a body its breeder holds in a berth (see
+/// [`entity_def::held`]).
+pub(super) fn requires_unheld(world: &World, entity: Entity) -> Result<(), Refusal> {
+    if entity_def::held(world, entity) {
+        Err(Refusal::Busy)
+    } else {
+        Ok(())
+    }
+}
+
 /// The refusal a target's [`Operation`] hands an order that needs it
 /// operating.
 pub(super) fn target_operating(world: &World, target: Entity) -> Result<(), Refusal> {

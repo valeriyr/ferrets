@@ -10,13 +10,17 @@ mod utils;
 
 use bevy::prelude::App;
 use ferrets_content::{
-    entity_type_def::EntityTypeDef, location::Solidity, pool::Pool, registry::ContentRegistry,
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity, pool::Pool,
+    registry::ContentRegistry, stats::ModifierOp,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_math::FixedU64;
 use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand,
+    entity_def,
     map::Map,
     movement_model::{self, MovementModel},
     order::AttackTarget,
@@ -223,7 +227,7 @@ fn pushing_never_commits_into_walls() {
                     !world
                         .resource::<Map>()
                         .nav_grid()
-                        .is_statically_occupied_by(utils::GROUND, CellPos::new(x, y)),
+                        .is_statically_occupied(utils::GROUND, CellPos::new(x, y)),
                     "body at {position:?} overlaps wall cell ({x}, {y})"
                 );
             }
@@ -462,7 +466,7 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
         !world
             .resource::<Map>()
             .nav_grid()
-            .is_claimed_by(utils::GROUND, CellPos::new(6, 5)),
+            .is_claimed(utils::GROUND, CellPos::new(6, 5)),
         "pushed body must release the cell it was shoved off"
     );
 
@@ -481,7 +485,7 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
             world
                 .resource::<Map>()
                 .nav_grid()
-                .is_claimed_by(utils::GROUND, cell),
+                .is_claimed(utils::GROUND, cell),
             expected,
             "claim on {cell:?} must be the cell under a body's center"
         );
@@ -500,13 +504,13 @@ fn wide_body_claims_whole_footprint() {
     let grid = world.resource::<Map>().nav_grid();
     for (x, y) in [(5, 5), (6, 5), (5, 6), (6, 6)] {
         assert!(
-            grid.is_claimed_by(utils::GROUND, CellPos::new(x, y)),
+            grid.is_claimed(utils::GROUND, CellPos::new(x, y)),
             "the footprint cell ({x}, {y}) is unclaimed"
         );
     }
     for (x, y) in [(4, 5), (7, 5), (5, 4), (5, 7)] {
         assert!(
-            !grid.is_claimed_by(utils::GROUND, CellPos::new(x, y)),
+            !grid.is_claimed(utils::GROUND, CellPos::new(x, y)),
             "the neighbor cell ({x}, {y}) is claimed past the footprint"
         );
     }
@@ -646,13 +650,13 @@ fn claim_follows_walking_body() {
         world
             .resource::<Map>()
             .nav_grid()
-            .is_claimed_by(utils::GROUND, cell)
+            .is_claimed(utils::GROUND, cell)
     );
     assert!(
         !world
             .resource::<Map>()
             .nav_grid()
-            .is_claimed_by(utils::GROUND, CellPos::new(2, 2))
+            .is_claimed(utils::GROUND, CellPos::new(2, 2))
     );
 }
 
@@ -693,6 +697,68 @@ fn attacker_takes_free_cell_beside_body_holding_its_goal() {
     assert_eq!(
         utils::position_of(app.world_mut(), soldier),
         utils::part_way("10", "8.5")
+    );
+}
+
+//
+// ─── Body radius ──────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn buffed_radius_is_held_to_half_its_footprint() {
+    // The 1×1 soldier's half-cell radius buffed by a whole cell: 0.5 + 1 =
+    // 1.5 read as 0.5, half its footprint's narrow side, so its body still
+    // lies over (5, 5) alone.
+    let mut app = utils::continuous_orders_app();
+    let swollen = utils::register_entity_buff(
+        &mut app,
+        "swollen",
+        EntityStatId::RADIUS,
+        ModifierOp::FlatAdd,
+        "1",
+        None,
+    );
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 5, 5, 0);
+    utils::apply_buff(app.world_mut(), soldier, swollen);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(
+        entity_def::effective_stat(app.world(), soldier, EntityStatId::RADIUS),
+        Some(utils::fixed("1.5"))
+    );
+    assert_eq!(
+        entity_def::radius(app.world(), soldier),
+        utils::fixed("0.5")
+    );
+    assert_eq!(
+        entity_def::covered_rect(app.world(), soldier),
+        CellRect::cell(CellPos::new(5, 5))
+    );
+}
+
+#[test]
+fn body_shrunk_to_no_radius_covers_cell_its_middle_lies_in() {
+    // The soldier's half-cell radius taken away whole: 0.5 − 0.5 = 0. Resting
+    // at (5.5, 5.5), its middle (6, 6) lies on the corner four cells share,
+    // in (6, 6), the one cell its body covers.
+    let mut app = utils::continuous_orders_app();
+    let shrunk = utils::register_entity_buff(
+        &mut app,
+        "shrunk",
+        EntityStatId::RADIUS,
+        ModifierOp::FlatAdd,
+        "-0.5",
+        None,
+    );
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 5, 5, 0);
+    utils::walk_onto(&mut app, soldier, utils::part_way("5.5", "5.5"), 10);
+    utils::apply_buff(app.world_mut(), soldier, shrunk);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(entity_def::radius(app.world(), soldier), FixedU64::ZERO);
+    assert_eq!(
+        entity_def::covered_rect(app.world(), soldier),
+        CellRect::cell(CellPos::new(6, 6))
     );
 }
 

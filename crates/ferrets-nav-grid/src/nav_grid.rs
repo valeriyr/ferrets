@@ -44,10 +44,11 @@ pub struct NavGrid {
     /// `claims[y * width + x]` — the set of layers some claim holds at that
     /// cell.
     claims: Vec<LayerMask>,
-    /// Each registered layer's claim counts, indexed by the layer's bit,
-    /// `y * width + x` within: how many claims hold the cell on the layer.
-    /// `None` for a bit no layer is registered at.
-    claim_counts: Vec<Option<Vec<u16>>>,
+    /// Each registered layer's claim holders, indexed by the layer's bit,
+    /// `y * width + x` within: the keys of whoever holds a claim on the cell
+    /// on the layer, in ascending order, each once. `None` for a bit no layer
+    /// is registered at.
+    claim_holders: Vec<Option<Vec<Vec<u32>>>>,
 }
 
 /// A layer's relief over the whole grid.
@@ -74,7 +75,7 @@ impl NavGrid {
             reliefs: vec![None; u32::BITS as usize],
             occupancy: vec![LayerMask::EMPTY; width as usize * height as usize],
             claims: vec![LayerMask::EMPTY; width as usize * height as usize],
-            claim_counts: vec![None; u32::BITS as usize],
+            claim_holders: vec![None; u32::BITS as usize],
         }
     }
 
@@ -148,7 +149,7 @@ impl NavGrid {
     /// Returns a layer's level at a position, or `None` off the grid.
     ///
     /// Panics if `layer` is not registered.
-    pub fn cell_level(&self, layer: LayerId, pos: CellPos) -> Option<u32> {
+    pub fn level(&self, layer: LayerId, pos: CellPos) -> Option<u32> {
         self.relief(layer, pos).map(|relief| relief.level)
     }
 
@@ -309,7 +310,7 @@ impl NavGrid {
     /// matched by `mask`; terrain is untouched either way.
     ///
     /// Panics for a cell off the grid or an empty mask.
-    pub fn set_occupied_by(&mut self, mask: impl Into<LayerMask>, pos: CellPos, occupied: bool) {
+    pub fn set_occupied(&mut self, mask: impl Into<LayerMask>, pos: CellPos, occupied: bool) {
         let mask = mask.into();
 
         self.assert_registered(mask);
@@ -323,10 +324,11 @@ impl NavGrid {
         }
     }
 
-    /// Adds one claim on a cell on every layer in `mask`.
+    /// Adds `holder`'s claim on a cell on every layer in `mask`.
     ///
-    /// Panics for a cell off the grid or an empty mask.
-    pub fn add_claim(&mut self, mask: impl Into<LayerMask>, pos: CellPos) {
+    /// Panics for a cell off the grid, an empty mask, or a layer in `mask`
+    /// `holder` already claims the cell on.
+    pub fn add_claim(&mut self, mask: impl Into<LayerMask>, pos: CellPos, holder: u32) {
         let mask = mask.into();
 
         self.assert_registered(mask);
@@ -334,21 +336,24 @@ impl NavGrid {
         let i = self.index(pos).expect("a claim stands on the grid");
 
         for layer in mask.layers() {
-            let count = &mut self.claim_counts[layer.trailing_zeros() as usize]
+            let holders = &mut self.claim_holders[layer.trailing_zeros() as usize]
                 .as_mut()
                 .expect("a claim holds registered layers")[i];
-            *count = count
-                .checked_add(1)
-                .expect("a cell holds fewer claims than a count can carry");
+            match holders.binary_search(&holder) {
+                Ok(_) => panic!(
+                    "holder {holder} claims a cell once on a layer: {pos:?} on layer {layer}"
+                ),
+                Err(at) => holders.insert(at, holder),
+            }
         }
         self.claims[i] |= mask;
     }
 
-    /// Takes one claim off a cell on every layer in `mask`.
+    /// Takes `holder`'s claim off a cell on every layer in `mask`.
     ///
     /// Panics for a cell off the grid, an empty mask, or a layer in `mask`
-    /// no claim holds the cell on.
-    pub fn remove_claim(&mut self, mask: impl Into<LayerMask>, pos: CellPos) {
+    /// `holder` does not claim the cell on.
+    pub fn remove_claim(&mut self, mask: impl Into<LayerMask>, pos: CellPos, holder: u32) {
         let mask = mask.into();
 
         self.assert_registered(mask);
@@ -356,33 +361,39 @@ impl NavGrid {
         let i = self.index(pos).expect("a claim stands on the grid");
 
         for layer in mask.layers() {
-            let count = &mut self.claim_counts[layer.trailing_zeros() as usize]
+            let holders = &mut self.claim_holders[layer.trailing_zeros() as usize]
                 .as_mut()
                 .expect("a claim holds registered layers")[i];
-            *count = count
-                .checked_sub(1)
-                .expect("a claim taken off a cell is one that holds it");
-            if *count == 0 {
+            match holders.binary_search(&holder) {
+                Ok(at) => {
+                    holders.remove(at);
+                }
+                Err(_) => panic!(
+                    "holder {holder} takes off only a claim it holds on {pos:?} on layer {layer}"
+                ),
+            }
+            if holders.is_empty() {
                 self.claims[i] &= !LayerMask::from(layer);
             }
         }
     }
 
-    /// How many claims hold the cell on `layer`.
+    /// The keys of whoever holds a claim on the cell on `layer`, in ascending
+    /// order.
     ///
-    /// Cells off the grid hold none. Panics if `layer` is not registered.
-    pub fn claim_count(&self, layer: LayerId, pos: CellPos) -> u16 {
-        let counts = self.claim_counts[layer.trailing_zeros() as usize]
+    /// Cells off the grid have none. Panics if `layer` is not registered.
+    pub fn claim_holders(&self, layer: LayerId, pos: CellPos) -> &[u32] {
+        let holders = self.claim_holders[layer.trailing_zeros() as usize]
             .as_ref()
             .unwrap_or_else(|| panic!("layer {layer} is not registered"));
-        self.index(pos).map_or(0, |i| counts[i])
+        self.index(pos).map_or(&[], |i| holders[i].as_slice())
     }
 
     /// Returns `true` if the position is occupied — by a standing footprint or
     /// a unit's claim — on **any** layer in `mask`, whatever its terrain.
     ///
     /// Out-of-bounds positions always return `true`.
-    pub fn is_occupied_by(&self, mask: impl Into<LayerMask>, pos: CellPos) -> bool {
+    pub fn is_occupied(&self, mask: impl Into<LayerMask>, pos: CellPos) -> bool {
         let mask = mask.into();
 
         self.assert_registered(mask);
@@ -396,7 +407,7 @@ impl NavGrid {
     /// `mask`, ignoring standing footprints.
     ///
     /// Out-of-bounds positions always return `false`.
-    pub fn is_claimed_by(&self, mask: impl Into<LayerMask>, pos: CellPos) -> bool {
+    pub fn is_claimed(&self, mask: impl Into<LayerMask>, pos: CellPos) -> bool {
         let mask = mask.into();
 
         self.assert_registered(mask);
@@ -406,11 +417,32 @@ impl NavGrid {
             .unwrap_or(false)
     }
 
+    /// Returns `true` if anyone but `holder` holds a claim on the position
+    /// on **any** layer in `mask`, ignoring standing footprints.
+    ///
+    /// Out-of-bounds positions always return `false`.
+    pub fn is_claimed_by_other_than(
+        &self,
+        mask: impl Into<LayerMask>,
+        pos: CellPos,
+        holder: u32,
+    ) -> bool {
+        let mask = mask.into();
+
+        self.assert_registered(mask);
+
+        mask.layers().any(|layer| {
+            self.claim_holders(layer, pos)
+                .iter()
+                .any(|&other| other != holder)
+        })
+    }
+
     /// Returns `true` if a standing footprint occupies the position on
     /// **any** layer in `mask`, ignoring unit claims and terrain.
     ///
     /// Out-of-bounds positions always return `true`.
-    pub fn is_statically_occupied_by(&self, mask: impl Into<LayerMask>, pos: CellPos) -> bool {
+    pub fn is_statically_occupied(&self, mask: impl Into<LayerMask>, pos: CellPos) -> bool {
         let mask = mask.into();
 
         self.assert_registered(mask);
@@ -435,7 +467,18 @@ impl NavGrid {
     ///
     /// Out-of-bounds positions always return `false`.
     pub fn cell_fits(&self, pos: CellPos, shape: MoverShape) -> bool {
-        self.stands_on_ground(pos, shape) && !self.is_occupied_by(shape.layers, pos)
+        self.cell_fits_ground(pos, shape) && !self.is_occupied(shape.layers, pos)
+    }
+
+    /// Returns `true` if a cell of `shape` may stand at the position as
+    /// [`cell_fits`](Self::cell_fits) says, counting every claim but
+    /// `holder`'s own.
+    ///
+    /// Out-of-bounds positions always return `false`.
+    pub fn cell_fits_for(&self, pos: CellPos, shape: MoverShape, holder: u32) -> bool {
+        self.cell_fits_ground(pos, shape)
+            && !self.is_statically_occupied(shape.layers, pos)
+            && !self.is_claimed_by_other_than(shape.layers, pos, holder)
     }
 
     /// Returns `true` if a cell of `shape` may stand at the position as
@@ -443,7 +486,7 @@ impl NavGrid {
     ///
     /// Out-of-bounds positions always return `false`.
     pub fn cell_fits_statically(&self, pos: CellPos, shape: MoverShape) -> bool {
-        self.stands_on_ground(pos, shape) && !self.is_statically_occupied_by(shape.layers, pos)
+        self.cell_fits_ground(pos, shape) && !self.is_statically_occupied(shape.layers, pos)
     }
 
     /// Returns `true` if a cell of `shape` may stand on the ground at `pos`,
@@ -451,7 +494,7 @@ impl NavGrid {
     /// layer unless it crosses cliffs.
     ///
     /// Out-of-bounds positions always return `false`.
-    pub fn stands_on_ground(&self, pos: CellPos, shape: MoverShape) -> bool {
+    pub fn cell_fits_ground(&self, pos: CellPos, shape: MoverShape) -> bool {
         let (Some(terrain), Some(relief)) = (self.terrain(pos), self.relief(shape.layer, pos))
         else {
             return false;
@@ -477,6 +520,18 @@ impl NavGrid {
     }
 
     /// Returns `true` if every cell of the shape's footprint at `anchor`
+    /// [`cell_fits_for`](Self::cell_fits_for) `holder` and the footprint
+    /// [holds together](Self::holds_together).
+    ///
+    /// Footprints reaching out of bounds always return `false`.
+    pub fn fits_for(&self, anchor: CellPos, shape: MoverShape, holder: u32) -> bool {
+        CellRect::new(anchor, shape.size)
+            .cells()
+            .all(|cell| self.cell_fits_for(cell, shape, holder))
+            && self.holds_together(anchor, shape)
+    }
+
+    /// Returns `true` if every cell of the shape's footprint at `anchor`
     /// [`cell_fits_statically`](Self::cell_fits_statically) — ground it may
     /// stand on, free of static occupants on its layers — and the footprint
     /// [holds together](Self::holds_together).
@@ -496,7 +551,7 @@ impl NavGrid {
     pub fn fits_ground(&self, anchor: CellPos, shape: MoverShape) -> bool {
         CellRect::new(anchor, shape.size)
             .cells()
-            .all(|cell| self.stands_on_ground(cell, shape))
+            .all(|cell| self.cell_fits_ground(cell, shape))
     }
 
     /// Panics in debug builds if `mask` contains any unregistered layer bits.
@@ -562,8 +617,8 @@ impl NavGrid {
         );
         self.registered |= layer;
         self.reliefs[layer.trailing_zeros() as usize] = Some(relief);
-        self.claim_counts[layer.trailing_zeros() as usize] =
-            Some(vec![0; self.width as usize * self.height as usize]);
+        self.claim_holders[layer.trailing_zeros() as usize] =
+            Some(vec![Vec::new(); self.width as usize * self.height as usize]);
     }
 
     /// The relief of a registered layer.

@@ -59,6 +59,33 @@ impl CellRect {
         CellRect::new(origin, CellSize::new(end_x - origin.x, end_y - origin.y))
     }
 
+    /// The cells of `self` outside `other`, as at most four disjoint
+    /// rectangles: the rows below `other`'s, the columns left and right of it
+    /// across its rows, and the rows above it. All of `self` when the two
+    /// share no cell; nothing when `other` covers `self`.
+    pub fn minus(self, other: CellRect) -> impl Iterator<Item = CellRect> {
+        let (left, right) = (self.origin.x, self.origin.x + self.size.width);
+        let (low, high) = (self.origin.y, self.origin.y + self.size.height);
+        // The cut is `other` clamped into `self`: empty on an axis where the
+        // two do not overlap, so the pieces around it then cover all of
+        // `self`.
+        let cut_left = other.origin.x.clamp(left, right);
+        let cut_right = (other.origin.x + other.size.width).clamp(cut_left, right);
+        let cut_low = other.origin.y.clamp(low, high);
+        let cut_high = (other.origin.y + other.size.height).clamp(cut_low, high);
+        [
+            (left, low, right, cut_low),
+            (left, cut_low, cut_left, cut_high),
+            (cut_right, cut_low, right, cut_high),
+            (left, cut_high, right, high),
+        ]
+        .into_iter()
+        .filter(|&(x0, y0, x1, y1)| x1 > x0 && y1 > y0)
+        .map(|(x0, y0, x1, y1)| {
+            CellRect::new(CellPos::new(x0, y0), CellSize::new(x1 - x0, y1 - y0))
+        })
+    }
+
     /// The rect an anchor measures against when stopping within `distance`
     /// of `self` with a `size` footprint: grown low for a ranged stop, so
     /// the anchor measures the footprint's nearest edge; unchanged for a

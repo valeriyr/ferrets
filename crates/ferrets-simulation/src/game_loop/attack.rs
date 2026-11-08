@@ -217,8 +217,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     // own initiative, so it tracks what it might yet shoot and lets go of the rest
     // — and never consults the chase, whose patience is about walks that get
     // nowhere and would end a fight a turret is right to be holding.
-    if !entity_def::of(world, entity).can_move() && !reach::in_reach(world, entity, reached, range)
-    {
+    if !entity_def::may_close(world, entity) && !reach::in_reach(world, entity, reached, range) {
         let notice = entity_def::notice_range_serving(world, entity, target);
         if !reach::in_reach(world, entity, reached, notice) {
             return Processing::state(OrderState::Finished);

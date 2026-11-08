@@ -22,8 +22,10 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
+use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::{layer_mask::LayerMask, nav_grid::NavGrid};
 use ferrets_simulation::{
     beside::Lean,
@@ -41,8 +43,10 @@ use ferrets_simulation::{
     },
     entity_def,
     game_loop::damage,
+    ground,
     map::Map,
     movement_model::{self, MovementModel},
+    occupancy::OccupancyClass,
     order::Order,
     rally,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
@@ -128,6 +132,31 @@ fn change_ordered_over_idle_ally_is_accepted_and_lands() {
     assert_eq!(type_name_of(&app, whelp), "whelp");
     utils::run_ticks(&mut app, 1);
     assert_eq!(type_name_of(&app, whelp), "giant");
+}
+
+#[test]
+fn change_into_mover_form_asks_off_only_bodies_its_claims_meet() {
+    // Under the continuous model the whelp grows into a giant on
+    // (9..11, 9..11), a body on the claim plane. One idle whelp rests on
+    // (11, 11), its claim on the ground; another at (11.7, 10) holds (12, 10),
+    // its body reaching 0.3 onto it. A placement on the claim plane measures
+    // bodies by their claims: the first is asked off on the first tick, the
+    // second never, and stays where it rests.
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
+    let (inside, _) = utils::create_owned(&mut app, "whelp", 11, 11, 0);
+    let (lying, _) = utils::create_owned(&mut app, "whelp", 14, 10, 0);
+    utils::walk_onto(&mut app, lying, utils::part_way("11.7", "10"), 20);
+
+    utils::order_morph(&mut app, whelp, "giant");
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::move_target(&app, inside), Some(utils::pos(12, 11)));
+    assert_eq!(utils::move_target(&app, lying), None);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(
+        utils::position_of(app.world(), lying),
+        utils::part_way("11.7", "10")
+    );
 }
 
 #[test]
@@ -306,11 +335,11 @@ fn unrooting_swaps_static_footprint_for_claim() {
     for cell in [(10, 10), (11, 10), (10, 11), (11, 11)] {
         let cell = CellPos::new(cell.0, cell.1);
         assert!(
-            !grid.is_statically_occupied_by(utils::GROUND, cell),
+            !grid.is_statically_occupied(utils::GROUND, cell),
             "the shrine's static footprint survived its unrooting at {cell:?}"
         );
         assert!(
-            grid.is_claimed_by(utils::GROUND, cell),
+            grid.is_claimed(utils::GROUND, cell),
             "the golem claims the ground it stands on at {cell:?}"
         );
     }
@@ -519,12 +548,12 @@ fn interim_form_settles_onto_cell_mover_stood_on() {
     let map = app.world().resource::<Map>();
     assert!(
         map.nav_grid()
-            .is_statically_occupied_by(utils::GROUND, CellPos::new(11, 10)),
+            .is_statically_occupied(utils::GROUND, CellPos::new(11, 10)),
         "the chrysalis holds the cell the whelp stood on"
     );
     assert!(
         !map.nav_grid()
-            .is_statically_occupied_by(utils::GROUND, CellPos::new(10, 10)),
+            .is_statically_occupied(utils::GROUND, CellPos::new(10, 10)),
         "and not the cell its position floored into"
     );
 }
@@ -759,11 +788,11 @@ fn rooting_puts_static_footprint_back() {
     for cell in [(10, 10), (11, 10), (10, 11), (11, 11)] {
         let cell = CellPos::new(cell.0, cell.1);
         assert!(
-            grid.is_statically_occupied_by(utils::GROUND, cell),
+            grid.is_statically_occupied(utils::GROUND, cell),
             "the shrine stands on the static plane at {cell:?}"
         );
         assert!(
-            !grid.is_claimed_by(utils::GROUND, cell),
+            !grid.is_claimed(utils::GROUND, cell),
             "the golem's claim came off at {cell:?}"
         );
     }
@@ -1143,7 +1172,7 @@ fn reserving_change_claims_layers_its_standing_claim_lacks_under_it() {
     // own cell the reservation claims air alone, its ground claim already
     // holding the ground; the other three cells are claimed on both.
     let mut app = titan_app();
-    let (keeper, _) = utils::create_owned(&mut app, "keeper", 10, 10, 0);
+    let (keeper, keeper_id) = utils::create_owned(&mut app, "keeper", 10, 10, 0);
     let own = utils::cell_of(app.world(), keeper);
 
     utils::order_morph(&mut app, keeper, "titan");
@@ -1153,31 +1182,99 @@ fn reserving_change_claims_layers_its_standing_claim_lacks_under_it() {
         .world()
         .get::<MorphComponent>(keeper)
         .expect("the change is under way");
-    let claims = &morph
-        .as_under_way()
-        .and_then(|under_way| under_way.reservation.as_ref())
-        .expect("the change reserves its ground")
-        .claims;
-    let air = LayerMask::from(utils::AIR);
-    let both = LayerMask::from(utils::GROUND) | utils::AIR;
-    assert_eq!(claims.len(), 4);
-    assert_eq!(
-        claims
-            .iter()
-            .filter(|&&(_, layers)| layers == air)
-            .map(|&(cell, _)| cell)
-            .collect::<Vec<_>>(),
-        vec![own]
-    );
-    assert_eq!(
-        claims.iter().filter(|&&(_, layers)| layers == both).count(),
-        3
+    assert!(
+        morph
+            .as_under_way()
+            .and_then(|under_way| under_way.reservation.as_ref())
+            .is_some(),
+        "the change reserves its ground"
     );
     let grid = app.world().resource::<Map>().nav_grid();
-    // One claim per layer on its own cell: its standing one on ground, the
-    // reservation's on air.
-    assert_eq!(grid.claim_count(utils::GROUND, own), 1);
-    assert_eq!(grid.claim_count(utils::AIR, own), 1);
+    // One claim per layer on its own cell, both the keeper's: its standing
+    // one on ground, the reservation's on air.
+    assert_eq!(grid.claim_holders(utils::GROUND, own), [keeper_id.0]);
+    assert_eq!(grid.claim_holders(utils::AIR, own), [keeper_id.0]);
+    // The 2×2 lies within a cell of its own: 4 cells keeper-held on each
+    // layer there — on ground its own cell plus the three reserved, on air
+    // the four reserved.
+    let around = CellRect::new(CellPos::new(own.x - 1, own.y - 1), CellSize::new(3, 3));
+    for layer in [utils::GROUND, utils::AIR] {
+        assert_eq!(
+            around
+                .cells()
+                .filter(|&cell| grid.claim_holders(layer, cell) == [keeper_id.0])
+                .count(),
+            4
+        );
+    }
+}
+
+#[test]
+fn placement_on_ground_reserved_for_change_is_refused() {
+    // The keeper's change into a 2×2 titan holds ground ahead around its own
+    // cell. A keeper-sized body placed on a reserved cell its body does not
+    // lie over is refused, the cell neither claimed by a standing body nor
+    // covered by one; a cell clear of the reservation takes it.
+    let mut app = titan_app();
+    let (keeper, keeper_id) = utils::create_owned(&mut app, "keeper", 10, 10, 0);
+    let own = utils::cell_of(app.world(), keeper);
+    utils::order_morph(&mut app, keeper, "titan");
+    utils::run_ticks(&mut app, 1);
+
+    let world = app.world();
+    let grid = world.resource::<Map>().nav_grid();
+    let reserved = CellRect::new(CellPos::new(own.x - 1, own.y - 1), CellSize::new(3, 3))
+        .cells()
+        .find(|&cell| cell != own && grid.claim_holders(utils::GROUND, cell) == [keeper_id.0])
+        .expect("the change reserves cells around the keeper's own");
+    let keeper_location = world
+        .resource::<ContentRegistry>()
+        .entity("keeper")
+        .and_then(|def| def.location)
+        .expect("the keeper stands somewhere");
+    let placed_on = |cell: CellPos| {
+        ground::can_place(
+            world,
+            &LocationComponent::new(FixedUVec2::from(cell), Facing::SOUTH),
+            keeper_location,
+            OccupancyClass::Claim,
+            &[],
+            &[],
+        )
+    };
+
+    assert!(!placed_on(reserved));
+    assert!(placed_on(CellPos::new(own.x + 4, own.y)));
+}
+
+#[test]
+fn building_reserving_change_keeps_ground_only_by_its_reservation() {
+    // Under the continuous model a shrine on (10..11, 10..11) changes into a
+    // golem and reserves its ground on the claim plane, a standing body
+    // holding claims. A shrine judged beside it on (12..13, 10..11) meets
+    // those claims in the ring it reads but none of the reserved cells, and
+    // the ground takes it; the reserving shrine is measured by nothing but
+    // its reservation.
+    let mut app = utils::morph_app(MovementModel::Continuous);
+    let (shrine, _) = utils::create_owned(&mut app, "shrine", 10, 10, 0);
+    utils::order_morph(&mut app, shrine, "golem");
+    utils::run_ticks(&mut app, 1);
+    assert!(entity_def::reserving(app.world(), shrine));
+
+    let world = app.world();
+    let shrine_location = world
+        .resource::<ContentRegistry>()
+        .entity("shrine")
+        .and_then(|def| def.location)
+        .expect("the shrine stands somewhere");
+    assert!(ground::can_place(
+        world,
+        &LocationComponent::new(utils::pos(12, 10), Facing::SOUTH),
+        shrine_location,
+        OccupancyClass::Static,
+        &[],
+        &[],
+    ));
 }
 
 #[test]

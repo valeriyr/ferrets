@@ -39,7 +39,7 @@ fn finds_adjacent_when_start_blocked() {
     // . . . . .   y=3
     // . . . . .   y=4
     let mut grid = utils::grid(5, 5);
-    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
 
     let result = find_through_blocked(&grid, utils::nav(2, 2));
 
@@ -54,7 +54,7 @@ fn through_passable_finds_adjacent_when_start_blocked() {
     // . . . . .   y=3
     // . . . . .   y=4
     let mut grid = utils::grid(5, 5);
-    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
 
     let result = find_through_passable(&grid, utils::nav(2, 2));
 
@@ -74,7 +74,7 @@ fn through_blocked_finds_free_outside_ring() {
     // ThroughBlocked: BFS expands through the ring cells.
     // Pops (3,2) first (direction order); its first neighbor (3,1) is passable.
     let mut grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 1);
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
 
     let result = find_through_blocked(&grid, utils::nav(3, 3));
 
@@ -94,7 +94,7 @@ fn through_passable_returns_none_when_enclosed() {
     // ThroughPassable: blocked cells (other than start) are not expanded.
     // The ring cells are enqueued but skipped when popped — no free cell is found.
     let mut grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 1);
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
 
     let result = find_through_passable(&grid, utils::nav(3, 3));
 
@@ -116,8 +116,8 @@ fn through_passable_finds_free_through_ring_gap() {
     //
     // ThroughPassable: stops at ring cells, but (4,3) is passable and adjacent → returned.
     let mut grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 1);
-    grid.set_occupied_by(utils::GROUND, utils::nav(4, 3), false);
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 3), false);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
 
     let result = find_through_passable(&grid, utils::nav(3, 3));
 
@@ -130,10 +130,10 @@ fn returns_none_when_entire_grid_blocked() {
     // X X   y=1
     let mut grid = utils::grid(2, 2);
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(0, 0), true);
-    grid.set_occupied_by(utils::GROUND, utils::nav(1, 0), true);
-    grid.set_occupied_by(utils::GROUND, utils::nav(0, 1), true);
-    grid.set_occupied_by(utils::GROUND, utils::nav(1, 1), true);
+    grid.set_occupied(utils::GROUND, utils::nav(0, 0), true);
+    grid.set_occupied(utils::GROUND, utils::nav(1, 0), true);
+    grid.set_occupied(utils::GROUND, utils::nav(0, 1), true);
+    grid.set_occupied(utils::GROUND, utils::nav(1, 1), true);
 
     let result = find_through_blocked(&grid, utils::nav(0, 0));
 
@@ -151,7 +151,7 @@ fn layer_mask_filters_obstacles() {
     // . . . . .   y=3
     // . . . . .   y=4
     let mut grid = utils::grid(5, 5);
-    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
 
     // AIR: (2,2) is passable → returns itself.
     let air_result = search::find_nearest_free_pos(
@@ -176,7 +176,7 @@ fn through_passable_never_expands_across_cliff_its_shape_cannot_cross() {
     // cliff walker steps up to the first in direction order.
     let mut grid = utils::hill_grid();
     for cell in [(3, 0), (2, 0), (2, 1), (3, 1)] {
-        grid.set_occupied_by(utils::GROUND, utils::nav(cell.0, cell.1), true);
+        grid.set_occupied(utils::GROUND, utils::nav(cell.0, cell.1), true);
     }
     let nearest = |shape| {
         search::find_nearest_free_pos(&grid, shape, utils::nav(3, 0), Expansion::ThroughPassable)
@@ -300,7 +300,7 @@ fn free_placement_skips_occupied_anchor_where_shared_takes_it() {
     let mut grid = utils::grid(10, 10);
     for y in 3..5 {
         for x in 3..5 {
-            grid.add_claim(utils::GROUND, utils::nav(x, y));
+            grid.add_claim(utils::GROUND, utils::nav(x, y), 1);
         }
     }
 
@@ -329,9 +329,9 @@ fn placement_requires_whole_spawn_footprint() {
     // the middle whose whole 2×2 footprint is free wins.
     let mut grid = utils::grid(8, 8);
     // Claim the anchor cell and checker the first ring so no 2×2 fits there.
-    grid.add_claim(utils::GROUND, utils::nav(3, 3));
+    grid.add_claim(utils::GROUND, utils::nav(3, 3), 1);
     for &(x, y) in &[(2, 2), (4, 2), (2, 4), (4, 4)] {
-        grid.add_claim(utils::GROUND, utils::nav(x, y));
+        grid.add_claim(utils::GROUND, utils::nav(x, y), 1);
     }
 
     let asked = |footing| {
@@ -355,7 +355,7 @@ fn placement_requires_whole_spawn_footprint() {
     for dy in 0..2 {
         for dx in 0..2 {
             assert!(
-                !grid.is_occupied_by(utils::GROUND, utils::nav(origin.x + dx, origin.y + dy)),
+                !grid.is_occupied(utils::GROUND, utils::nav(origin.x + dx, origin.y + dy)),
                 "cell ({dx}, {dy}) of the area found is held by something"
             );
         }
@@ -373,7 +373,7 @@ fn free_placement_gives_up_beyond_max_radius_where_shared_does_not() {
     let mut grid = utils::grid(10, 10);
     for y in 2..6 {
         for x in 2..6 {
-            grid.add_claim(utils::GROUND, utils::nav(x, y));
+            grid.add_claim(utils::GROUND, utils::nav(x, y), 1);
         }
     }
 
@@ -413,7 +413,7 @@ fn placement_toward_takes_ring_cell_nearest_toward() {
     let mut grid = utils::grid(10, 10);
     for y in 3..5 {
         for x in 3..5 {
-            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
         }
     }
 
@@ -438,7 +438,7 @@ fn placement_toward_stays_in_nearest_ring() {
     let mut grid = utils::grid(10, 10);
     for y in 3..5 {
         for x in 3..5 {
-            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
         }
     }
 
@@ -585,11 +585,11 @@ fn placements_return_fewer_than_asked_when_room_runs_out() {
     let mut grid = utils::grid_with_water(5, 5, &[utils::nav(1, 1)]);
     for y in 0..5 {
         for x in 0..5 {
-            grid.add_claim(utils::GROUND, utils::nav(x, y));
+            grid.add_claim(utils::GROUND, utils::nav(x, y), 1);
         }
     }
-    grid.remove_claim(utils::GROUND, utils::nav(2, 2));
-    grid.remove_claim(utils::GROUND, utils::nav(0, 0));
+    grid.remove_claim(utils::GROUND, utils::nav(2, 2), 1);
+    grid.remove_claim(utils::GROUND, utils::nav(0, 0), 1);
 
     let asked = |footing| {
         search::find_placements_near(
@@ -633,7 +633,7 @@ fn placements_ring_building_on_either_footing() {
     let mut grid = utils::grid(10, 10);
     for y in 4..7 {
         for x in 4..7 {
-            grid.set_occupied_by(utils::GROUND, utils::nav(x, y), true);
+            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
         }
     }
 

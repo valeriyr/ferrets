@@ -69,15 +69,28 @@ pub fn standing_rect(position: FixedUVec2, size: CellSize) -> CellRect {
     CellRect::new(anchor(position), size).union(CellRect::new(CellPos::from(position), size))
 }
 
-/// The cells a body of `size` anchored at `position` physically overlaps, in
-/// row-major order: a bounding-box corner cell the circle misses does not
-/// count, and touching a cell boundary exactly does not enter the next
-/// cell. Coordinates are unclamped — a body hanging over the grid's far
-/// edge names cells past it, which readers treat as they see fit (the
-/// terrain checks read them as impassable).
-pub fn overlapped_cells(position: FixedUVec2, size: CellSize, radius: FixedU64) -> Vec<CellPos> {
+/// The whole cells a footprint of `size` anchored at `position` lies over:
+/// from the cell the position floors into to the one its far edge reaches, a
+/// far edge exactly on a cell boundary not entering the next cell.
+pub fn covered_rect(position: FixedUVec2, size: CellSize) -> CellRect {
+    let span = |low: FixedU64, extent: u32| {
+        let high = low + FixedU64::from_num(extent);
+        let first = low.floor().to_num::<u32>();
+        let last = high.ceil().to_num::<u32>() - 1;
+        (first, last - first + 1)
+    };
+    let (x, width) = span(position.x, size.width);
+    let (y, height) = span(position.y, size.height);
+    CellRect::new(CellPos::new(x, y), CellSize::new(width, height))
+}
+
+/// The whole cells the bounding box of the circle a body of `size` anchored
+/// at `position` moves as spans: every cell its circle overlaps, and a corner
+/// cell the circle misses. Touching a cell boundary exactly does not enter
+/// the next cell; coordinates are unclamped, as [`overlapped_cells`]' are.
+pub fn circle_rect(position: FixedUVec2, size: CellSize, radius: FixedU64) -> CellRect {
     let center = center(position, size);
-    let cells = |center: FixedU64| {
+    let span = |center: FixedU64| {
         let low = center.saturating_sub(radius);
         let high = center + radius;
         let first = low.floor().to_num::<u32>();
@@ -86,23 +99,35 @@ pub fn overlapped_cells(position: FixedUVec2, size: CellSize, radius: FixedU64) 
         } else {
             high.floor().to_num::<u32>()
         };
-        first..=last
+        // A circle of no radius spans the one cell its middle lies in.
+        let last = last.max(first);
+        (first, last - first + 1)
     };
-    let mut overlapped = Vec::new();
-    for y in cells(center.y) {
-        for x in cells(center.x) {
-            // Exact on raw bits: overlap requires the circle to reach past
-            // the cell's nearest point strictly.
-            let nearest = |value: FixedU64, cell: u32| {
-                value.clamp(FixedU64::from_num(cell), FixedU64::from_num(cell + 1))
-            };
-            let off_x = center.x.abs_diff(nearest(center.x, x)).to_bits() as u128;
-            let off_y = center.y.abs_diff(nearest(center.y, y)).to_bits() as u128;
-            let reach = radius.to_bits() as u128;
-            if off_x * off_x + off_y * off_y < reach * reach {
-                overlapped.push(CellPos::new(x, y));
-            }
-        }
-    }
-    overlapped
+    let (x, width) = span(center.x);
+    let (y, height) = span(center.y);
+    CellRect::new(CellPos::new(x, y), CellSize::new(width, height))
+}
+
+/// The cells a body of `size` anchored at `position` physically overlaps, in
+/// row-major order: a bounding-box corner cell the circle misses does not
+/// count, and touching a cell boundary exactly does not enter the next
+/// cell. Coordinates are unclamped — a body hanging over the grid's far
+/// edge names cells past it, which readers treat as they see fit (the
+/// terrain checks read them as impassable).
+pub fn overlapped_cells(position: FixedUVec2, size: CellSize, radius: FixedU64) -> Vec<CellPos> {
+    let center = center(position, size);
+    // Exact on raw bits: overlap requires the circle to reach past the
+    // cell's nearest point strictly.
+    let nearest = |value: FixedU64, cell: u32| {
+        value.clamp(FixedU64::from_num(cell), FixedU64::from_num(cell + 1))
+    };
+    let reach = radius.to_bits() as u128;
+    circle_rect(position, size, radius)
+        .cells()
+        .filter(|cell| {
+            let off_x = center.x.abs_diff(nearest(center.x, cell.x)).to_bits() as u128;
+            let off_y = center.y.abs_diff(nearest(center.y, cell.y)).to_bits() as u128;
+            off_x * off_x + off_y * off_y < reach * reach
+        })
+        .collect()
 }

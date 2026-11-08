@@ -1020,7 +1020,7 @@ fn map_builds_against_content_with_sea_lake_rivers_and_levels() {
         .layer("ground")
         .expect("the demo registers a ground");
     let terrain = |x, y| grid.terrain(CellPos::new(x, y));
-    let level = |x, y| grid.cell_level(ground, CellPos::new(x, y));
+    let level = |x, y| grid.level(ground, CellPos::new(x, y));
 
     // The sea along the top-left: deep down to row 9, a shallow coast on rows
     // 10 and 11, land from row 12.
@@ -1121,8 +1121,8 @@ fn cliff_bands_ring_plateaus_mountain_and_mesa() {
                 .any(|(dx, dy)| {
                     x.checked_add_signed(dx)
                         .zip(y.checked_add_signed(dy))
-                        .and_then(|(nx, ny)| grid.cell_level(ground, CellPos::new(nx, ny)))
-                        .is_some_and(|level| Some(level) != grid.cell_level(ground, cell))
+                        .and_then(|(nx, ny)| grid.level(ground, CellPos::new(nx, ny)))
+                        .is_some_and(|level| Some(level) != grid.level(ground, cell))
                 });
             assert!(off, "the cliff at {cell:?} borders no other level");
             assert!(!grid.cell_fits(cell, walker), "a walker stands on {cell:?}");

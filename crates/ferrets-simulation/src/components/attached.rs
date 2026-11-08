@@ -41,8 +41,17 @@ pub enum Sitting {
     },
 }
 
-/// Marks a worker sitting in a berth of the job it attends — a builder on its
-/// site, a carrier in its tree.
+/// Why a body sits in its berth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seating {
+    /// Its own order attends the job: calling the order off lets it out.
+    Attending,
+    /// Its breeder holds it: only the breeder lets it out.
+    Held,
+}
+
+/// Marks a body sitting in a berth of a job — a builder on its site, a carrier
+/// in its tree, a broodling its breeder holds.
 ///
 /// An attached entity is on the map: it can be seen, selected and targeted,
 /// and it keeps its sight. It holds no cells on the navigation grid, so
@@ -62,4 +71,6 @@ pub struct AttachedComponent {
     pub sitting: Sitting,
     /// How many berths the worker has moved between on this job.
     pub hops: u32,
+    /// Why the worker sits in the berth.
+    pub seating: Seating,
 }

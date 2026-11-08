@@ -9,7 +9,7 @@ use crate::{
     annex,
     beside::Beside,
     components::{
-        attached::AttachedComponent,
+        attached::{AttachedComponent, Seating},
         brood::BredComponent,
         build::OverbuiltComponent,
         dying::{DiedComponent, DyingComponent},
@@ -34,6 +34,7 @@ use crate::{
     occupancy::{GridMark, OccupancyClass},
     order::Order,
     regions,
+    reservation::Reservation,
     session::player_id::PlayerId,
     simulation_id::SimulationId,
 };
@@ -206,6 +207,30 @@ pub fn attached(world: &World, entity: Entity) -> bool {
     world.entity(entity).contains::<AttachedComponent>()
 }
 
+/// Whether `entity` sits in a berth its breeder holds it in: only the breeder
+/// lets it out.
+pub fn held(world: &World, entity: Entity) -> bool {
+    match seating(world, entity) {
+        Some(Seating::Held) => true,
+        Some(Seating::Attending) | None => false,
+    }
+}
+
+/// Whether `entity` may walk of its own accord — to close on what it acts on,
+/// or away from what hurts it: its type moves and no breeder holds it in a
+/// berth (see [`held`]).
+pub fn may_close(world: &World, entity: Entity) -> bool {
+    of(world, entity).can_move() && !held(world, entity)
+}
+
+/// Why `entity` sits in a berth, or `None` for one that sits in none.
+pub fn seating(world: &World, entity: Entity) -> Option<Seating> {
+    world
+        .entity(entity)
+        .get::<AttachedComponent>()
+        .map(|attached| attached.seating)
+}
+
 /// The job whose berth `entity` sits in, or `None` once it is gone from the
 /// world.
 ///
@@ -362,11 +387,16 @@ pub fn changing(world: &World, entity: Entity) -> bool {
 /// Whether a change of form under way on `entity` holds ground reserved for
 /// the form it lands in.
 pub fn reserving(world: &World, entity: Entity) -> bool {
+    reservation(world, entity).is_some()
+}
+
+/// The ground a change of form under way on `entity` holds ahead, if any.
+pub fn reservation(world: &World, entity: Entity) -> Option<Reservation> {
     world
         .entity(entity)
         .get::<MorphComponent>()
         .and_then(MorphComponent::as_under_way)
-        .is_some_and(|under_way| under_way.reservation.is_some())
+        .and_then(|under_way| under_way.reservation)
 }
 
 /// Whether a change of form is under way on `entity` while it still wears the
@@ -501,6 +531,7 @@ pub fn grid_mark(world: &World, entity: Entity) -> Option<GridMark> {
         MovementModel::Continuous => {}
     }
     grid_mark_of(
+        simulation_id(world, entity),
         &location,
         def.location
             .expect("a body standing on the grid has a location"),
@@ -508,14 +539,16 @@ pub fn grid_mark(world: &World, entity: Entity) -> Option<GridMark> {
     )
 }
 
-/// What a body standing at `location` in `def` marks on the grid, on the plane
-/// `class` selects — or `None` for one whose solidity marks no cells.
+/// What `holder`'s body standing at `location` in `def` marks on the grid, on
+/// the plane `class` selects — or `None` for one whose solidity marks no cells.
 pub fn grid_mark_of(
+    holder: SimulationId,
     location: &LocationComponent,
     def: LocationDef,
     class: OccupancyClass,
 ) -> Option<GridMark> {
     def.solidity().claims_cells().then(|| GridMark {
+        holder,
         footprint: CellRect::new(body::anchor(location.position), def.size()),
         layers: def.occupies(),
         class,
@@ -677,17 +710,22 @@ pub fn went_in_rect(world: &World, entity: Entity) -> CellRect {
         .footprint_rect(went_in(world, entity), location_size(world, entity))
 }
 
-/// The body radius of a mover, from its radius stat.
+/// The body radius of a mover, from its radius stat, held to half its
+/// footprint's narrow side — the bound a continuous-model map validates the
+/// base stat against.
 ///
 /// Panics if `entity` is not a simulation entity, or carries no radius stat
 /// — building a continuous-model map validates that every mover defines
 /// one, and only the continuous model reads it.
 pub fn radius(world: &World, entity: Entity) -> FixedU64 {
+    let size = location_size(world, entity);
+    let bound = FixedU64::from_num(size.width.min(size.height)) / 2;
     world
         .entity(entity)
         .get::<StatsComponent>()
         .and_then(|stats| stats.effective(EntityStatId::RADIUS))
         .expect("movers define a radius stat")
+        .min(bound)
 }
 
 /// How strongly a mover resists displacement, from its weight stat.
@@ -884,6 +922,37 @@ pub fn occupied_rect_of(world: &World, def: &EntityTypeDef, entity: Entity) -> C
 pub fn standing_rect(world: &World, entity: Entity) -> CellRect {
     let (position, size) = footprint(world, entity);
     body::standing_rect(position, size)
+}
+
+/// The cells `entity`'s body lies over where it stands, by its true shape:
+/// under the cell model the cells its footprint at its position covers (see
+/// [`body::covered_rect`]), under the continuous model the cells its circle's
+/// bounding box spans (see [`body::circle_rect`]).
+///
+/// Panics if `entity` is not a simulation entity, or its type declares no
+/// location, or under the continuous model carries no radius stat.
+pub fn covered_rect(world: &World, entity: Entity) -> CellRect {
+    let (position, size) = footprint(world, entity);
+    match world.resource::<Map>().movement_model() {
+        MovementModel::Cell => body::covered_rect(position, size),
+        MovementModel::Continuous => body::circle_rect(position, size, radius(world, entity)),
+    }
+}
+
+/// The cells a placement on the plane `occupancy` selects measures `entity`
+/// by: for a footprint on the static plane its true shape (see
+/// [`covered_rect`]); for one on the claim plane its claim, or the cells it
+/// stands across when it claims none.
+///
+/// Panics as [`covered_rect`] and [`grid_mark`] do.
+pub fn measured_rect(world: &World, entity: Entity, occupancy: OccupancyClass) -> CellRect {
+    match occupancy {
+        OccupancyClass::Static => covered_rect(world, entity),
+        OccupancyClass::Claim => match grid_mark(world, entity) {
+            Some(mark) => mark.footprint,
+            None => standing_rect(world, entity),
+        },
+    }
 }
 
 /// The center of the footprint `entity` stands on, in world units with

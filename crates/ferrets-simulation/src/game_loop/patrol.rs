@@ -3,7 +3,10 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 
-use super::orders::{self, Processing, Refusal};
+use super::{
+    movement,
+    orders::{self, Processing, Refusal},
+};
 use crate::{
     components::{
         order_queue::{CancelPolicy, OrderState},
@@ -13,12 +16,9 @@ use crate::{
     order::Order,
 };
 
-/// Whether `entity` may start a Patrol: its type moves and it operates.
+/// Whether `entity` may start a Patrol (see [`movement::may_walk`]).
 pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
-    if !entity_def::of(world, entity).can_move() {
-        return Err(Refusal::Incapable);
-    }
-    orders::requires_operating(world, entity)
+    movement::may_walk(world, entity)
 }
 
 /// Called once when a Patrol order becomes the front `New` entry.

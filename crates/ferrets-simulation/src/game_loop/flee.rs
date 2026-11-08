@@ -40,7 +40,7 @@ pub fn tick(world: &mut World) {
         {
             continue;
         }
-        if !entity_def::of(world, entity).can_move() {
+        if !entity_def::may_close(world, entity) {
             continue;
         }
         // One off the map has nowhere to run, and a frozen one does not.

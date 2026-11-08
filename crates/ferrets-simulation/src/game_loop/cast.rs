@@ -132,9 +132,10 @@ pub fn survives_soft_cancel() -> bool {
 /// then cast: the first tick of casting pays what the cast pays at its start,
 /// the effect lands on the tick its point names, and the caster stands through
 /// the rest of its period before the order finishes. Until it lands, a tick
-/// its aim cannot be held — gone, no longer seen, or out of reach once casting
-/// has started, or, until casting starts, an aim the buff it applies would not
-/// hold on — cuts the cast short; a caster that stops operating has its
+/// its aim cannot be held — gone, no longer seen, out of reach once casting
+/// has started or of a caster that may not close (see
+/// [`entity_def::may_close`]), or, until casting starts, an aim the buff it
+/// applies would not hold on — cuts the cast short; a caster that stops operating has its
 /// cast canceled by the order loop before this runs.
 pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let (skill, target) = order.cast_params().expect("Cast order must have a skill");
@@ -161,6 +162,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             // Whether the buff would hold is judged until the cast begins;
             // once begun, a cast paid at its start is not judged again.
             if !started && holds(world, skill, aim).is_err() {
+                return cut_short(world, entity, skill, state.paid);
+            }
+            // A caster that may not close casts only on what it reaches from
+            // where it stands, as the cast was judged when ordered.
+            if !reaches_aim(world, entity, skill, aim) {
                 return cut_short(world, entity, skill, state.paid);
             }
             // Closing on the aim is the work before casting starts. A skill
@@ -282,8 +288,9 @@ pub fn by_player(
 /// anything the caster was doing is canceled: the skill's requirements, the
 /// caster able to start it, a summon of a bound tunnel end, the cooldown, and
 /// the aim where it is whole already — the caster itself, or the picked
-/// target of a transient cast or of a caster that cannot walk, which must lie
-/// within its reach from where the caster stands. Any other aim is judged as
+/// target of a transient cast or of a caster that may not close (see
+/// [`entity_def::may_close`]), which must lie within its reach from where the
+/// caster stands. Any other aim is judged as
 /// the cast's order runs.
 ///
 /// Panics when `skill` is not cast by an entity.
@@ -331,10 +338,10 @@ pub fn judge_issue(
         | EntityCastTarget::Standing { .. }
         | EntityCastTarget::Fallen { .. } => match (casting, aiming) {
             (Casting::Transient, Aiming::Picked(target)) => target,
-            // A caster that cannot walk casts from where it stands, as a
+            // A caster that may not close casts from where it stands, as a
             // transient cast does.
             (Casting::Instant | Casting::Delayed { .. }, Aiming::Picked(target)) => {
-                match entity_def::of(world, caster).can_move() {
+                match entity_def::may_close(world, caster) {
                     true => return Ok(()),
                     false => target,
                 }
@@ -458,8 +465,9 @@ pub fn aim(
 
 /// Whether `caster` reaches `aim` with `skill` from where it can get to: any
 /// aim, for a cast declaring no reach or a caster that walks into it; for one
-/// that cannot walk, or a transient cast, which never walks, an aim within
-/// the reach of every cell it stands on, as the cast order measures it.
+/// that may not close (see [`entity_def::may_close`]), or a transient cast,
+/// which never walks, an aim within the reach of every cell it stands on, as
+/// the cast order measures it.
 ///
 /// Panics when `skill` is not cast by an entity.
 pub fn reaches_aim(world: &World, caster: Entity, skill: SkillId, aim: CastAim) -> bool {
@@ -473,7 +481,7 @@ pub fn reaches_aim(world: &World, caster: Entity, skill: SkillId, aim: CastAim) 
     let walks = match &def.caster {
         SkillCaster::Entity { casting, .. } => match casting {
             Casting::Transient => false,
-            Casting::Instant | Casting::Delayed { .. } => entity_def::of(world, caster).can_move(),
+            Casting::Instant | Casting::Delayed { .. } => entity_def::may_close(world, caster),
         },
         SkillCaster::Player { .. } => panic!("reaches_aim is asked of a skill an entity casts"),
     };

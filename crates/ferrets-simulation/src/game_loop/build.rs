@@ -23,6 +23,7 @@ use crate::{
     annex, berths,
     beside::Beside,
     components::{
+        attached::Seating,
         build::{BuildComponent, BuildStage},
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
@@ -278,7 +279,7 @@ fn found(
     }
     // Fields and docks gate the placement the same way: judged at the
     // raise, never again for a site already standing.
-    let overbuilds = {
+    let (overbuilds, site_class) = {
         let def = world
             .resource::<ContentRegistry>()
             .entity(type_name)
@@ -288,7 +289,7 @@ fn found(
         {
             return Processing::state(OrderState::Finished);
         }
-        def.overbuilds.clone()
+        (def.overbuilds.clone(), OccupancyClass::of(def))
     };
 
     // A site raised over a resource source needs one of the type under it,
@@ -315,6 +316,7 @@ fn found(
         owner,
         site,
         building_location_def.occupies(),
+        site_class,
         &[entity],
         |marks, bodies| {
             let lifted: Vec<GridMark> = builder_mark.iter().chain(marks).copied().collect();
@@ -430,7 +432,7 @@ fn found(
             hidden::record_inside(world, entity, Inside::Job(building_sim_id));
         }
         BuilderAttendance::Crew(WorkPresence::Attached(attachment)) => {
-            spawn::seat_unseated(world, entity, building, &attachment);
+            spawn::seat_unseated(world, entity, building, &attachment, Seating::Attending);
         }
         BuilderAttendance::Crew(WorkPresence::Present { .. }) | BuilderAttendance::Unattended => {}
     }
@@ -592,6 +594,7 @@ fn can_found(
         return Err(Refusal::Incapable);
     }
     orders::requires_operating(world, entity)?;
+    orders::requires_unheld(world, entity)?;
     requires_free_to_attend(world, entity)?;
     if entity_def::of(world, entity).can_move() {
         return Ok(());
@@ -627,6 +630,7 @@ fn can_join(world: &World, entity: Entity, site: SimulationId) -> Result<Entity,
         return Err(Refusal::Incapable);
     }
     orders::requires_operating(world, entity)?;
+    orders::requires_unheld(world, entity)?;
     requires_free_to_attend(world, entity)?;
     if !entity_def::of(world, entity).can_move() {
         let range = entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE);
@@ -731,10 +735,11 @@ enum InTheWay {
 }
 
 /// Whether `entity`, a builder, stands in the way of a site of `type_name` at
-/// `position`: one staying in the open while it works, standing on a cell of
-/// the site on a layer the site takes, where the ground — any source under
-/// the site set aside — refuses the site with the builder counted and takes
-/// it with the builder set aside.
+/// `position`: one staying in the open while it works, lying over a cell of
+/// the site — measured as a placement on the site's plane measures it (see
+/// [`entity_def::measured_rect`]) — on a layer the site takes, where the
+/// ground — any source under the site set aside — refuses the site with the
+/// builder counted and takes it with the builder set aside.
 fn in_the_way(world: &World, entity: Entity, type_name: &str, position: FixedUVec2) -> InTheWay {
     match attendance(world, entity) {
         BuilderAttendance::Crew(WorkPresence::Hidden { .. } | WorkPresence::Attached(_))
@@ -751,7 +756,7 @@ fn in_the_way(world: &World, entity: Entity, type_name: &str, position: FixedUVe
         .location
         .expect("a builder stands somewhere");
     if builder_def.occupies() & site_def.occupies() == LayerMask::EMPTY
-        || !entity_def::standing_rect(world, entity).intersects(site)
+        || !entity_def::measured_rect(world, entity, OccupancyClass::of(def)).intersects(site)
     {
         return InTheWay::Clear;
     }

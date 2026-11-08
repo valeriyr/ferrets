@@ -5,7 +5,8 @@ use bevy_ecs::{entity::Entity, world::World};
 
 use super::{
     chase::{self, Destination},
-    orders::{self, Processing, Refusal},
+    movement,
+    orders::{Processing, Refusal},
 };
 use crate::{
     components::{
@@ -21,16 +22,13 @@ use crate::{
 /// How close the entity stays to its follow target, in grid cells.
 const FOLLOW_DISTANCE: u32 = 1;
 
-/// Whether `entity` may start a Follow: its type moves and it operates, and
-/// the target is there.
+/// Whether `entity` may start a Follow: it may walk (see
+/// [`movement::may_walk`]), and the target is there.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let target = order
         .follow_target()
         .expect("Follow order must have a target");
-    if !entity_def::of(world, entity).can_move() {
-        return Err(Refusal::Incapable);
-    }
-    orders::requires_operating(world, entity)?;
+    movement::may_walk(world, entity)?;
     if world
         .resource::<EntityIndex>()
         .interactable(world, target)

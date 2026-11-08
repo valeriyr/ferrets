@@ -80,7 +80,7 @@ impl Blockers {
                     let level = layers
                         .iter()
                         .map(|&layer| {
-                            grid.cell_level(layer, cell)
+                            grid.level(layer, cell)
                                 .expect("a covered cell lies on the map")
                         })
                         .max()

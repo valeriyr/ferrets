@@ -10,7 +10,7 @@ use super::orders::Refusal;
 use crate::{
     berths,
     beside::{Beside, Lean},
-    components::hidden::Inside,
+    components::{attached::Seating, hidden::Inside},
     entity_def, spawn,
 };
 use ferrets_content::work::WorkPresence;
@@ -46,7 +46,9 @@ pub(super) fn enter(world: &mut World, entity: Entity, presence: &WorkPresence, 
             let job_id = entity_def::simulation_id(world, job);
             spawn::hide_entity(world, entity, Inside::Job(job_id));
         }
-        WorkPresence::Attached(attachment) => spawn::attach_entity(world, entity, job, attachment),
+        WorkPresence::Attached(attachment) => {
+            spawn::attach_entity(world, entity, job, attachment, Seating::Attending)
+        }
         WorkPresence::Present { .. } => {}
     }
 }

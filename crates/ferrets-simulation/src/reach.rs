@@ -8,7 +8,9 @@ use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize};
 use ferrets_nav_grid::mover_shape::MoverShape;
 use ferrets_physics::body;
 
-use crate::{berths, entity_def, landing::ComesFrom, map::Map, regions};
+use crate::{
+    berths, components::attached::Seating, entity_def, landing::ComesFrom, map::Map, regions,
+};
 
 /// Whether `entity`, standing on the cells `from`, reaches `goal` within
 /// `range`: a touch needs an edge between them its domain could step. Its
@@ -60,7 +62,8 @@ pub(crate) fn distance_to(world: &World, from: CellRect, entity: Entity) -> u32 
 
 /// How a body gets within reach of a goal from where it comes.
 pub(crate) enum Approach {
-    /// From the cells it comes from: a body that never walks.
+    /// From the cells it comes from: a body that may not close (see
+    /// [`entity_def::may_close`]).
     Stands {
         /// The cells it reaches from.
         rect: CellRect,
@@ -77,28 +80,32 @@ pub(crate) enum Approach {
 }
 
 impl Approach {
-    /// How `entity`, on the map, gets within reach of a goal: one seated in a
-    /// berth as it would coming out of that berth; otherwise a mover by
-    /// walking in the region of its shape it stands in, a body that never
-    /// walks from the cells it stands on.
+    /// How `entity`, on the map, gets within reach of a goal: one attending a
+    /// job from a berth as it would coming out of that berth; otherwise one
+    /// that may close (see [`entity_def::may_close`]) by walking in the region
+    /// of its shape it stands in, and one that may not — a body that never
+    /// walks, or one its breeder holds — from the cells it stands on.
     ///
     /// Panics if `entity` is not a simulation entity, is off the map, or its
     /// type declares no location.
     pub(crate) fn from_where_it_is(world: &World, entity: Entity) -> Self {
-        if entity_def::attached(world, entity) {
-            let berth = berths::held_berth(world, entity);
-            return Approach::coming_from(
-                world,
-                entity,
-                ComesFrom::steps_out_of(world, entity, berth),
-            );
+        match entity_def::seating(world, entity) {
+            Some(Seating::Attending) => {
+                let berth = berths::seated_berth(world, entity);
+                return Approach::coming_from(
+                    world,
+                    entity,
+                    ComesFrom::steps_out_of(world, entity, berth),
+                );
+            }
+            Some(Seating::Held) | None => {}
         }
         let def = entity_def::of(world, entity);
         let location = def
             .location
             .expect("only a body that stands somewhere approaches");
         let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location);
-        if def.can_move() {
+        if entity_def::may_close(world, entity) {
             let anchor = body::anchor(entity_def::position(world, entity));
             Approach::Walks {
                 shape,

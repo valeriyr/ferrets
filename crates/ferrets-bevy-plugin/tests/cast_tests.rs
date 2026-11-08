@@ -1717,6 +1717,30 @@ fn caster_that_cannot_walk_has_its_picked_aim_judged_as_ordered() {
 }
 
 #[test]
+fn caster_that_cannot_walk_gives_up_aim_that_leaves_its_reach() {
+    // The wader, older than the obelisk, walks south half a cell a tick. The
+    // pin is judged as it stands at (5, 8.5), on cells 8 and 9: three cells
+    // from the obelisk at (5, 5), within reach. Its step to (5, 9) on that
+    // same tick, before the obelisk's turn, puts it four off: the cast ends
+    // there, nothing landed and nothing walked.
+    let mut app = shore_app();
+    let (wader, wader_id) = utils::create_owned(&mut app, "wader", 5, 8, 0);
+    let (obelisk, obelisk_id) = utils::create_owned(&mut app, "obelisk", 5, 5, 0);
+    let marked = utils::entity_buff_id(&app, "marked");
+    utils::run_ticks(&mut app, 1);
+
+    utils::cast_on(&mut app, obelisk_id, "pin", wader_id);
+    utils::run_ticks(&mut app, 1);
+    utils::order_move(&mut app, wader, 5, 25);
+    utils::run_ticks(&mut app, utils::APPLY - 1);
+    assert_eq!(utils::position_of(app.world(), wader), utils::pos(5, 9));
+
+    assert!(utils::order_queue_is_empty(app.world_mut(), obelisk));
+    assert!(!entity_def::bears(app.world(), wader, marked));
+    assert_eq!(cooldown_of(&app, obelisk_id, "pin"), Cooldown::Ready);
+}
+
+#[test]
 fn transient_cast_out_of_reach_is_refused_without_walking() {
     let mut app = shore_app();
     let (caster, caster_id) = utils::create_owned(&mut app, "wader", 5, 5, 0);

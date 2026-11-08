@@ -12,7 +12,10 @@ use ferrets_nav_grid::{
     terrain_id::TerrainId,
     terrain_mask::TerrainMask,
 };
-use ferrets_pathfinder::hierarchy::NavHierarchy;
+use ferrets_pathfinder::{
+    hierarchy::NavHierarchy,
+    mover_profile::{Blockers, MoverProfile},
+};
 
 pub const GROUND: LayerId = LayerId::new(1);
 pub const AIR: LayerId = LayerId::new(2);
@@ -21,6 +24,9 @@ pub const AIR: LayerId = LayerId::new(2);
 pub const LAND: TerrainId = TerrainId::new(1);
 /// A second terrain, for cells a land shape may not enter.
 pub const WATER: TerrainId = TerrainId::new(2);
+
+/// The holder a test route is sought for; the claims tests add are another's.
+pub const SEEKER: u32 = 0;
 
 pub fn world(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
@@ -68,7 +74,7 @@ pub fn hollow_ring_grid(grid_size: u32, center: CellPos, radius: u32) -> NavGrid
             let y = center.y as i32 + dy;
 
             if x >= 0 && y >= 0 {
-                grid.set_occupied_by(GROUND, nav(x as u32, y as u32), true);
+                grid.set_occupied(GROUND, nav(x as u32, y as u32), true);
             }
         }
     }
@@ -99,6 +105,12 @@ pub fn in_air() -> MoverShape {
 /// A `size`-by-`size` shape over land on the GROUND layer, for clearance tests.
 pub fn square_on_ground(size: u32) -> MoverShape {
     MoverShape::new(land(), GROUND, GROUND, CellSize::new(size, size), None)
+}
+
+/// The profile a flat search routes `shape` with for [`SEEKER`]: around static
+/// occupancy and every claim but the seeker's own.
+pub fn profile(shape: MoverShape) -> MoverProfile {
+    MoverProfile::new(shape, Blockers::AllBut(SEEKER))
 }
 
 /// Builds the hierarchy for a single-cell GROUND mover only.
@@ -149,7 +161,7 @@ pub fn terraced_gap_grid() -> NavGrid {
         slope: None,
     });
     for y in [0, 1, 6, 7] {
-        grid.set_occupied_by(GROUND, nav(7, y), true);
+        grid.set_occupied(GROUND, nav(7, y), true);
     }
     grid
 }

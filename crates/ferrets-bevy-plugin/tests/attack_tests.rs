@@ -62,7 +62,7 @@ fn attack_kills_adjacent_target() {
             world
                 .resource::<Map>()
                 .nav_grid()
-                .is_occupied_by(utils::GROUND, CellPos::new(6, 5))
+                .is_occupied(utils::GROUND, CellPos::new(6, 5))
         );
     }
 

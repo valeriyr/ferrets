@@ -23,7 +23,8 @@ pub enum Destination {
     Arrived,
     /// A walk toward the destination should be issued as a sub-order.
     Walk(Order),
-    /// The previous walk made no progress; the destination is unreachable.
+    /// The destination is unreachable: the previous walk made no progress, or
+    /// the chaser is held in a berth and walks nowhere.
     OutOfReach,
 }
 
@@ -74,6 +75,9 @@ pub fn advance_onto_point(
     if position == destination {
         *last_chase = None;
         return Destination::Arrived;
+    }
+    if entity_def::held(world, chaser) {
+        return Destination::OutOfReach;
     }
     walk_or_give_up(
         last_chase,
@@ -173,6 +177,9 @@ fn close_on(
     if reach::in_reach(world, chaser, goal, range) {
         *last_chase = None;
         return Destination::Arrived;
+    }
+    if entity_def::held(world, chaser) {
+        return Destination::OutOfReach;
     }
 
     walk_or_give_up(last_chase, body::anchor(from), toward, goal.size, range)

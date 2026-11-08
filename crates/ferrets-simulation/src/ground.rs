@@ -7,7 +7,7 @@ use ferrets_content::{
     location::{LocationDef, Solidity},
     registry::ContentRegistry,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing, layer_mask::LayerMask, mover_shape::MoverShape,
 };
@@ -19,6 +19,7 @@ use crate::{
     entity_index::EntityIndex,
     map::Map,
     occupancy::{GridMark, OccupancyClass},
+    simulation_id::SimulationId,
 };
 
 /// A body standing on the map that keeps static footprints off its cells
@@ -26,7 +27,7 @@ use crate::{
 pub(crate) struct GroundHolder {
     /// The layers it stands on.
     layers: LayerMask,
-    /// The cells it holds.
+    /// The cells it keeps static footprints off.
     footprint: CellRect,
     /// Which static footprints it keeps off them.
     keeps: Keeps,
@@ -56,11 +57,13 @@ pub fn takes(map: &Map, anchor: CellPos, shape: MoverShape, occupancy: Occupancy
 }
 
 /// Whether the ground takes a footprint of `to` at `placed` on the plane
-/// `occupancy` selects: ground it [`takes`]; every cell free on the grid but
-/// for what `lifted` marks — what the bodies being placed mark on it already
-/// (see [`entity_def::grid_mark`]) — of claims too for a body claiming its
-/// cells, of standing footprints alone for one that claims none; and no
-/// ground holder keeping it off but `ignored`, those bodies themselves.
+/// `occupancy` selects: ground it [`takes`]; every cell free of standing
+/// footprints but for what `lifted` marks — what the bodies being placed
+/// mark on it already (see [`entity_def::grid_mark`]) — and, for a body
+/// claiming its cells, clear of units and reservations but those of
+/// `lifted`'s holders, each measured as the plane measures it (see
+/// [`entity_def::measured_rect`]); and no ground holder keeping it off but
+/// `ignored`, those bodies themselves.
 pub fn can_place(
     world: &World,
     placed: &LocationComponent,
@@ -114,13 +117,14 @@ pub(crate) fn ground_holders(world: &World, ignored: &[Entity]) -> Vec<GroundHol
             }
             let standing_def = entity_def::of(world, entity);
             let standing_location = standing_def.location?;
-            // What claims its cells is the grid's to refuse; a mover claiming
-            // none keeps solid static footprints off every cell it stands
-            // across; a body that never walks keeps off what its solidity says.
+            // What claims its cells is judged in `clear_of_units`; a mover
+            // claiming none keeps solid static footprints off every cell its
+            // body lies over; a body that never walks keeps off what its
+            // solidity says.
             let (footprint, keeps) = match (standing_location.solidity(), standing_def.can_move()) {
                 (Solidity::Solid, _) => return None,
                 (Solidity::Underfoot | Solidity::Passable, true) => {
-                    (entity_def::standing_rect(world, entity), Keeps::Solid)
+                    (entity_def::covered_rect(world, entity), Keeps::Solid)
                 }
                 (solidity @ (Solidity::Underfoot | Solidity::Passable), false) => (
                     entity_def::footprint_rect_of(world, standing_def, entity),
@@ -137,9 +141,9 @@ pub(crate) fn ground_holders(world: &World, ignored: &[Entity]) -> Vec<GroundHol
 }
 
 /// Whether the ground [`takes`] a footprint of `to` at `placed` on the plane
-/// `occupancy` selects, every cell free on the grid but for what `lifted`
-/// marks: of claims too for a body claiming its cells, of standing footprints
-/// alone for one that claims none.
+/// `occupancy` selects, every cell free of standing footprints but for what
+/// `lifted` marks, and, for a body claiming its cells, clear of units and
+/// reservations (see [`clear_of_units`]).
 fn on_free_ground(
     world: &World,
     placed: &LocationComponent,
@@ -149,13 +153,87 @@ fn on_free_ground(
 ) -> bool {
     let map = world.resource::<Map>();
     let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &to);
-    takes(map, body::anchor(placed.position), shape, occupancy)
+    let anchor = body::anchor(placed.position);
+    takes(map, anchor, shape, occupancy)
+        && map.is_statically_free_over_lifted(placed, shape, lifted)
         && match to.solidity() {
-            Solidity::Solid => map.is_free_over_lifted(placed, shape, lifted),
-            Solidity::Underfoot | Solidity::Passable => {
-                map.is_statically_free_over_lifted(placed, shape, lifted)
-            }
+            Solidity::Solid => clear_of_units(
+                world,
+                CellRect::new(anchor, shape.size),
+                shape.layers,
+                occupancy,
+                lifted,
+            ),
+            Solidity::Underfoot | Solidity::Passable => true,
         }
+}
+
+/// Whether no unit stands over `footprint` on any of `layers`, measured as a
+/// placement on the plane `occupancy` selects measures it (see
+/// [`entity_def::measured_rect`]), and no reservation holds a cell of it
+/// there, but those of the holders of `lifted`'s claims. The units are the
+/// holders of the claims over the footprint and the ring of cells around
+/// it.
+fn clear_of_units(
+    world: &World,
+    footprint: CellRect,
+    layers: LayerMask,
+    occupancy: OccupancyClass,
+    lifted: &[GridMark],
+) -> bool {
+    let grid = world.resource::<Map>().nav_grid();
+    let around = CellRect::new(
+        CellPos::new(
+            footprint.origin.x.saturating_sub(1),
+            footprint.origin.y.saturating_sub(1),
+        ),
+        CellSize::new(footprint.size.width + 2, footprint.size.height + 2),
+    );
+    let mut holders: Vec<u32> = around
+        .cells()
+        .flat_map(|cell| {
+            layers
+                .layers()
+                .flat_map(move |layer| grid.claim_holders(layer, cell).iter().copied())
+        })
+        .collect();
+    holders.sort_unstable();
+    holders.dedup();
+    holders
+        .into_iter()
+        .map(SimulationId)
+        .filter(|&holder| {
+            !lifted.iter().any(|mark| match mark.class {
+                OccupancyClass::Claim => mark.holder == holder,
+                OccupancyClass::Static => false,
+            })
+        })
+        .all(|holder| {
+            let body = world
+                .resource::<EntityIndex>()
+                .any(holder)
+                .expect("a claim's holder is a simulation entity");
+            // A holder standing on the static plane claims cells only through
+            // a reservation, read below.
+            let def = entity_def::of(world, body);
+            let lies_over = match OccupancyClass::of(def) {
+                OccupancyClass::Static => false,
+                OccupancyClass::Claim => {
+                    def.location
+                        .expect("a claim's holder stands somewhere")
+                        .occupies()
+                        & layers
+                        != LayerMask::EMPTY
+                        && entity_def::measured_rect(world, body, occupancy).intersects(footprint)
+                }
+            };
+            let reserves = entity_def::reservation(world, body).is_some_and(|reservation| {
+                reservation.marks().any(|mark| {
+                    mark.layers & layers != LayerMask::EMPTY && mark.footprint.intersects(footprint)
+                })
+            });
+            !lies_over && !reserves
+        })
 }
 
 /// Whether none of `holders` keeps a static footprint of `to` at `placed` off

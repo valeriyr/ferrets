@@ -377,7 +377,7 @@ pub fn spawn_minimap(
         let Some(name) = data.terrains().get(terrain as usize) else {
             continue;
         };
-        let cell_level = data
+        let level = data
             .relief(map::GROUND)
             .expect("the demo's ground spans levels")[index]
             .level;
@@ -385,7 +385,7 @@ pub fn spawn_minimap(
         base.put(
             index % width,
             index / width,
-            bytes_of(render::ground_color(name, cell_level)),
+            bytes_of(render::ground_color(name, level)),
         );
     }
 

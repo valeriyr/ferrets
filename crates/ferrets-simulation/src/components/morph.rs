@@ -2,20 +2,9 @@
 
 use bevy_ecs::prelude::*;
 use ferrets_content::{entity_type_def::EntityTypeId, pool_def::PoolId};
-use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
-use ferrets_nav_grid::layer_mask::LayerMask;
 
-use crate::components::patience::Patience;
-
-/// Ground held ahead of a form change landing on it.
-#[derive(Debug, Clone)]
-pub struct MorphReservation {
-    /// Each cell this change claimed, with the layers it claimed there: the
-    /// destination's layers but for those the entity's own standing claim
-    /// already holds on the cell.
-    pub claims: Vec<(CellPos, LayerMask)>,
-}
+use crate::{components::patience::Patience, reservation::Reservation};
 
 /// A change of form under way.
 #[derive(Debug, Clone)]
@@ -25,7 +14,7 @@ pub struct MorphUnderWay {
     /// The ground claimed ahead for the destination footprint. `None` when
     /// nothing is held ahead: the transition does not reserve, or its
     /// destination claims no cells.
-    pub reservation: Option<MorphReservation>,
+    pub reservation: Option<Reservation>,
     /// What each pool held when the change started.
     pub before: Vec<(PoolId, FixedU64)>,
 }

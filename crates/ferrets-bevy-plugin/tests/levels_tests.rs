@@ -349,6 +349,39 @@ fn trained_static_body_is_set_down_on_flat_ground() {
 }
 
 #[test]
+fn trained_static_body_waits_on_ally_lying_onto_its_cell() {
+    // Under the continuous model walls leave a hut on (3, 10) and the two
+    // cells east of it. An idle own recruit rests at (4.7, 10): it claims
+    // (5, 10), and its half-cell circle, centered at 5.2, lies over (4, 10)
+    // too. The cairn the hut trains, a static body, finds no free cell; the
+    // nearest the recruit lies over, (4, 10), is asked clear, the recruit
+    // settling 0.3 back onto (5, 10), and the cairn stands on (4, 10).
+    let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for x in 3..=5 {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 10), false);
+        }
+    }
+    let (_, hut_id) = utils::create_owned(&mut app, "hut", 3, 10, 0);
+    let (recruit, _) = utils::create_owned(&mut app, "recruit", 5, 10, 0);
+    utils::walk_onto(&mut app, recruit, utils::part_way("4.7", "10"), 10);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: hut_id,
+            type_name: "cairn".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(cells_of(&app, "cairn"), vec![CellPos::new(4, 10)]);
+    assert_eq!(utils::position_of(app.world(), recruit), utils::pos(5, 10));
+}
+
+#[test]
 fn unit_trained_at_cliff_edge_never_lands_below_it() {
     // A hut at (9, 0) on the plateau's edge, the cliff band west of it and no
     // ramp: walkers hold every plateau cell within three rings of it, (9, 1)
@@ -648,6 +681,30 @@ fn static_body_summoned_at_point_never_lands_below_cliff() {
 //
 
 #[test]
+fn change_into_static_form_is_refused_over_body_lying_past_its_claim() {
+    // Under the continuous model a seedling at (3, 10) is to grow into a
+    // grove on (3..4, 10..11), a static body. An enemy recruit rests at
+    // (4.7, 10): it claims (5, 10), the cell its position rounds to, and its
+    // half-cell circle, centered at 5.2, lies from 4.7 to 5.7, over (4, 10)
+    // too, so the change is refused for want of room. Walked on to (5, 10),
+    // its body lies on (5, 10) alone and the change may start.
+    let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
+    let (seedling, _) = utils::create_owned(&mut app, "seedling", 3, 10, 0);
+    let (recruit, _) = utils::create_owned(&mut app, "recruit", 6, 10, 1);
+    utils::walk_onto(&mut app, recruit, utils::part_way("4.7", "10"), 10);
+    let order = Order::Morph {
+        type_name: "grove".to_string(),
+    };
+
+    assert_eq!(
+        orders::can_start(app.world(), seedling, &order),
+        Err(Refusal::NoRoom)
+    );
+    utils::walk_onto(&mut app, recruit, utils::pos(5, 10), 10);
+    assert_eq!(orders::can_start(app.world(), seedling, &order), Ok(()));
+}
+
+#[test]
 fn reserving_change_moved_off_its_ground_lands_only_where_ground_takes_it() {
     // A settler at (3, 3) reserves its cell for a cairn, a static body that
     // stands only on flat ground. Moved during the change onto the ramp's
@@ -826,6 +883,30 @@ fn change_cut_short_sets_idle_ally_on_its_scaffold_down_beside_it() {
     assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
     assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
     assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(3, 2));
+}
+
+#[test]
+fn change_cut_short_sets_ally_lying_past_its_claim_down_off_it() {
+    // Under the continuous model an own walker rests at (2.3, 3) while the
+    // kiln on (3, 3) changes through its scaffold: it claims (2, 3), and its
+    // half-cell circle, centered at 2.8, lies from 2.3 to 3.3, over the
+    // kiln's cell. Cut short, the kiln — a static body — measures it by its
+    // body and sets it down 0.3 back onto (2, 3), then goes back where it
+    // stood.
+    let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
+    let (kiln, _) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
+    utils::order_morph(&mut app, kiln, "furnace");
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
+    let (walker, _) = utils::create_owned(&mut app, "walker", 1, 3, 0);
+    utils::walk_onto(&mut app, walker, utils::part_way("2.3", "3"), 20);
+
+    utils::soft_cancel_orders(app.world_mut(), kiln);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
+    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
+    assert_eq!(utils::position_of(app.world(), walker), utils::pos(2, 3));
 }
 
 #[test]
@@ -1250,7 +1331,7 @@ fn bred_body_cut_short_never_stands_over_what_stood_onto_its_interim_form() {
         app.world()
             .resource::<Map>()
             .nav_grid()
-            .is_claimed_by(layers, CellPos::new(4, 4))
+            .is_claimed(layers, CellPos::new(4, 4))
     );
 }
 

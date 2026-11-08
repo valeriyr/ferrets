@@ -153,7 +153,7 @@ pub fn recompute_visibility(world: &mut World) {
                     .filter(|&cell| map.contains(cell))
                     .filter(move |&cell| {
                         blocked_by.iter().all(|&relief| {
-                            grid.cell_level(relief, cell)
+                            grid.level(relief, cell)
                                 .expect("a cell on the map has a level on every layer")
                                 <= eyes
                         })

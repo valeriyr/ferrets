@@ -21,13 +21,13 @@ use crate::{
         berths::BerthsComponent,
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
-        location::LocationComponent,
     },
     entity_def,
     entity_index::EntityIndex,
     events::{EventRecord, SimulationEvent},
     map::Map,
     simulation_id::SimulationId,
+    spawn,
 };
 use ferrets_content::work::{BerthStance, WorkPresence};
 
@@ -176,12 +176,9 @@ pub fn reseat(world: &mut World, job: Entity) -> Vec<Entity> {
             .any(worker_id)
             .expect("a berth holds a worker, dying ones included");
         let point = seat_point(world, job, &group, seat);
-        let to = position_centered_on(world, worker, point);
-        let mut location = world
-            .get_mut::<LocationComponent>(worker)
-            .expect("a seated worker is on the map");
-        let from = location.position;
-        location.position = to;
+        let from = entity_def::position(world, worker);
+        spawn::seat_body(world, worker, point);
+        let to = entity_def::position(world, worker);
         let announced = SimulationEvent::EntityRelocated {
             entity: worker_id,
             from,
@@ -206,7 +203,7 @@ pub fn position_centered_on(world: &World, worker: Entity, point: FixedUVec2) ->
 ///
 /// Panics for a worker that is not attached, or whose job stands nowhere on
 /// the map.
-pub(crate) fn held_berth(world: &World, worker: Entity) -> Beside {
+pub(crate) fn seated_berth(world: &World, worker: Entity) -> Beside {
     let attached = world
         .get::<AttachedComponent>(worker)
         .expect("only an attached worker holds a berth");
@@ -397,14 +394,10 @@ pub fn advance(world: &mut World) {
             }
         };
 
-        let position = position.map(|point| position_centered_on(world, entity, point));
-        let mut entity_mut = world.entity_mut(entity);
-        if let Some(position) = position {
-            entity_mut
-                .get_mut::<LocationComponent>()
-                .expect("an attached worker has a location")
-                .position = position;
+        if let Some(point) = position {
+            spawn::seat_body(world, entity, point);
         }
+        let mut entity_mut = world.entity_mut(entity);
         let mut attached = entity_mut
             .get_mut::<AttachedComponent>()
             .expect("collected above");

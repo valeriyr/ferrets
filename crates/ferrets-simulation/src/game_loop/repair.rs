@@ -54,6 +54,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
         return Err(Refusal::Incapable);
     }
     orders::requires_operating(world, entity)?;
+    orders::requires_unheld(world, entity)?;
     let Some(target) = world
         .resource::<EntityIndex>()
         .interactable(world, target_id)

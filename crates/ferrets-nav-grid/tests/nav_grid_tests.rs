@@ -25,10 +25,10 @@ fn layers_are_independent() {
     // . . . . .   y=4
     let mut grid = utils::grid(5, 5);
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
 
-    assert!(grid.is_occupied_by(utils::GROUND, utils::nav(2, 2)));
-    assert!(!grid.is_occupied_by(utils::AIR, utils::nav(2, 2)));
+    assert!(grid.is_occupied(utils::GROUND, utils::nav(2, 2)));
+    assert!(!grid.is_occupied(utils::AIR, utils::nav(2, 2)));
 }
 
 #[test]
@@ -45,19 +45,19 @@ fn layer_registered_twice_panics() {
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "mask contains unregistered layers")]
-fn set_occupied_by_panics_on_unregistered_layer() {
+fn set_occupied_panics_on_unregistered_layer() {
     let mut grid = NavGrid::new(5, 5, |_| utils::LAND);
     grid.add_flat_layer(utils::GROUND, 1);
-    grid.set_occupied_by(utils::AIR, utils::nav(1, 1), true);
+    grid.set_occupied(utils::AIR, utils::nav(1, 1), true);
 }
 
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "mask contains unregistered layers")]
-fn is_occupied_by_panics_on_unregistered_mask() {
+fn is_occupied_panics_on_unregistered_mask() {
     let mut grid = NavGrid::new(5, 5, |_| utils::LAND);
     grid.add_flat_layer(utils::GROUND, 1);
-    grid.is_occupied_by(utils::GROUND | utils::AIR, utils::nav(1, 1));
+    grid.is_occupied(utils::GROUND | utils::AIR, utils::nav(1, 1));
 }
 
 #[cfg(debug_assertions)]
@@ -66,7 +66,7 @@ fn is_occupied_by_panics_on_unregistered_mask() {
 fn add_claim_panics_on_unregistered_layer() {
     let mut grid = NavGrid::new(5, 5, |_| utils::LAND);
     grid.add_flat_layer(utils::GROUND, 1);
-    grid.add_claim(utils::AIR, utils::nav(1, 1));
+    grid.add_claim(utils::AIR, utils::nav(1, 1), 1);
 }
 
 //
@@ -77,20 +77,20 @@ fn add_claim_panics_on_unregistered_layer() {
 fn every_position_is_free_after_layer_registers() {
     let grid = utils::grid(4, 4);
 
-    assert!(!grid.is_occupied_by(utils::GROUND, utils::nav(0, 0)));
-    assert!(!grid.is_occupied_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(!grid.is_occupied(utils::GROUND, utils::nav(0, 0)));
+    assert!(!grid.is_occupied(utils::GROUND, utils::nav(3, 3)));
 }
 
 #[test]
-fn set_occupied_by_toggles_single_position() {
+fn set_occupied_toggles_single_position() {
     let mut grid = utils::grid(5, 5);
     let pos = utils::nav(2, 2);
 
-    grid.set_occupied_by(utils::GROUND, pos, true);
-    assert!(grid.is_occupied_by(utils::GROUND, pos));
+    grid.set_occupied(utils::GROUND, pos, true);
+    assert!(grid.is_occupied(utils::GROUND, pos));
 
-    grid.set_occupied_by(utils::GROUND, pos, false);
-    assert!(!grid.is_occupied_by(utils::GROUND, pos));
+    grid.set_occupied(utils::GROUND, pos, false);
+    assert!(!grid.is_occupied(utils::GROUND, pos));
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn set_occupied_by_toggles_single_position() {
 fn occupying_cell_off_grid_panics() {
     let mut grid = utils::grid(3, 3);
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 0), true);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 0), true);
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn occupying_cell_off_grid_panics() {
 fn occupying_no_layer_panics() {
     let mut grid = utils::grid(3, 3);
 
-    grid.set_occupied_by(LayerMask::EMPTY, utils::nav(1, 1), true);
+    grid.set_occupied(LayerMask::EMPTY, utils::nav(1, 1), true);
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn occupying_no_layer_panics() {
 fn claiming_cell_off_grid_panics() {
     let mut grid = utils::grid(3, 3);
 
-    grid.add_claim(utils::GROUND, utils::nav(0, 3));
+    grid.add_claim(utils::GROUND, utils::nav(0, 3), 1);
 }
 
 #[test]
@@ -122,43 +122,43 @@ fn claiming_cell_off_grid_panics() {
 fn claiming_no_layer_panics() {
     let mut grid = utils::grid(3, 3);
 
-    grid.add_claim(LayerMask::EMPTY, utils::nav(1, 1));
+    grid.add_claim(LayerMask::EMPTY, utils::nav(1, 1), 1);
 }
 
 #[test]
 fn out_of_bounds_is_occupied() {
     let grid = utils::grid(3, 3);
 
-    assert!(grid.is_occupied_by(utils::GROUND, utils::nav(3, 0)));
-    assert!(grid.is_statically_occupied_by(utils::GROUND, utils::nav(0, 3)));
+    assert!(grid.is_occupied(utils::GROUND, utils::nav(3, 0)));
+    assert!(grid.is_statically_occupied(utils::GROUND, utils::nav(0, 3)));
 }
 
 #[test]
-fn is_occupied_by_returns_true_when_any_layer_is_occupied() {
+fn is_occupied_returns_true_when_any_layer_is_occupied() {
     let mut grid = utils::grid(5, 5);
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(1, 1), true);
+    grid.set_occupied(utils::GROUND, utils::nav(1, 1), true);
 
-    assert!(grid.is_occupied_by(utils::GROUND | utils::AIR, utils::nav(1, 1)));
-    assert!(!grid.is_occupied_by(utils::AIR, utils::nav(1, 1)));
+    assert!(grid.is_occupied(utils::GROUND | utils::AIR, utils::nav(1, 1)));
+    assert!(!grid.is_occupied(utils::AIR, utils::nav(1, 1)));
 }
 
 #[test]
-fn set_occupied_by_updates_all_matched_layers() {
+fn set_occupied_updates_all_matched_layers() {
     let mut grid = utils::grid(5, 5);
 
-    grid.set_occupied_by(utils::GROUND | utils::AIR, utils::nav(3, 3), true);
+    grid.set_occupied(utils::GROUND | utils::AIR, utils::nav(3, 3), true);
 
-    assert!(grid.is_occupied_by(utils::GROUND, utils::nav(3, 3)));
-    assert!(grid.is_occupied_by(utils::AIR, utils::nav(3, 3)));
+    assert!(grid.is_occupied(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_occupied(utils::AIR, utils::nav(3, 3)));
 }
 
 #[test]
 fn occupancy_reads_no_terrain() {
     let grid = utils::grid_with_water(5, 5, &[utils::nav(2, 2)]);
 
-    assert!(!grid.is_occupied_by(utils::GROUND, utils::nav(2, 2)));
-    assert!(!grid.is_statically_occupied_by(utils::GROUND, utils::nav(2, 2)));
+    assert!(!grid.is_occupied(utils::GROUND, utils::nav(2, 2)));
+    assert!(!grid.is_statically_occupied(utils::GROUND, utils::nav(2, 2)));
 }
 
 //
@@ -184,8 +184,8 @@ fn off_grid_has_no_terrain() {
 #[test]
 fn terrain_query_ignores_occupancy_and_claims() {
     let mut grid = utils::grid_with_water(8, 8, &[utils::nav(5, 5)]);
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
-    grid.add_claim(utils::GROUND, utils::nav(4, 4));
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+    grid.add_claim(utils::GROUND, utils::nav(4, 4), 1);
 
     assert!(grid.is_on_terrains(utils::land(), utils::nav(3, 3)));
     assert!(grid.is_on_terrains(utils::land(), utils::nav(4, 4)));
@@ -200,8 +200,8 @@ fn terrain_query_ignores_occupancy_and_claims() {
 #[test]
 fn cell_fits_reads_one_cell_terrain_and_layers() {
     let mut grid = utils::grid_with_water(4, 4, &[utils::nav(1, 1)]);
-    grid.set_occupied_by(utils::GROUND, utils::nav(2, 2), true);
-    grid.add_claim(utils::GROUND, utils::nav(3, 3));
+    grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
+    grid.add_claim(utils::GROUND, utils::nav(3, 3), 1);
     let land_walker = utils::on_ground();
 
     assert!(grid.cell_fits(utils::nav(0, 0), land_walker));
@@ -222,7 +222,7 @@ fn cell_fits_reads_one_cell_terrain_and_layers() {
 fn fits_honors_claims_where_fits_statically_ignores_them() {
     let mut grid = utils::grid(8, 8);
     let shape = utils::square_on_ground(2);
-    grid.add_claim(utils::GROUND, utils::nav(3, 3));
+    grid.add_claim(utils::GROUND, utils::nav(3, 3), 1);
 
     assert!(!grid.fits(utils::nav(2, 2), shape));
     assert!(grid.fits_statically(utils::nav(2, 2), shape));
@@ -232,7 +232,7 @@ fn fits_honors_claims_where_fits_statically_ignores_them() {
 fn static_occupancy_refuses_shape_on_both_queries() {
     let mut grid = utils::grid(8, 8);
     let shape = utils::square_on_ground(2);
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
 
     assert!(!grid.fits(utils::nav(2, 2), shape));
     assert!(!grid.fits_statically(utils::nav(2, 2), shape));
@@ -248,7 +248,7 @@ fn shape_fits_only_where_every_layer_is_free() {
         CellSize::ONE,
         None,
     );
-    grid.set_occupied_by(utils::AIR, utils::nav(3, 3), true);
+    grid.set_occupied(utils::AIR, utils::nav(3, 3), true);
 
     assert!(grid.fits(utils::nav(2, 2), tall));
     assert!(
@@ -280,8 +280,8 @@ fn shape_over_every_terrain_fits_on_any() {
 #[test]
 fn ground_fit_ignores_claims_and_standing_footprints() {
     let mut grid = utils::grid(8, 8);
-    grid.add_claim(utils::GROUND, utils::nav(3, 3));
-    grid.set_occupied_by(utils::GROUND, utils::nav(4, 3), true);
+    grid.add_claim(utils::GROUND, utils::nav(3, 3), 1);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 3), true);
     let shape = MoverShape::new(
         utils::land(),
         utils::GROUND,
@@ -331,99 +331,140 @@ fn footprint_reaching_out_of_bounds_fits_nowhere() {
 #[test]
 fn claim_blocks_movement_queries_but_not_static_ones() {
     let mut grid = utils::grid(8, 8);
-    grid.add_claim(utils::GROUND, utils::nav(3, 3));
+    grid.add_claim(utils::GROUND, utils::nav(3, 3), 1);
 
-    assert!(grid.is_occupied_by(utils::GROUND, utils::nav(3, 3)));
-    assert!(grid.is_claimed_by(utils::GROUND, utils::nav(3, 3)));
-    assert!(!grid.is_statically_occupied_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_occupied(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_claimed(utils::GROUND, utils::nav(3, 3)));
+    assert!(!grid.is_statically_occupied(utils::GROUND, utils::nav(3, 3)));
 }
 
 #[test]
 fn released_claim_frees_cell() {
     let mut grid = utils::grid(8, 8);
-    grid.add_claim(utils::GROUND, utils::nav(3, 3));
-    grid.remove_claim(utils::GROUND, utils::nav(3, 3));
+    grid.add_claim(utils::GROUND, utils::nav(3, 3), 1);
+    grid.remove_claim(utils::GROUND, utils::nav(3, 3), 1);
 
-    assert!(!grid.is_occupied_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(!grid.is_occupied(utils::GROUND, utils::nav(3, 3)));
 }
 
 #[test]
 fn static_occupancy_blocks_both_query_planes() {
     let mut grid = utils::grid(8, 8);
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
 
-    assert!(grid.is_occupied_by(utils::GROUND, utils::nav(3, 3)));
-    assert!(grid.is_statically_occupied_by(utils::GROUND, utils::nav(3, 3)));
-    assert!(!grid.is_claimed_by(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_occupied(utils::GROUND, utils::nav(3, 3)));
+    assert!(grid.is_statically_occupied(utils::GROUND, utils::nav(3, 3)));
+    assert!(!grid.is_claimed(utils::GROUND, utils::nav(3, 3)));
 }
 
 #[test]
-fn shared_cell_stays_claimed_until_its_last_claim_is_removed() {
+fn shared_cell_stays_claimed_until_its_last_holder_leaves() {
     let mut grid = utils::grid(8, 8);
-    grid.add_claim(utils::GROUND, utils::nav(2, 2));
-    grid.add_claim(utils::GROUND, utils::nav(2, 2));
+    grid.add_claim(utils::GROUND, utils::nav(2, 2), 7);
+    grid.add_claim(utils::GROUND, utils::nav(2, 2), 3);
 
-    grid.remove_claim(utils::GROUND, utils::nav(2, 2));
+    grid.remove_claim(utils::GROUND, utils::nav(2, 2), 7);
 
-    // Two claims, one removed: 2 - 1 = 1 still holds the cell.
-    assert_eq!(grid.claim_count(utils::GROUND, utils::nav(2, 2)), 1);
-    assert!(grid.is_claimed_by(utils::GROUND, utils::nav(2, 2)));
+    assert_eq!(grid.claim_holders(utils::GROUND, utils::nav(2, 2)), [3]);
+    assert!(grid.is_claimed(utils::GROUND, utils::nav(2, 2)));
 
-    grid.remove_claim(utils::GROUND, utils::nav(2, 2));
+    grid.remove_claim(utils::GROUND, utils::nav(2, 2), 3);
 
-    assert_eq!(grid.claim_count(utils::GROUND, utils::nav(2, 2)), 0);
-    assert!(!grid.is_occupied_by(utils::GROUND, utils::nav(2, 2)));
+    assert_eq!(
+        grid.claim_holders(utils::GROUND, utils::nav(2, 2)),
+        [] as [u32; 0]
+    );
+    assert!(!grid.is_occupied(utils::GROUND, utils::nav(2, 2)));
 }
 
 #[test]
-fn claim_over_several_layers_is_counted_on_each() {
+fn claim_holders_are_listed_in_ascending_order() {
+    let mut grid = utils::grid(3, 3);
+    for holder in [9, 2, 5] {
+        grid.add_claim(utils::GROUND, utils::nav(1, 1), holder);
+    }
+
+    assert_eq!(
+        grid.claim_holders(utils::GROUND, utils::nav(1, 1)),
+        [2, 5, 9]
+    );
+}
+
+#[test]
+fn claim_over_several_layers_is_held_on_each() {
     let mut grid = NavGrid::new(5, 5, |_| utils::LAND);
     grid.add_flat_layer(utils::GROUND, 1);
     grid.add_flat_layer(utils::AIR, 2);
-    grid.add_claim(utils::GROUND | utils::AIR, utils::nav(1, 1));
-    grid.add_claim(utils::AIR, utils::nav(1, 1));
+    grid.add_claim(utils::GROUND | utils::AIR, utils::nav(1, 1), 1);
+    grid.add_claim(utils::AIR, utils::nav(1, 1), 2);
 
-    grid.remove_claim(utils::GROUND | utils::AIR, utils::nav(1, 1));
+    grid.remove_claim(utils::GROUND | utils::AIR, utils::nav(1, 1), 1);
 
-    // GROUND: 1 - 1 = 0; AIR: 2 - 1 = 1.
-    assert_eq!(grid.claim_count(utils::GROUND, utils::nav(1, 1)), 0);
-    assert_eq!(grid.claim_count(utils::AIR, utils::nav(1, 1)), 1);
-    assert!(!grid.is_claimed_by(utils::GROUND, utils::nav(1, 1)));
-    assert!(grid.is_claimed_by(utils::AIR, utils::nav(1, 1)));
+    assert_eq!(
+        grid.claim_holders(utils::GROUND, utils::nav(1, 1)),
+        [] as [u32; 0]
+    );
+    assert_eq!(grid.claim_holders(utils::AIR, utils::nav(1, 1)), [2]);
+    assert!(!grid.is_claimed(utils::GROUND, utils::nav(1, 1)));
+    assert!(grid.is_claimed(utils::AIR, utils::nav(1, 1)));
 }
 
 #[test]
-#[should_panic(expected = "a claim taken off a cell is one that holds it")]
-fn removing_claim_no_claim_holds_panics() {
+#[should_panic(expected = "holder 4 takes off only a claim it holds")]
+fn removing_claim_another_holder_holds_panics() {
     let mut grid = utils::grid(3, 3);
+    grid.add_claim(utils::GROUND, utils::nav(1, 1), 3);
 
-    grid.remove_claim(utils::GROUND, utils::nav(1, 1));
+    grid.remove_claim(utils::GROUND, utils::nav(1, 1), 4);
 }
 
 #[test]
-#[should_panic(expected = "a cell holds fewer claims than a count can carry")]
-fn claim_past_count_ceiling_panics() {
+#[should_panic(expected = "holder 3 claims a cell once on a layer")]
+fn claiming_same_cell_twice_panics() {
     let mut grid = utils::grid(3, 3);
-    // A count carries u16::MAX = 65,535 claims; the next one overflows.
-    for _ in 0..=u16::MAX {
-        grid.add_claim(utils::GROUND, utils::nav(1, 1));
-    }
+    grid.add_claim(utils::GROUND, utils::nav(1, 1), 3);
+
+    grid.add_claim(utils::GROUND, utils::nav(1, 1), 3);
 }
 
 #[test]
-fn cell_off_grid_holds_no_claims() {
+fn cell_fits_its_own_holder_but_not_another() {
+    let mut grid = utils::grid(3, 3);
+    grid.add_claim(utils::GROUND, utils::nav(1, 1), 3);
+    let shape = utils::on_ground();
+
+    assert!(grid.cell_fits_for(utils::nav(1, 1), shape, 3));
+    assert!(!grid.cell_fits_for(utils::nav(1, 1), shape, 4));
+    assert!(!grid.is_claimed_by_other_than(utils::GROUND, utils::nav(1, 1), 3));
+    assert!(grid.is_claimed_by_other_than(utils::GROUND, utils::nav(1, 1), 4));
+}
+
+#[test]
+fn shared_cell_blocks_holder_that_shares_it() {
+    let mut grid = utils::grid(3, 3);
+    grid.add_claim(utils::GROUND, utils::nav(1, 1), 3);
+    grid.add_claim(utils::GROUND, utils::nav(1, 1), 5);
+
+    assert!(!grid.fits_for(utils::nav(1, 1), utils::on_ground(), 3));
+}
+
+#[test]
+fn cell_off_grid_has_no_claim_holders() {
     let grid = utils::grid(3, 3);
 
-    assert_eq!(grid.claim_count(utils::GROUND, utils::nav(3, 0)), 0);
+    assert_eq!(
+        grid.claim_holders(utils::GROUND, utils::nav(3, 0)),
+        [] as [u32; 0]
+    );
 }
 
 #[test]
 #[should_panic(expected = "layer 2 is not registered")]
-fn claim_count_on_unregistered_layer_panics() {
+fn claim_holders_on_unregistered_layer_panic() {
     let mut grid = NavGrid::new(3, 3, |_| utils::LAND);
     grid.add_flat_layer(utils::GROUND, 1);
 
-    grid.claim_count(utils::AIR, utils::nav(1, 1));
+    grid.claim_holders(utils::AIR, utils::nav(1, 1));
 }
 
 #[test]
@@ -446,8 +487,8 @@ fn each_layer_keeps_its_own_level_at_every_cell() {
 
     // GROUND's peak at 3 under AIR flat at 4; AIR has no slopes, not even
     // over GROUND's ramp.
-    assert_eq!(grid.cell_level(utils::GROUND, peak), Some(3));
-    assert_eq!(grid.cell_level(utils::AIR, peak), Some(4));
+    assert_eq!(grid.level(utils::GROUND, peak), Some(3));
+    assert_eq!(grid.level(utils::AIR, peak), Some(4));
     assert_eq!(grid.slope(utils::AIR, utils::nav(3, 1)), None);
     assert!(grid.cell_fits(peak, utils::walker()));
     assert!(grid.cell_fits(peak, utils::in_air()));
@@ -606,7 +647,7 @@ fn ranged_layer_level_outside_its_range_panics() {
 fn level_of_unregistered_layer_panics() {
     let mut grid = NavGrid::new(2, 1, |_| utils::LAND);
     grid.add_flat_layer(utils::GROUND, 1);
-    grid.cell_level(utils::AIR, utils::nav(0, 0));
+    grid.level(utils::AIR, utils::nav(0, 0));
 }
 
 #[test]

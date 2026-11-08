@@ -10,6 +10,8 @@ use ferrets_simulation::{
     entity_def,
     map::Map,
     movement_model::{self, MovementModel},
+    occupancy::GridMark,
+    simulation_id::SimulationId,
     spawn,
 };
 
@@ -54,6 +56,28 @@ fn cell_body_written_past_its_claim_fails_plane_check() {
     utils::run_ticks(&mut app, 1);
 }
 
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
+#[should_panic(
+    expected = "the claim plane holds exactly the claims of the bodies standing on the grid \
+                and the reservations of changes under way, each under its holder"
+)]
+fn claim_under_another_holder_fails_plane_check() {
+    let mut app = utils::continuous_orders_app();
+    let (soldier, soldier_id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
+
+    // The soldier's own cell, as many claims as before, but held under an id
+    // no body has.
+    let mark = entity_def::grid_mark(app.world(), soldier).expect("the soldier claims its cell");
+    let mut map = app.world_mut().resource_mut::<Map>();
+    map.unclaim(mark);
+    map.claim(GridMark {
+        holder: SimulationId(soldier_id.0 + 100),
+        ..mark
+    });
+    utils::run_ticks(&mut app, 1);
+}
+
 //
 // ─── Dying bodies ─────────────────────────────────────────────────────────────
 //
@@ -61,28 +85,28 @@ fn cell_body_written_past_its_claim_fails_plane_check() {
 #[test]
 fn dying_body_keeps_its_claim_until_freed() {
     let mut app = utils::continuous_orders_app();
-    utils::create_owned(&mut app, "soldier", 2, 2, 0);
-    let (dying, _) = utils::create_owned(&mut app, "soldier", 4, 2, 0);
+    let (_, survivor_id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
+    let (dying, dying_id) = utils::create_owned(&mut app, "soldier", 4, 2, 0);
     // Pressed onto the first soldier's cell — 2.4 anchors to 2 — and killed
     // there: a dying body pushes nothing, so the survivor stays put.
     movement_model::move_body(app.world_mut(), dying, utils::part_way("2.4", "2"));
-    assert_eq!(claim_count_at(&app, 2, 2), 2);
+    assert_eq!(holders_at(&app, 2, 2), [survivor_id.0, dying_id.0]);
 
     // The Die order starts on the first tick and runs the soldier's two
     // ticks of dying: its claim is held through tick 2 and freed on tick
-    // 1 + 2 = 3, taking its own share alone: 2 - 1 = 1.
+    // 1 + 2 = 3, taking its own claim alone.
     spawn::destroy_entity(app.world_mut(), dying);
     utils::run_ticks(&mut app, 2);
     assert_eq!(
-        claim_count_at(&app, 2, 2),
-        2,
-        "the dying soldier still holds its share"
+        holders_at(&app, 2, 2),
+        [survivor_id.0, dying_id.0],
+        "the dying soldier still holds its claim"
     );
 
     utils::run_ticks(&mut app, 1);
     assert_eq!(
-        claim_count_at(&app, 2, 2),
-        1,
+        holders_at(&app, 2, 2),
+        [survivor_id.0],
         "the survivor's claim outlasts the freed one"
     );
 }
@@ -128,9 +152,10 @@ fn moving_seated_body_with_its_claim_panics() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-fn claim_count_at(app: &App, x: u32, y: u32) -> u16 {
+fn holders_at(app: &App, x: u32, y: u32) -> Vec<u32> {
     app.world()
         .resource::<Map>()
         .nav_grid()
-        .claim_count(utils::GROUND, CellPos::new(x, y))
+        .claim_holders(utils::GROUND, CellPos::new(x, y))
+        .to_vec()
 }

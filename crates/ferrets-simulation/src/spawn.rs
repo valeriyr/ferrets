@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use bevy_ecs::{
     component::Component,
     entity::Entity,
-    world::{EntityWorldMut, Mut, World},
+    world::{EntityWorldMut, World},
 };
 use ferrets_content::{
     attack::Slain,
@@ -38,7 +38,7 @@ use crate::{
     brood,
     components::{
         annex::{AnnexComponent, DocksComponent},
-        attached::AttachedComponent,
+        attached::{AttachedComponent, Seating},
         brood::{BredComponent, BroodComponent},
         concealed::ConcealedComponent,
         dying::{DiedComponent, DyingComponent, Passing, RemainsComponent},
@@ -51,7 +51,6 @@ use crate::{
         lifetime::LifetimeComponent,
         location::LocationComponent,
         morph::MorphComponent,
-        movement::MoveComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::{self, OwnerComponent},
         pool_shifts::PoolShiftsComponent,
@@ -83,8 +82,8 @@ use crate::{
     landing::{self, Bound, ComesFrom, Lander},
     links::{self, LinkKey, LinkPassengers, Membership},
     map::Map,
-    movement_model::{self, MovementModel},
-    occupancy::OccupancyClass,
+    movement_model::{self, MovementModel, Settling},
+    occupancy::{GridMark, OccupancyClass},
     order::Order,
     rally,
     ruleset::RemainsLimit,
@@ -327,7 +326,7 @@ pub(crate) fn spawn_bred(
         Arrival::Standing { starts: &[] },
     )
     .expect("validated content breeds a registered type with a location");
-    seat_at(world, entity, job, attachment, seat, point);
+    seat_at(world, entity, job, attachment, seat, point, Seating::Held);
     announce(world, id, SpawnCause::Bred { by });
     Some((entity, id))
 }
@@ -617,11 +616,12 @@ fn spawn_remains(
     if !ground::can_place(world, &location, location_def, class, &[], &[]) {
         return;
     }
-    world
-        .resource_mut::<Map>()
-        .place_if_some(entity_def::grid_mark_of(&location, location_def, class));
-
     let id = world.resource_mut::<SimulationIds>().mint();
+    remark(
+        world,
+        None,
+        entity_def::grid_mark_of(id, &location, location_def, class),
+    );
     let mut queue = OrderQueueComponent::default();
     queue.push(Order::Die, None);
 
@@ -840,10 +840,11 @@ pub(crate) fn mark_hidden(world: &mut World, entity: Entity, inside: Inside) {
     world.resource_mut::<PendingImpacts>().lose(id, position);
 }
 
-/// Seats an entity in a berth of `job`'s group named by `attachment`: it frees
-/// the cells it held, puts its middle on the free berth nearest to where it
-/// stood, and holds no cells from there on while staying on the map. Bring it back onto
-/// the grid with [`place_back_beside`] or [`place_back_beside_or_retry`].
+/// Seats an entity in a berth of `job`'s group named by `attachment`, for the
+/// reason `seating` gives: it frees the cells it held, puts its middle on the
+/// free berth nearest to where it stood, and holds no cells from there on
+/// while staying on the map. Bring it back onto the grid with
+/// [`place_back_beside`] or [`place_back_beside_or_retry`].
 ///
 /// Panics for a hidden entity, which has nothing to stand on, and when the
 /// group has no free berth: a caller attaches only where [`berths::shut`]
@@ -853,9 +854,10 @@ pub(crate) fn attach_entity(
     entity: Entity,
     job: Entity,
     attachment: &Attachment,
+    seating: Seating,
 ) {
     free_to_seat(world, entity);
-    seat_unseated(world, entity, job, attachment);
+    seat_unseated(world, entity, job, attachment, seating);
 }
 
 /// Takes an entity on the map off the grid and out of any berth it sits in.
@@ -873,7 +875,7 @@ pub(crate) fn free_to_seat(world: &mut World, entity: Entity) {
 
 /// Seats an entity that holds no cells and no berth — one that has just given
 /// its seat up through [`unseat`] — in the free berth of `job`'s group named
-/// by `attachment` nearest to where it is.
+/// by `attachment` nearest to where it is, for the reason `seating` gives.
 ///
 /// Panics when the group has no free berth: a caller seats only where it
 /// found room.
@@ -882,17 +884,18 @@ pub(crate) fn seat_unseated(
     entity: Entity,
     job: Entity,
     attachment: &Attachment,
+    seating: Seating,
 ) {
     let standing = entity_def::standing_rect(world, entity);
     let size = entity_def::location_size(world, entity);
     let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), size, standing)
         .expect("a worker attaches only to a job with a free berth in its group");
-    seat_at(world, entity, job, attachment, seat, point);
+    seat_at(world, entity, job, attachment, seat, point, seating);
 }
 
 /// Sits an entity off the grid down in berth `seat` of `job`'s group named by
-/// `attachment`, at `point`: the berth is taken and the entity's middle put on
-/// the point.
+/// `attachment`, at `point`, for the reason `seating` gives: the berth is
+/// taken and the entity's middle put on the point.
 fn seat_at(
     world: &mut World,
     entity: Entity,
@@ -900,25 +903,37 @@ fn seat_at(
     attachment: &Attachment,
     seat: usize,
     point: FixedUVec2,
+    seating: Seating,
 ) {
     let id = entity_def::simulation_id(world, entity);
     let job_id = entity_def::simulation_id(world, job);
     berths::occupy(world, job, attachment.berths(), seat, id);
 
-    let position = berths::position_centered_on(world, entity, point);
-    let mut entity_mut = world.entity_mut(entity);
-    entity_mut
-        .get_mut::<LocationComponent>()
-        .expect("only entities with LocationComponent can attach")
-        .position = position;
-    entity_mut.insert(AttachedComponent {
+    world.entity_mut(entity).insert(AttachedComponent {
         job: job_id,
         berths: attachment.berths().to_string(),
         seat,
         stance: attachment.stance(),
         sitting: berths::sit_down(attachment.stance(), id),
         hops: 0,
+        seating,
     });
+    seat_body(world, entity, point);
+}
+
+/// Puts the middle of `entity`, seated in a berth, on `point`.
+///
+/// Panics for an entity not seated in a berth, or with no location.
+pub(crate) fn seat_body(world: &mut World, entity: Entity, point: FixedUVec2) {
+    assert!(
+        world.entity(entity).contains::<AttachedComponent>(),
+        "a body moved to its seat sits in a berth"
+    );
+    let position = berths::position_centered_on(world, entity, point);
+    world
+        .get_mut::<LocationComponent>(entity)
+        .expect("a seated body has a location")
+        .position = position;
 }
 
 /// Takes an entity out of the berth it sits in, if any, giving the berth back
@@ -938,7 +953,7 @@ pub(crate) fn lift_footprint(world: &mut World, entity: Entity) {
         return;
     }
     let mark = entity_def::grid_mark(world, entity);
-    world.resource_mut::<Map>().displace_if_some(mark);
+    remark(world, mark, None);
 }
 
 /// Stamps back the footprint [`lift_footprint`] took off an entity that
@@ -948,7 +963,20 @@ pub(crate) fn restore_footprint(world: &mut World, entity: Entity) {
         return;
     }
     let mark = entity_def::grid_mark(world, entity);
-    world.resource_mut::<Map>().place_if_some(mark);
+    remark(world, None, mark);
+}
+
+/// Moves a body's mark on the grid from what it held, `from`, to what it
+/// holds now, `to`. A side that is `None` marks nothing: a body whose
+/// solidity claims no cells, or one not on the grid.
+pub(crate) fn remark(world: &mut World, from: Option<GridMark>, to: Option<GridMark>) {
+    let mut map = world.resource_mut::<Map>();
+    match (from, to) {
+        (Some(from), Some(to)) => map.move_claim(from, to),
+        (Some(from), None) => map.unclaim(from),
+        (None, Some(to)) => map.claim(to),
+        (None, None) => {}
+    }
 }
 
 /// Whether a body coming back onto the map was set down.
@@ -1087,7 +1115,7 @@ pub(crate) fn beside_lander(
     lean: Lean,
 ) -> Lander<'_> {
     let (beside, lean) = if entity_def::attached(world, entity) {
-        (berths::held_berth(world, entity), Lean::Nothing)
+        (berths::seated_berth(world, entity), Lean::Nothing)
     } else {
         (beside, lean)
     };
@@ -1193,7 +1221,7 @@ pub(crate) fn align_broodlings(
             .cloned()
             .expect("a seated broodling's type is a broodling");
         if brood::holds(world, breeder, &attachment) {
-            seat_unseated(world, entity, breeder, &attachment);
+            seat_unseated(world, entity, breeder, &attachment, Seating::Held);
         } else {
             detach_broodling(world, breeder, of, entity, berth, fate);
         }
@@ -1258,7 +1286,7 @@ pub(crate) fn reseat_broodling(
     attachment: &Attachment,
 ) {
     let id = entity_def::simulation_id(world, entity);
-    attach_entity(world, entity, breeder, attachment);
+    attach_entity(world, entity, breeder, attachment, Seating::Held);
     brood::add(world, breeder, id);
 }
 
@@ -1373,13 +1401,13 @@ fn stand_at(
     location_def: &LocationDef,
     class: OccupancyClass,
 ) {
-    world.resource_scope(|world, mut map: Mut<Map>| {
-        let mut location = world
-            .get_mut::<LocationComponent>(entity)
-            .expect("an entity on the map has a location");
-        location.position = FixedUVec2::from(cell);
-        map.place_if_some(entity_def::grid_mark_of(&location, *location_def, class));
-    });
+    let holder = entity_def::simulation_id(world, entity);
+    let mut location = world
+        .get_mut::<LocationComponent>(entity)
+        .expect("an entity on the map has a location");
+    location.position = FixedUVec2::from(cell);
+    let mark = entity_def::grid_mark_of(holder, &location, *location_def, class);
+    remark(world, None, mark);
 }
 
 /// Starts the dying phase for an alive entity.
@@ -1422,34 +1450,16 @@ fn start_dying(world: &mut World, entity: Entity, passing: Passing) {
     }
 
     let id = entity_def::simulation_id(world, entity);
-    let position = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .map(|location| location.position);
-
     // The entity keeps its footprint through the dying phase, but the movement
     // state that knows which cell a crossing claimed is about to be canceled —
     // so a mid-crossing entity snaps onto its claimed cell. Continuous
     // movers die where they stand: their positions are free points and their
     // claim already tracks the cell they round to. A hidden one has no
     // crossing to finish.
-    match world.resource::<Map>().movement_model() {
-        MovementModel::Cell => {
-            if let Some(position) = position
-                && movement_model::is_mid_crossing(position)
-                && let Some(claimed) = world
-                    .entity(entity)
-                    .get::<MoveComponent>()
-                    .and_then(|mc| mc.path.last().copied())
-            {
-                world
-                    .entity_mut(entity)
-                    .get_mut::<LocationComponent>()
-                    .expect("only entities with LocationComponent can be moving")
-                    .position = FixedUVec2::from(claimed);
-            }
+    if world.entity(entity).contains::<LocationComponent>() {
+        match movement_model::settle_crossing(world, entity) {
+            Settling::Settled | Settling::AtRest => {}
         }
-        MovementModel::Continuous => {}
     }
 
     world.resource_mut::<Selection>().remove(id);
@@ -1974,7 +1984,7 @@ pub(crate) fn settle_broodlings(world: &mut World, breeder: Entity, origin: Enti
             OrphanFate::Perish => despawn_entity(world, broodling, DeathCause::Orphaned { of }),
             OrphanFate::Linger(_) => {
                 // Set down by the berth it sat at.
-                let berth = berths::held_berth(world, broodling);
+                let berth = berths::seated_berth(world, broodling);
                 unseat(world, broodling);
                 stand_or_retry(world, broodling, berth, Lean::Nothing);
             }

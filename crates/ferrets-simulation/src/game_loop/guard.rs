@@ -6,7 +6,8 @@ use bevy_ecs::{entity::Entity, world::World};
 use super::{
     acquire, attack_move,
     chase::{self, Destination},
-    orders::{self, Processing, Refusal},
+    movement,
+    orders::{Processing, Refusal},
 };
 use crate::{
     components::owner,
@@ -24,16 +25,13 @@ use crate::{
 /// How close a guard stays to the entity it guards, in grid cells.
 const GUARD_DISTANCE: u32 = 2;
 
-/// Whether `entity` may start a Guard: its type moves and it operates, and the
-/// ward is there and not hostile.
+/// Whether `entity` may start a Guard: it may walk (see
+/// [`movement::may_walk`]), and the ward is there and not hostile.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     let ward = order
         .guard_target()
         .expect("Guard order must have a target");
-    if !entity_def::of(world, entity).can_move() {
-        return Err(Refusal::Incapable);
-    }
-    orders::requires_operating(world, entity)?;
+    movement::may_walk(world, entity)?;
     let Some(ward) = world.resource::<EntityIndex>().interactable(world, ward) else {
         return Err(Refusal::TargetGone);
     };

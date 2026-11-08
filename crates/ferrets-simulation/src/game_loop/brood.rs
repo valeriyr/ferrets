@@ -10,6 +10,7 @@ use ferrets_content::{
 use crate::{
     brood,
     components::{
+        attached::Seating,
         brood::{BredComponent, BroodComponent},
         hidden::HiddenComponent,
     },
@@ -167,7 +168,7 @@ fn take_in(world: &mut World, breeder: Entity, terms: &BreederDef, distance: u32
         if !brood::holds(world, breeder, &attachment) {
             return;
         }
-        spawn::attach_entity(world, entity, breeder, &attachment);
+        spawn::attach_entity(world, entity, breeder, &attachment, Seating::Held);
         brood::tie(world, breeder, entity);
     }
 }

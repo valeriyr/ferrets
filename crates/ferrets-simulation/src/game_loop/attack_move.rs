@@ -7,7 +7,8 @@ use ferrets_geometry::cell_size::CellSize;
 use super::{
     acquire::{self, Pursuit},
     chase::{self, Destination},
-    orders::{self, Processing, Refusal},
+    movement,
+    orders::{Processing, Refusal},
 };
 use crate::{
     components::{
@@ -21,12 +22,9 @@ use crate::{
 };
 use ferrets_nav_grid::layer_mask::LayerMask;
 
-/// Whether `entity` may start an AttackMove: its type moves and it operates.
+/// Whether `entity` may start an AttackMove (see [`movement::may_walk`]).
 pub fn can_start(world: &World, entity: Entity, _order: &Order) -> Result<(), Refusal> {
-    if !entity_def::of(world, entity).can_move() {
-        return Err(Refusal::Incapable);
-    }
-    orders::requires_operating(world, entity)
+    movement::may_walk(world, entity)
 }
 
 /// Called once when an AttackMove order becomes the front `New` entry.

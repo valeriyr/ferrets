@@ -105,8 +105,8 @@ fn blocked_border_pairs_shrink_entrance_to_remaining_run() {
     // . . . .|. . . .   y=2   kills the y=1 pair, leaving one 2-cell run at
     // . . . .|. . . .   y=3   y=2..=3 whose middle transition lands on y=3.
     let mut grid = utils::grid(8, 4);
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 0), true);
-    grid.set_occupied_by(utils::GROUND, utils::nav(4, 1), true);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 0), true);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 1), true);
 
     let hierarchy = utils::build_ground(&grid, 4);
 
@@ -123,7 +123,7 @@ fn blocked_border_yields_no_transitions() {
     // A full wall down the border column leaves the two clusters unconnected.
     let mut grid = utils::grid(8, 4);
     for y in 0..4 {
-        grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
+        grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
     }
 
     let hierarchy = utils::build_ground(&grid, 4);
@@ -249,7 +249,7 @@ fn wall_splits_grid_into_two_regions() {
     // wall cells themselves have none.
     let mut grid = utils::grid(8, 8);
     for y in 0..8 {
-        grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
+        grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
     }
 
     let hierarchy = utils::build_ground(&grid, 4);
@@ -268,8 +268,8 @@ fn corner_touching_areas_are_separate_regions() {
     // X S   y=0   S = (1,0) and G = (0,1) touch only diagonally through a
     // G X   y=1   cut corner, which movement cannot cross either.
     let mut grid = utils::grid(2, 2);
-    grid.set_occupied_by(utils::GROUND, utils::nav(0, 0), true);
-    grid.set_occupied_by(utils::GROUND, utils::nav(1, 1), true);
+    grid.set_occupied(utils::GROUND, utils::nav(0, 0), true);
+    grid.set_occupied(utils::GROUND, utils::nav(1, 1), true);
 
     let hierarchy = utils::build_ground(&grid, 4);
 
@@ -299,7 +299,7 @@ fn masks_have_independent_regions() {
     // shape occupying both layers splits where either is occupied.
     let mut grid = utils::grid(8, 4);
     for y in 0..4 {
-        grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
+        grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
     }
 
     let both = MoverShape::new(
@@ -361,7 +361,7 @@ fn wide_mover_does_not_connect_through_narrow_gap() {
     let mut grid = utils::grid(8, 8);
     for y in 0..8 {
         if y != 2 {
-            grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
+            grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
         }
     }
 
@@ -386,7 +386,7 @@ fn wide_mover_connects_through_gap_it_fits() {
     let mut grid = utils::grid(8, 8);
     for y in 0..8 {
         if y != 2 && y != 3 {
-            grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
+            grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
         }
     }
 
@@ -403,7 +403,7 @@ fn wide_mover_has_no_region_where_its_footprint_would_not_fit() {
     // not for a wider one, whose footprint would reach into the wall.
     let mut grid = utils::grid(8, 8);
     for y in 0..8 {
-        grid.set_occupied_by(utils::GROUND, utils::nav(5, y), true);
+        grid.set_occupied(utils::GROUND, utils::nav(5, y), true);
     }
 
     let hierarchy = utils::build_for(&grid, 4, &[utils::on_ground(), utils::square_on_ground(2)]);
@@ -432,8 +432,8 @@ fn refresh_re_derives_borders_of_marked_cells() {
     let mut grid = utils::grid(8, 4);
     let mut hierarchy = utils::build_ground(&grid, 4);
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 2), true);
-    grid.set_occupied_by(utils::GROUND, utils::nav(4, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 2), true);
     hierarchy.mark_dirty(utils::nav(3, 2), utils::GROUND);
     hierarchy.mark_dirty(utils::nav(4, 2), utils::GROUND);
     hierarchy.refresh(&grid);
@@ -456,7 +456,7 @@ fn hierarchy_is_dirty_from_marked_change_until_refreshed() {
     let mut hierarchy = utils::build_ground(&grid, 4);
     assert!(!hierarchy.is_dirty());
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 2), true);
     hierarchy.mark_dirty(utils::nav(3, 2), utils::GROUND);
     assert!(hierarchy.is_dirty());
 
@@ -469,11 +469,11 @@ fn refresh_restores_entrance_when_footprint_clears() {
     let mut grid = utils::grid(8, 4);
     let mut hierarchy = utils::build_ground(&grid, 4);
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(4, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 2), true);
     hierarchy.mark_dirty(utils::nav(4, 2), utils::GROUND);
     hierarchy.refresh(&grid);
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(4, 2), false);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 2), false);
     hierarchy.mark_dirty(utils::nav(4, 2), utils::GROUND);
     hierarchy.refresh(&grid);
 
@@ -492,7 +492,7 @@ fn unmarked_changes_stay_stale_until_marked() {
     let mut hierarchy = utils::build_ground(&grid, 4);
 
     for y in 0..4 {
-        grid.set_occupied_by(utils::GROUND, utils::nav(4, y), true);
+        grid.set_occupied(utils::GROUND, utils::nav(4, y), true);
     }
 
     // Refresh without any mark: the hierarchy must not chase the grid.
@@ -515,7 +515,7 @@ fn unit_claims_are_invisible_to_hierarchy() {
     let mut hierarchy = utils::build_ground(&grid, 4);
 
     for y in 0..4 {
-        grid.add_claim(utils::GROUND, utils::nav(4, y));
+        grid.add_claim(utils::GROUND, utils::nav(4, y), 1);
         hierarchy.mark_dirty(utils::nav(4, y), utils::GROUND);
     }
     hierarchy.refresh(&grid);
@@ -544,7 +544,7 @@ fn refresh_re_derives_wide_transitions_from_changes_past_border() {
         vec![transition(3, 1, 4, 1)]
     );
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(5, 1), true);
+    grid.set_occupied(utils::GROUND, utils::nav(5, 1), true);
     hierarchy.mark_dirty(utils::nav(5, 1), utils::GROUND);
     hierarchy.refresh(&grid);
 
@@ -662,7 +662,7 @@ fn ground_write_dirties_ground_shape_alone() {
     let mut grid = utils::grid(8, 4);
     let mut hierarchy = utils::build_for(&grid, 4, &[utils::on_ground(), utils::in_air()]);
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(3, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 2), true);
     hierarchy.mark_dirty(utils::nav(3, 2), utils::GROUND);
     assert!(hierarchy.is_dirty_for(utils::on_ground()));
     assert!(!hierarchy.is_dirty_for(utils::in_air()));
@@ -698,7 +698,7 @@ fn write_on_layer_shape_need_not_be_free_on_leaves_it_clean() {
     let mut grid = utils::grid(8, 4);
     let mut hierarchy = utils::build_for(&grid, 4, &[utils::in_air()]);
 
-    grid.set_occupied_by(utils::GROUND, utils::nav(4, 2), true);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 2), true);
     hierarchy.mark_dirty(utils::nav(4, 2), utils::GROUND);
 
     assert!(!hierarchy.is_dirty());
@@ -777,6 +777,6 @@ fn transition(ax: u32, ay: u32, bx: u32, by: u32) -> Transition {
 /// Sets `cell` blocked or free on the GROUND layer and marks it for the
 /// hierarchy.
 fn set_blocked(grid: &mut NavGrid, hierarchy: &mut NavHierarchy, cell: CellPos, blocked: bool) {
-    grid.set_occupied_by(utils::GROUND, cell, blocked);
+    grid.set_occupied(utils::GROUND, cell, blocked);
     hierarchy.mark_dirty(cell, utils::GROUND);
 }

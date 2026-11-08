@@ -33,7 +33,8 @@ use ferrets_content::entity_stats::EntityStatId;
 ///   weapon-range leash breaks the fight off the moment the target leaves it,
 ///   so the unit never chases.
 /// - `Defend` attacks within acquisition range, leashed to the spot it stands
-///   on, and queues an attack-move back to that spot — the way home re-engages
+///   on, and, for a body that may close (see [`entity_def::may_close`]),
+///   queues an attack-move back to that spot — the way home re-engages
 ///   anything it meets.
 ///
 /// Only entities with an empty order queue engage: a unit executing orders is
@@ -116,6 +117,7 @@ pub fn tick(world: &mut World) {
                     .get::<StatsComponent>()
                     .and_then(|stats| stats.effective_as_u32(EntityStatId::ACQUIRE_RANGE))
                     .expect("attackers have an acquisition range stat");
+                let walks_home = entity_def::may_close(world, entity);
                 if let Some(attack) = attack_move::engagement(
                     world,
                     entity,
@@ -125,7 +127,9 @@ pub fn tick(world: &mut World) {
                     world.entity_mut(entity).get_mut::<OrderQueueComponent>()
                 {
                     queue.push(attack, None);
-                    queue.push(Order::AttackMove { target: anchor }, None);
+                    if walks_home {
+                        queue.push(Order::AttackMove { target: anchor }, None);
+                    }
                 }
             }
             Stance::Flee | Stance::HoldFire => unreachable!("filtered above"),

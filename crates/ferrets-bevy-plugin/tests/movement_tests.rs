@@ -509,7 +509,7 @@ fn cell_walk_comes_round_before_it_claims() {
         !app.world()
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, CellPos::new(10, 9)),
+            .is_occupied(utils::GROUND, CellPos::new(10, 9)),
         "and the cell it will cross into must be unclaimed until it sets off"
     );
 

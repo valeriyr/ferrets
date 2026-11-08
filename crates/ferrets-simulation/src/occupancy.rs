@@ -6,9 +6,13 @@ use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_physics::body;
 
+use crate::simulation_id::SimulationId;
+
 /// What a body marks on the navigation grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridMark {
+    /// The body whose mark it is: the holder of its claims.
+    pub holder: SimulationId,
     /// The cells it covers.
     pub footprint: CellRect,
     /// The layers it marks on them.

@@ -18,14 +18,14 @@ fn passable_entities_never_claim_cells() {
         !world
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, CellPos::new(5, 5))
+            .is_occupied(utils::GROUND, CellPos::new(5, 5))
     );
     let (_, _) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
     assert!(
         world
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, CellPos::new(5, 5))
+            .is_occupied(utils::GROUND, CellPos::new(5, 5))
     );
 
     // The ghost walks away — it collides with the world for pathing, but its
@@ -45,6 +45,6 @@ fn passable_entities_never_claim_cells() {
         !app.world_mut()
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, CellPos::new(9, 5))
+            .is_occupied(utils::GROUND, CellPos::new(9, 5))
     );
 }

@@ -117,13 +117,13 @@ fn wide_walk_reaches_goal_and_reclaims_footprint() {
     let grid = world.resource::<Map>().nav_grid();
     for (x, y) in [(10, 6), (11, 6), (10, 7), (11, 7)] {
         assert!(
-            grid.is_claimed_by(utils::GROUND, CellPos::new(x, y)),
+            grid.is_claimed(utils::GROUND, CellPos::new(x, y)),
             "the settled footprint cell ({x}, {y}) is unclaimed"
         );
     }
     for (x, y) in [(2, 2), (3, 2), (2, 3), (3, 3)] {
         assert!(
-            !grid.is_claimed_by(utils::GROUND, CellPos::new(x, y)),
+            !grid.is_claimed(utils::GROUND, CellPos::new(x, y)),
             "the spawn footprint cell ({x}, {y}) was never released"
         );
     }

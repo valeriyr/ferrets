@@ -1504,7 +1504,7 @@ fn attached_carrier_sits_in_tree_and_banks_wood_without_felling_it() {
     assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(8, 5));
     let grid = app.world().resource::<Map>().nav_grid();
     assert!(
-        !grid.is_claimed_by(utils::GROUND, CellPos::new(7, 5)),
+        !grid.is_claimed(utils::GROUND, CellPos::new(7, 5)),
         "the cell it stood on is free"
     );
 
@@ -2066,7 +2066,7 @@ fn stopped_attached_carrier_steps_back_beside_source() {
     utils::assert_adjacent_to_footprint(app.world_mut(), sylph, tree);
     let cell = utils::cell_of(app.world(), sylph);
     let grid = app.world().resource::<Map>().nav_grid();
-    assert!(grid.is_claimed_by(utils::GROUND, cell));
+    assert!(grid.is_claimed(utils::GROUND, cell));
 }
 
 #[test]
@@ -2116,7 +2116,7 @@ fn direct_carrier_steps_back_when_source_runs_dry() {
         app.world()
             .resource::<Map>()
             .nav_grid()
-            .is_claimed_by(utils::GROUND, cell)
+            .is_claimed(utils::GROUND, cell)
     );
 }
 

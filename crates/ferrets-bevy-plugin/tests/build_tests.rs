@@ -45,8 +45,10 @@ use ferrets_simulation::{
         damage,
         orders::{self, Refusal},
     },
+    ground,
     map::Map,
     movement_model::{self, MovementModel},
+    occupancy::OccupancyClass,
     order::{AttackTarget, BuildTask, Order},
     resources::PlayerResources,
     session::{GameSession, player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
@@ -388,16 +390,17 @@ fn builder_standing_on_site_steps_off_it_and_raises_it() {
 fn idle_ally_on_site_walks_off_and_site_goes_up() {
     // An idle soldier of the builder's own stands on (11, 11), a cell of the
     // depot's (10..11, 10..11). The mason, at (9, 10) on the fifth tick, asks
-    // it off: it walks to (12, 11), the nearest cell clear of the site, and
-    // the site goes up on the seventh tick, once its crossing has left the
-    // site's cells.
+    // it off: it walks to (12, 11), the nearest cell clear of the site, half
+    // across at x 11.5 after the sixth tick and on (12, 11) after the
+    // seventh, and the site goes up on the eighth, the first tick that finds
+    // its body wholly off the site's cells.
     let mut app = utils::orders_app();
     let (mason, mason_id) = utils::create_owned(&mut app, "mason", 8, 10, 0);
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 11, 11, 0);
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, mason_id);
-    utils::run_ticks(&mut app, 6);
+    utils::run_ticks(&mut app, 7);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
     utils::run_ticks(&mut app, 1);
 
@@ -418,7 +421,8 @@ fn idle_allies_on_site_walk_off_to_cells_of_their_own() {
     // and (11, 11), and (12, 11) is the nearest free cell for both: asked
     // together on the sixth tick, the first is sent there and the second to
     // (12, 12), so neither drifts back onto the site, and the depot goes up
-    // on the tenth tick, once both have stepped clear of it.
+    // on the eleventh tick, the first that finds both bodies wholly clear of
+    // it.
     let mut app = utils::orders_app();
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
     {
@@ -446,7 +450,7 @@ fn idle_allies_on_site_walk_off_to_cells_of_their_own() {
     assert_eq!(utils::move_target(&app, first), Some(utils::pos(12, 11)));
     assert_eq!(utils::move_target(&app, second), Some(utils::pos(12, 12)));
 
-    utils::run_ticks(&mut app, 3);
+    utils::run_ticks(&mut app, 4);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
@@ -486,7 +490,8 @@ fn stunned_ally_on_site_keeps_it_from_going_up() {
 fn teammates_idle_soldier_on_site_walks_off_and_site_goes_up() {
     // Players 0 and 1 share a team: the soldier of player 1 idle on
     // (11, 11) is asked off as the mason's own would be, walks to (12, 11),
-    // and the site goes up on the seventh tick.
+    // and the site goes up on the eighth tick, once its body is wholly off
+    // the site's cells.
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, Some(1)),
         PlayerSlot::occupied(1, PlayerType::Human, None, Some(1)),
@@ -498,7 +503,7 @@ fn teammates_idle_soldier_on_site_walks_off_and_site_goes_up() {
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, mason_id);
-    utils::run_ticks(&mut app, 6);
+    utils::run_ticks(&mut app, 7);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
     utils::run_ticks(&mut app, 1);
 
@@ -735,6 +740,37 @@ fn consumed_builder_raises_site_it_stands_on_under_continuous_model() {
 }
 
 #[test]
+fn seated_builder_called_off_by_move_leaves_its_berth_and_walks() {
+    // The roofer sits in a berth of the depot it raises. A move flushing its
+    // queue calls the build off, which lets it out beside the site on
+    // (10, 9); the move then starts from there, half a cell along by the
+    // third tick: the berth refuses a walk only while the body is seated.
+    let mut app = utils::continuous_orders_app();
+    let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    utils::run_ticks(&mut app, 1);
+    order_depot(&mut app, roofer_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(entity_def::attached(app.world(), roofer));
+
+    utils::select(&mut app, roofer_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(20, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert!(!entity_def::attached(app.world(), roofer));
+    assert_eq!(
+        utils::position_of(app.world(), roofer),
+        utils::part_way("10.5", "9")
+    );
+}
+
+#[test]
 fn attached_builder_raises_site_it_stands_on_under_continuous_model() {
     let mut app = utils::continuous_orders_app();
     let (roofer, roofer_id) = utils::create_owned(&mut app, "roofer", 10, 10, 0);
@@ -746,6 +782,167 @@ fn attached_builder_raises_site_it_stands_on_under_continuous_model() {
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert!(entity_def::attached(app.world(), roofer));
+}
+
+#[test]
+fn site_is_refused_over_body_lying_past_its_claim() {
+    // Under the continuous model an enemy soldier rests at x 9.3: it claims
+    // (9, 10), the cell its position rounds to, and its half-cell circle,
+    // centered at 9.8, lies from 9.3 to 10.3, over (10, 10) too. A depot on
+    // (10..11, 10..11) would go up over it, so the mason, coming from the
+    // east, gives the order up on arrival with nothing paid; one on
+    // (11..12, 10..11) clears it and goes up.
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |_, _| {});
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 15, 10, 0);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 10, 1);
+    utils::walk_onto(&mut app, soldier, utils::part_way("9.3", "10"), 10);
+    utils::grant_gold(&mut app, 80);
+    assert_eq!(
+        app.world()
+            .resource::<Map>()
+            .nav_grid()
+            .claim_holders(utils::GROUND, CellPos::new(10, 10)),
+        [] as [u32; 0]
+    );
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 30);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    assert_eq!(utils::gold(app.world_mut()), 80);
+    assert!(utils::order_queue_is_empty(app.world_mut(), mason));
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: mason_id,
+            type_name: "depot".into(),
+            position: utils::pos(11, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 30);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    // 80 granted − the depot's 50.
+    assert_eq!(utils::gold(app.world_mut()), 30);
+    assert_eq!(
+        utils::position_of(app.world(), soldier),
+        utils::part_way("9.3", "10")
+    );
+}
+
+#[test]
+fn ally_lying_onto_site_steps_back_onto_cell_it_holds() {
+    // Under the continuous model an own soldier rests at (10, 9.35): it holds
+    // (10, 9), and its body reaches 0.35 onto the depot's (10..11, 10..11).
+    // Another rests at (9.1, 8.1), its circle's box taking in (10, 9) though
+    // its claim, (9, 8), does not. Asked off, the first is set down by the
+    // claims, not the bodies, of the movers around: back onto (10, 9), a step
+    // of 0.35 on the eleventh tick, and the depot goes up on the twelfth.
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |_, _| {});
+    let (_, mason_id) = utils::create_owned(&mut app, "mason", 15, 10, 0);
+    let (lying, _) = utils::create_owned(&mut app, "soldier", 10, 9, 0);
+    let (grazing, _) = utils::create_owned(&mut app, "soldier", 8, 8, 0);
+    utils::walk_onto(&mut app, lying, utils::part_way("10", "9.35"), 10);
+    utils::walk_onto(&mut app, grazing, utils::part_way("9.1", "8.1"), 10);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(
+        utils::position_of(app.world(), lying),
+        utils::part_way("10", "9.35")
+    );
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::position_of(app.world(), lying), utils::pos(10, 9));
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
+    assert_eq!(
+        utils::position_of(app.world(), grazing),
+        utils::part_way("9.1", "8.1")
+    );
+}
+
+#[test]
+fn site_of_mover_form_asks_off_only_bodies_its_claims_meet() {
+    // Under the continuous model a rolling depot — the depot with a walk of
+    // its own, so a body on the claim plane — is founded on
+    // (10..11, 10..11). One own soldier rests on (11, 11), its claim on the
+    // site; another at (10, 9.35) holds (10, 9), its body reaching 0.35 onto
+    // the site. A placement on the claim plane measures bodies by their
+    // claims: the first is asked off on the eleventh tick, the second never,
+    // and the site goes up on the twelfth.
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |registry, _| {
+        let mut rolling = registry
+            .entity("depot")
+            .expect("the orders content declares a depot")
+            .clone()
+            .with_movement(
+                utils::fixed("0.5"),
+                utils::fixed("0.5"),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            );
+        rolling.name = "rolling_depot".to_string();
+        registry.register(rolling);
+        let mut wheelwright = registry
+            .entity("mason")
+            .expect("the orders content declares a mason")
+            .clone()
+            .with_builder(
+                ["rolling_depot"],
+                BuilderAttendance::Crew(WorkPresence::Present {
+                    crew: CrewLimit::ONE,
+                }),
+            );
+        wheelwright.name = "wheelwright".to_string();
+        registry.register(wheelwright);
+    });
+    let (_, builder_id) = utils::create_owned(&mut app, "wheelwright", 15, 10, 0);
+    let (inside, _) = utils::create_owned(&mut app, "soldier", 11, 11, 0);
+    let (lying, _) = utils::create_owned(&mut app, "soldier", 10, 8, 0);
+    utils::walk_onto(&mut app, lying, utils::part_way("10", "9.35"), 10);
+    utils::grant_gold(&mut app, 80);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: builder_id,
+            type_name: "rolling_depot".into(),
+            position: utils::pos(10, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 11);
+    assert_eq!(utils::move_target(&app, inside), Some(utils::pos(12, 11)));
+    assert_eq!(utils::move_target(&app, lying), None);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::count_of_type(app.world_mut(), "rolling_depot"), 1);
+    assert_eq!(
+        utils::position_of(app.world(), lying),
+        utils::part_way("10", "9.35")
+    );
+}
+
+#[test]
+fn builder_lying_past_its_claim_onto_site_steps_off_it() {
+    // Under the continuous model the mason rests at (9.4, 10): it claims
+    // (9, 10), and its half-cell circle, centered at 9.9, lies from 9.4 to
+    // 10.4, over the depot's (10..11, 10..11). Measured by its body it stands
+    // in its own site's way: it steps 0.4 back onto (9, 10) on the fourth
+    // tick, and the site goes up on the fifth.
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |_, _| {});
+    let (mason, mason_id) = utils::create_owned(&mut app, "mason", 8, 10, 0);
+    utils::walk_onto(&mut app, mason, utils::part_way("9.4", "10"), 10);
+    utils::grant_gold(&mut app, 80);
+
+    order_depot(&mut app, mason_id);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(utils::position_of(app.world(), mason), utils::pos(9, 10));
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
 }
 
 #[test]
@@ -777,7 +974,9 @@ fn builder_that_never_walks_is_not_blamed_for_site_another_body_holds() {
     // A rooted mason on (10, 10) and a soldier on (11, 11), both inside the
     // 2×2 depot ordered at (10, 10): set aside, the mason would leave the
     // soldier keeping the site off, so the mason is not in its way and the
-    // order may start; the ground refuses the site on arrival.
+    // order may start. The soldier is asked off and the order waits until its
+    // body has left the site, two ticks; the ground, still held by the mason
+    // itself, then refuses the site.
     let mut app = builders_app();
     let (mason, mason_id) = utils::create_owned(&mut app, "rooted_mason", 10, 10, 0);
     utils::create_owned(&mut app, "soldier", 11, 11, 0);
@@ -788,7 +987,7 @@ fn builder_that_never_walks_is_not_blamed_for_site_another_body_holds() {
     assert_eq!(orders::can_start(app.world(), mason, &order), Ok(()));
 
     order_depot(&mut app, mason_id);
-    utils::run_ticks(&mut app, utils::APPLY + 1);
+    utils::run_ticks(&mut app, utils::APPLY + 2);
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
     assert_eq!(utils::gold(app.world_mut()), 80);
@@ -1764,7 +1963,7 @@ fn attached_builder_stands_on_site_holding_no_cells() {
     );
     // The cell it left is nobody's now.
     let grid = app.world().resource::<Map>().nav_grid();
-    assert!(!grid.is_claimed_by(utils::GROUND, CellPos::new(9, 10)));
+    assert!(!grid.is_claimed(utils::GROUND, CellPos::new(9, 10)));
 
     // Six ticks of work later it steps back out onto a free cell beside the depot.
     utils::run_ticks(&mut app, 6);
@@ -1775,7 +1974,7 @@ fn attached_builder_stands_on_site_holding_no_cells() {
     let cell = utils::cell_of(app.world(), roofer);
     let grid = app.world().resource::<Map>().nav_grid();
     assert!(
-        grid.is_claimed_by(utils::GROUND, cell),
+        grid.is_claimed(utils::GROUND, cell),
         "back on the grid, it holds its cell"
     );
 }
@@ -1831,7 +2030,7 @@ fn attached_builder_that_never_walks_raises_site_it_stands_on() {
     let grid = app.world().resource::<Map>().nav_grid();
     for (x, y) in [(10, 10), (11, 10), (10, 11), (11, 11)] {
         assert!(
-            grid.is_statically_occupied_by(utils::GROUND, CellPos::new(x, y)),
+            grid.is_statically_occupied(utils::GROUND, CellPos::new(x, y)),
             "({x}, {y})"
         );
     }
@@ -2213,6 +2412,79 @@ fn static_footprint_is_not_raised_over_what_stands_underfoot() {
 }
 
 #[test]
+fn static_footprint_is_not_raised_over_underfoot_walker_lying_past_its_cell() {
+    // Under the continuous model a scuttler, an underfoot walker that claims
+    // no cell, rests at x 9.3: its half-cell circle, centered at 9.8, lies
+    // from 9.3 to 10.3, over (9, 10) and (10, 10). A depot on
+    // (10..11, 10..11) would go up over it; one on (11..12, 10..11) clears it.
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |registry, dry| {
+        registry.register(utils::walker("scuttler", dry).with_location(
+            dry,
+            CellSize::ONE,
+            Solidity::Underfoot,
+            utils::GROUND,
+        ));
+    });
+    let (scuttler, _) = utils::create_owned(&mut app, "scuttler", 9, 10, 0);
+    utils::walk_onto(&mut app, scuttler, utils::part_way("9.3", "10"), 10);
+    let world = app.world();
+    let depot = world
+        .resource::<ContentRegistry>()
+        .entity("depot")
+        .and_then(|def| def.location)
+        .expect("the depot stands somewhere");
+    let raised_at = |x| {
+        ground::can_place(
+            world,
+            &LocationComponent::new(utils::pos(x, 10), Facing::SOUTH),
+            depot,
+            OccupancyClass::Static,
+            &[],
+            &[],
+        )
+    };
+
+    assert!(!raised_at(10));
+    assert!(raised_at(11));
+}
+
+#[test]
+fn static_footprint_measures_wide_mover_by_its_circle() {
+    // Under the continuous model a 3×3 hulk with a half-cell radius rests at
+    // (5, 5), claiming (5..7, 5..7). Its body is its circle, centered at
+    // (6.5, 6.5), spanning (6, 6) alone: a depot on (7..8, 7..8) goes up over
+    // the corner of its claim, one on (6..7, 6..7) would go up over its body.
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |registry, dry| {
+        registry.register(utils::walker("hulk", dry).with_location(
+            dry,
+            CellSize::new(3, 3),
+            Solidity::Solid,
+            utils::GROUND,
+        ));
+    });
+    utils::create_owned(&mut app, "hulk", 5, 5, 0);
+    let world = app.world();
+    let depot = world
+        .resource::<ContentRegistry>()
+        .entity("depot")
+        .and_then(|def| def.location)
+        .expect("the depot stands somewhere");
+    let raised_at = |x, y| {
+        ground::can_place(
+            world,
+            &LocationComponent::new(utils::pos(x, y), Facing::SOUTH),
+            depot,
+            OccupancyClass::Static,
+            &[],
+            &[],
+        )
+    };
+
+    assert!(raised_at(7, 7));
+    assert!(!raised_at(6, 6));
+}
+
+#[test]
 fn static_footprint_is_not_raised_over_passable_body() {
     let mut app = solidity_app();
     assert!(place(&mut app, "pebble", 10, 10).is_some());
@@ -2400,7 +2672,7 @@ fn hidden_builder_that_never_walks_comes_out_beside_site_in_range() {
         !app.world()
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, CellPos::new(4, 10))
+            .is_occupied(utils::GROUND, CellPos::new(4, 10))
     );
     utils::run_ticks(&mut app, 6);
 
@@ -2426,7 +2698,7 @@ fn attached_builder_that_never_walks_takes_berth_of_site_in_range() {
         !app.world()
             .resource::<Map>()
             .nav_grid()
-            .is_occupied_by(utils::GROUND, CellPos::new(4, 10))
+            .is_occupied(utils::GROUND, CellPos::new(4, 10))
     );
     utils::run_ticks(&mut app, 6);
 
