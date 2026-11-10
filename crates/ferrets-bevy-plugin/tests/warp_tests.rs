@@ -37,7 +37,7 @@ use ferrets_simulation::{
         orders::Refusal,
         warp::{self, WarpRefusal},
     },
-    order::Order,
+    order::{MoveGoal, Order},
     resources::PlayerResources,
     session::GameSession,
     spawn,
@@ -583,7 +583,10 @@ fn warped_blade_takes_rally_set_on_it_while_rising() {
     utils::run_ticks(&mut app, RISE_TIME + 1);
 
     // Its own rally outranks the relay's.
-    assert_eq!(utils::move_target(&app, blade), Some(utils::pos(25, 5)));
+    assert_eq!(
+        utils::move_goal(&app, blade),
+        Some(MoveGoal::Position(utils::pos(25, 5)))
+    );
     // Spent once risen: a blade releases nothing and keeps no rally point.
     assert!(app.world().get::<RallyPointComponent>(blade).is_none());
 }
@@ -605,7 +608,10 @@ fn warped_blade_without_rally_of_its_own_takes_relays_current_one() {
     utils::set_rally(&mut app, relay_id, 22, 22);
     utils::run_ticks(&mut app, RISE_TIME + 1);
 
-    assert_eq!(utils::move_target(&app, blade), Some(utils::pos(22, 22)));
+    assert_eq!(
+        utils::move_goal(&app, blade),
+        Some(MoveGoal::Position(utils::pos(22, 22)))
+    );
 }
 
 #[test]
@@ -641,7 +647,10 @@ fn warped_blade_is_sent_to_its_rally_tick_it_rises() {
     // The tick that puts in its last tick of rise also sends it on.
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::rising(app.world(), blade));
-    assert_eq!(utils::move_target(&app, blade), Some(utils::pos(20, 5)));
+    assert_eq!(
+        utils::move_goal(&app, blade),
+        Some(MoveGoal::Position(utils::pos(20, 5)))
+    );
 }
 
 #[test]

@@ -6,7 +6,7 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_simulation::{
     components::{
@@ -15,7 +15,7 @@ use ferrets_simulation::{
     },
     entity_def,
     movement_model::MovementModel,
-    order::Order,
+    order::{MoveGoal, Order},
 };
 
 #[test]
@@ -52,9 +52,7 @@ fn continuous_group_move_settles_without_milling() {
             .unwrap()
             .push(
                 Order::Move {
-                    target,
-                    size: CellSize::ONE,
-                    range: 0,
+                    goal: MoveGoal::Position(target),
                 },
                 None,
             );
@@ -211,9 +209,7 @@ fn walk_rounds_water_corner_without_creeping_at_it() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(50, 13),
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(50, 13)),
             },
             None,
         );

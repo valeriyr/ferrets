@@ -98,7 +98,7 @@ use ferrets_simulation::{
     map::Map,
     map_data::MapData,
     movement_model::{self, MovementModel},
-    order::{AttackTarget, Order},
+    order::{AttackTarget, MoveGoal, Order},
     resources::PlayerResources,
     ruleset::{RemainsLimit, Ruleset},
     selection::Selection,
@@ -1738,9 +1738,7 @@ pub fn order_move_onto(app: &mut App, entity: Entity, target: FixedUVec2) {
         .expect("a walker takes orders")
         .push(
             Order::Move {
-                target,
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(target),
             },
             None,
         );
@@ -3715,12 +3713,9 @@ pub fn set_rally_to(app: &mut App, entity: SimulationId, target: RallyTarget) {
     );
 }
 
-/// Where the last order `entity` holds moves it, if that order is a move.
-pub fn move_target(app: &App, entity: Entity) -> Option<FixedUVec2> {
-    match entity_def::orders(app.world(), entity).last() {
-        Some(Order::Move { target, .. }) => Some(*target),
-        Some(_) | None => None,
-    }
+/// Where the last order `entity` holds walks it, if that order is a walk.
+pub fn move_goal(app: &App, entity: Entity) -> Option<MoveGoal> {
+    entity_def::orders(app.world(), entity).last()?.move_goal()
 }
 
 /// Selects `unit` and right-clicks `target` — the send-to-entity intent that

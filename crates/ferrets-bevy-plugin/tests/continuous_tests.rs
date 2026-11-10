@@ -699,10 +699,10 @@ fn claim_follows_walking_body() {
     );
 }
 
-/// A ranged walk whose goal cell a body that is not walking stands on — one too
-/// heavy to shove, pinned between walls — routes at once to another cell that
-/// serves the goal when its stall clock escalates, as the cell model's rung does,
-/// rather than pressing on it for good.
+/// A walk within a range whose goal cell a body that is not walking stands on
+/// — one too heavy to shove, pinned between walls — routes at once to another
+/// cell that serves the goal when its stall clock escalates, as the cell
+/// model's rung does, rather than pressing on it for good.
 #[test]
 fn attacker_takes_free_cell_beside_body_holding_its_goal() {
     let mut app = utils::continuous_orders_app();

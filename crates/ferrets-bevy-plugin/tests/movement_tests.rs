@@ -8,7 +8,7 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::registry::ContentRegistry;
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_physics::terrain;
 use ferrets_simulation::{
@@ -17,7 +17,7 @@ use ferrets_simulation::{
     entity_def,
     map::Map,
     movement_model::MovementModel,
-    order::Order,
+    order::{MoveGoal, Order},
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
 };
@@ -213,9 +213,7 @@ fn point_order_blocked_at_final_approach_accepts_by_cell() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::point("7.8", "7.5"),
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::point("7.8", "7.5")),
             },
             None,
         );
@@ -256,9 +254,7 @@ fn body_clipped_into_footprint_walks_itself_free() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(4, 7),
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(4, 7)),
             },
             None,
         );
@@ -307,9 +303,7 @@ fn wide_blocker_steps_aside_where_its_footprint_fits() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(12, 5),
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(12, 5)),
             },
             None,
         );
@@ -627,9 +621,7 @@ fn walk_to_spot(app: &mut App, entity: Entity, target: FixedUVec2) {
         .unwrap()
         .push(
             Order::Move {
-                target,
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(target),
             },
             None,
         );

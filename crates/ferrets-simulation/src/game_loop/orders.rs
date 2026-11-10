@@ -26,7 +26,7 @@
 //! or once its conduct lets it run standing.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::{
@@ -44,7 +44,7 @@ use crate::{
     entity_index::EntityIndex,
     map::Map,
     movement_model::{self, MovementModel},
-    order::Order,
+    order::{MoveGoal, Order},
     session::GameSession,
 };
 
@@ -812,11 +812,12 @@ pub fn move_onto_cell(world: &World, walker: Entity, cell: CellPos) -> Order {
 /// A walk that brings a walker's middle to `target`, held on the map for its
 /// size (see [`movement_model::at_point`]).
 pub fn move_to_point(target: FixedUVec2) -> Order {
-    Order::Move {
-        target,
-        size: CellSize::ONE,
-        range: 0,
-    }
+    move_to(MoveGoal::Position(target))
+}
+
+/// A walk to `goal`.
+pub fn move_to(goal: MoveGoal) -> Order {
+    Order::Move { goal }
 }
 
 /// Prepare the front entry until it is `InProcessing` or held by its conduct,

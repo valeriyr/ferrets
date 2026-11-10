@@ -6,7 +6,7 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::pool_def::PoolId;
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -18,7 +18,7 @@ use ferrets_simulation::{
     },
     entity_def,
     map::Map,
-    order::Order,
+    order::{MoveGoal, Order},
     session::GameSession,
     simulation_id::SimulationId,
 };
@@ -163,9 +163,7 @@ fn ground_held_unit_engages_target_standing_part_way_into_its_reach() {
         .expect("a walker takes orders")
         .push(
             Order::Move {
-                target: spot,
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(spot),
             },
             None,
         );
@@ -199,9 +197,7 @@ fn unit_engages_nearer_of_two_by_cells_target_stands_on() {
         .expect("a walker takes orders")
         .push(
             Order::Move {
-                target: spot,
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(spot),
             },
             None,
         );

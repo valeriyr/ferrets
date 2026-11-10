@@ -9,7 +9,7 @@ mod utils;
 use bevy::prelude::{App, Entity, World};
 use ferrets_content::{entity_stats::EntityStatId, pool_def::PoolId, registry::ContentRegistry};
 use ferrets_demo::map;
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     components::order_queue::OrderQueueComponent,
@@ -17,7 +17,7 @@ use ferrets_simulation::{
     entity_index::EntityIndex,
     map::Map,
     movement_model::MovementModel,
-    order::Order,
+    order::{MoveGoal, Order},
     simulation_id::SimulationId,
     spawn::{self, Boarding},
 };
@@ -47,9 +47,7 @@ fn flier_crosses_river_and_rests_on_water() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(RIVER.0, RIVER.1),
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(RIVER.0, RIVER.1)),
             },
             None,
         );
@@ -191,9 +189,7 @@ fn flier_routes_around_tall_building() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(goal.0, goal.1),
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(goal.0, goal.1)),
             },
             None,
         );
@@ -426,9 +422,7 @@ fn wide_flier_crosses_map_and_rests_on_goal() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(goal.0, goal.1),
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(goal.0, goal.1)),
             },
             None,
         );
@@ -533,9 +527,7 @@ fn mixed_fliers_settle_without_milling() {
             .unwrap()
             .push(
                 Order::Move {
-                    target: goal,
-                    size: CellSize::ONE,
-                    range: 0,
+                    goal: MoveGoal::Position(goal),
                 },
                 None,
             );

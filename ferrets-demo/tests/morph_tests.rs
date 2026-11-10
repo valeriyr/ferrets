@@ -18,7 +18,7 @@ use ferrets_simulation::{
     entity_def,
     map::Map,
     movement_model::MovementModel,
-    order::Order,
+    order::{MoveGoal, Order},
     resources::PlayerResources,
     simulation_id::SimulationId,
     spawn::{self, Boarding},
@@ -317,9 +317,7 @@ fn changed_gryphon_flies_over_what_stopped_it_on_foot() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(goal.0, goal.1),
-                size: ferrets_geometry::cell_size::CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(goal.0, goal.1)),
             },
             None,
         );
@@ -380,9 +378,7 @@ fn rider_fires_from_moving_holder() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(CLEAR.0 + 6, CLEAR.1 + 2),
-                size: ferrets_geometry::cell_size::CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(CLEAR.0 + 6, CLEAR.1 + 2)),
             },
             None,
         );
@@ -457,9 +453,7 @@ fn run_and_checksum() -> Vec<u64> {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(30, 26),
-                size: ferrets_geometry::cell_size::CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(30, 26)),
             },
             None,
         );

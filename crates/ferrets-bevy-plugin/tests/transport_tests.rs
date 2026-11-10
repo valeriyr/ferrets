@@ -37,7 +37,7 @@ use ferrets_simulation::{
     game_loop::orders::Refusal,
     map::Map,
     movement_model::MovementModel,
-    order::Order,
+    order::{MoveGoal, Order},
     simulation_id::SimulationId,
     spawn::{self, Boarding, SetDown},
     statistics::Statistics,
@@ -864,12 +864,16 @@ fn rifleman_called_over_mid_chase_drops_its_chase_walk() {
     utils::load(&mut app, bunker_id, rifleman_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    // Walking to the bunker at (10, 10) to board it, not toward the leader.
+    // Walking to within the load range, 1, of the 2×2 bunker at (10, 10) to
+    // board it, not toward the leader.
     let orders = entity_def::orders(app.world(), rifleman);
-    let Order::Move { target, .. } = orders[0] else {
-        panic!("the boarding walks first, got {orders:?}");
-    };
-    assert_eq!(target, utils::pos(10, 10));
+    assert_eq!(
+        orders[0].move_goal(),
+        Some(MoveGoal::Within {
+            rect: CellRect::new(CellPos::new(10, 10), CellSize::new(2, 2)),
+            range: 1,
+        })
+    );
     assert_eq!(orders[1].board_target(), Some(bunker_id));
 }
 

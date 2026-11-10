@@ -16,7 +16,7 @@ use ferrets_simulation::{
         resource::ResourceSourceComponent,
         stance::{Stance, StanceComponent},
     },
-    order::Order,
+    order::{MoveGoal, Order},
     resources::PlayerResources,
     session::GameSession,
 };
@@ -129,7 +129,10 @@ fn runner_shot_from_inside_holder_flees_from_holder() {
             .world()
             .get::<OrderQueueComponent>(runner)
             .and_then(|queue| queue.front().map(|entry| entry.order.clone()));
-        if let Some(Order::Move { target: at, .. }) = front {
+        if let Some(Order::Move {
+            goal: MoveGoal::Position(at),
+        }) = front
+        {
             target = Some(at);
             break;
         }
@@ -189,7 +192,10 @@ fn flee_target(app: &mut App, entity: Entity) -> Option<FixedUVec2> {
             .world()
             .get::<OrderQueueComponent>(entity)
             .and_then(|queue| queue.front().map(|entry| entry.order.clone()));
-        if let Some(Order::Move { target, .. }) = front {
+        if let Some(Order::Move {
+            goal: MoveGoal::Position(target),
+        }) = front
+        {
             return Some(target);
         }
     }

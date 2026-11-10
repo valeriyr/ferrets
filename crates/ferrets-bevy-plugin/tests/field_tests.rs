@@ -62,6 +62,7 @@ use ferrets_simulation::{
     events::{DeathCause, SimulationEvent},
     fields::{self, FieldGrid},
     map_data::{MapData, Placement},
+    movement_model::MovementModel,
     order::Order,
     player_research::PlayerResearch,
     requirements,
@@ -1740,6 +1741,54 @@ fn field_cast_around_caster_covers_from_its_whole_footprint() {
 }
 
 #[test]
+fn reach_zero_ground_cast_asks_ally_off_its_cell() {
+    // The seed reaches 0: the seeder must stand on the cell (12, 8) it seeds.
+    // An idle allied seeder holds that cell; the seeder asks it off rather
+    // than stopping beside it, steps on and seeds.
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (ally, _) = utils::create_owned(&mut app, "seeder", 12, 8, 0);
+    let (seeder, seeder_id) = utils::create_owned(&mut app, "seeder", 8, 8, 0);
+
+    utils::cast_at(&mut app, seeder_id, "seed", 12, 8);
+    // It stands on the cell after eleven ticks and seeds after thirteen; the
+    // creep, sustained by nothing, decays on the next.
+    utils::run_ticks(&mut app, 13);
+
+    assert!(utils::covered_by(&app, creep, 12, 8, 0), "the seed landed");
+    assert_eq!(utils::anchor_of(app.world(), seeder), CellPos::new(12, 8));
+    // The ally makes way to the nearest cell not behind the seeder's heading
+    // east, the first of that ring's ties: one north, (12, 7).
+    assert_eq!(utils::anchor_of(app.world(), ally), CellPos::new(12, 7));
+}
+
+#[test]
+fn wide_caster_seeds_cell_anchored_on_it() {
+    // Under the continuous model a 2×2 seeder anchored at (8, 8), its middle
+    // (9, 9), seeds the cell (14, 8) with reach 0: its anchor must be that
+    // cell. It walks east and stops on the first step its anchor rounds
+    // onto 14 — its middle at 14.5, the low corner 14.5 − 1 = 13.5 rounding
+    // half up — and its middle stays at 8 + 2/2 = 9 on y: anchored on the
+    // cell, not centered on it at 8.5.
+    let mut app = field_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    let Fields { creep, .. } = fields(&app);
+    let (seeder, seeder_id) = utils::create_owned(&mut app, "wide_seeder", 8, 8, 0);
+
+    utils::cast_at(&mut app, seeder_id, "seed", 14, 8);
+    // It stands there after fourteen ticks and seeds after sixteen; the
+    // creep, sustained by nothing, decays two ticks on.
+    utils::run_ticks(&mut app, 16);
+
+    assert!(utils::covered_by(&app, creep, 14, 8, 0), "the seed landed");
+    assert_eq!(utils::anchor_of(app.world(), seeder), CellPos::new(14, 8));
+    assert_eq!(
+        utils::position_of(app.world(), seeder),
+        utils::point("14.5", "9")
+    );
+}
+
+#[test]
 fn cast_cover_lies_only_on_terrain_field_names() {
     // A column of water at x 12. Creep, land only, spewed at the water cell
     // (12, 8) with radius 1: the walk starts there, but the water itself
@@ -2777,6 +2826,37 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         registry
             .register(utils::walker("overlord", utils::GROUND_DOMAIN).with_skills([spew, scour]));
+        // A walker that seeds creep on the very cell it stands on: reach 0.
+        let seed = registry.register_skill(
+            "seed",
+            SkillDef {
+                cooldown: 1,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    casting: Casting::Instant,
+                    effect: EntityCastEffect::Field {
+                        at: Spot::Ground {
+                            reach: Reach::Within(Quantity::Constant(0)),
+                        },
+                        field: creep,
+                        radius: Quantity::Constant(0),
+                        action: FieldAction::Cover,
+                    },
+                },
+                requires: Vec::new(),
+            },
+        );
+        registry.register(utils::walker("seeder", utils::GROUND_DOMAIN).with_skills([seed]));
+        registry.register(
+            utils::walker("wide_seeder", utils::GROUND_DOMAIN)
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_skills([seed]),
+        );
         // A 3×3 pit that oozes creep around itself.
         let ooze = registry.register_skill(
             "ooze",

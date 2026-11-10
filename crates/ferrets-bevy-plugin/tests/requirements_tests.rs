@@ -32,7 +32,7 @@ use ferrets_simulation::{
     },
     entity_def,
     movement_model::MovementModel,
-    order::Order,
+    order::{MoveGoal, Order},
     requirements,
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
@@ -423,9 +423,7 @@ fn idle_for_needs_empty_queue_now() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(25, 25),
-                size: CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(25, 25)),
             },
             None,
         );

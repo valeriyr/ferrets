@@ -47,7 +47,7 @@ use ferrets_simulation::{
     map::Map,
     movement_model::MovementModel,
     occupancy::OccupancyClass,
-    order::Order,
+    order::{MoveGoal, Order},
     rally,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
@@ -151,8 +151,11 @@ fn change_into_mover_form_asks_off_only_bodies_its_claims_meet() {
 
     utils::order_morph(&mut app, whelp, "giant");
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::move_target(&app, inside), Some(utils::pos(12, 11)));
-    assert_eq!(utils::move_target(&app, lying), None);
+    assert_eq!(
+        utils::move_goal(&app, inside),
+        Some(MoveGoal::Position(utils::pos(12, 11)))
+    );
+    assert_eq!(utils::move_goal(&app, lying), None);
     utils::run_ticks(&mut app, 3);
     assert_eq!(
         utils::position_of(app.world(), lying),
@@ -562,9 +565,7 @@ fn queued_committed_change_drops_before_it_starts() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::pos(20, 10),
-                size: ferrets_geometry::cell_size::CellSize::ONE,
-                range: 0,
+                goal: MoveGoal::Position(utils::pos(20, 10)),
             },
             None,
         );

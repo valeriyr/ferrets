@@ -5,7 +5,7 @@
 //! previous walk made no progress. One that closes on a point walks once.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_math::{
     FixedI64, FixedU64, facing::Facing, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2,
     fixed_vec2::FixedVec2,
@@ -17,7 +17,7 @@ use crate::{
     entity_def,
     map::Map,
     movement_model,
-    order::Order,
+    order::{MoveGoal, Order},
     reach,
 };
 
@@ -162,7 +162,8 @@ fn close_on(
     // lands, this says out of range, and the round counts as no progress until
     // the whole order gives up. The walk below plans toward the goal itself,
     // so a walk arrives by its own measure exactly where it arrives by this
-    // one.
+    // one — except at range 0, where the walk takes only its anchor in the
+    // goal, a narrower measure than this one for a wider chaser.
     //
     // Both sides are footprints: a wide chaser reaches as far as its nearest
     // edge, which is also how acquisition measures — the two must agree, or a
@@ -175,16 +176,7 @@ fn close_on(
         return Destination::OutOfReach;
     }
 
-    // A walk onto a single cell brings the chaser anchored there; any other
-    // goal is named by its first cell.
-    let walk = match (range, goal.size == CellSize::ONE) {
-        (0, true) => orders::move_onto_cell(world, chaser, goal.origin),
-        _ => Order::Move {
-            target: goal.origin.middle(),
-            size: goal.size,
-            range,
-        },
-    };
+    let walk = orders::move_to(MoveGoal::Within { rect: goal, range });
     walk_or_give_up(last_chase, world, chaser, goal.origin, walk)
 }
 

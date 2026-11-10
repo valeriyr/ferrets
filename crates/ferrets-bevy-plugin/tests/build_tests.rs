@@ -49,7 +49,7 @@ use ferrets_simulation::{
     map::Map,
     movement_model::MovementModel,
     occupancy::OccupancyClass,
-    order::{AttackTarget, BuildTask, Order},
+    order::{AttackTarget, BuildTask, MoveGoal, Order},
     resources::PlayerResources,
     session::{GameSession, player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
@@ -453,8 +453,14 @@ fn idle_allies_on_site_walk_off_to_cells_of_their_own() {
 
     order_depot(&mut app, mason_id);
     utils::run_ticks(&mut app, 6);
-    assert_eq!(utils::move_target(&app, first), Some(utils::pos(12, 11)));
-    assert_eq!(utils::move_target(&app, second), Some(utils::pos(12, 12)));
+    assert_eq!(
+        utils::move_goal(&app, first),
+        Some(MoveGoal::Position(utils::pos(12, 11)))
+    );
+    assert_eq!(
+        utils::move_goal(&app, second),
+        Some(MoveGoal::Position(utils::pos(12, 12)))
+    );
 
     utils::run_ticks(&mut app, 4);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
@@ -930,8 +936,11 @@ fn site_of_mover_form_asks_off_only_bodies_its_claims_meet() {
         },
     );
     utils::run_ticks(&mut app, 11);
-    assert_eq!(utils::move_target(&app, inside), Some(utils::pos(12, 11)));
-    assert_eq!(utils::move_target(&app, lying), None);
+    assert_eq!(
+        utils::move_goal(&app, inside),
+        Some(MoveGoal::Position(utils::pos(12, 11)))
+    );
+    assert_eq!(utils::move_goal(&app, lying), None);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::count_of_type(app.world_mut(), "rolling_depot"), 1);
     assert_eq!(

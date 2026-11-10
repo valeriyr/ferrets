@@ -57,7 +57,7 @@ use ferrets_simulation::{
     impacts::{FiredFrom, Following, PendingImpact, PendingImpacts},
     map::Map,
     movement_model::MovementModel,
-    order::{AttackTarget, BuildTask, Order},
+    order::{AttackTarget, BuildTask, MoveGoal, Order},
     session::{GameSession, player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
     spawn::{self, Boarding},
@@ -373,9 +373,7 @@ fn broodlings_without_speed_refuse_move() {
     let grub = alive_of_type(&mut app, "grub")[0];
 
     let order = Order::Move {
-        target: utils::pos(20, 20),
-        size: CellSize::ONE,
-        range: 0,
+        goal: MoveGoal::Position(utils::pos(20, 20)),
     };
     assert_eq!(
         orders::can_start(app.world(), grub, &order),
@@ -391,9 +389,7 @@ fn seated_broodling_that_walks_refuses_move() {
     let (mut app, pup) = kennel_with_seated_pup();
     let seated = utils::position_of(app.world(), pup);
     let order = Order::Move {
-        target: utils::pos(20, 20),
-        size: CellSize::ONE,
-        range: 0,
+        goal: MoveGoal::Position(utils::pos(20, 20)),
     };
     assert_eq!(
         orders::can_start(app.world(), pup, &order),
@@ -424,9 +420,7 @@ fn held_broodling_refuses_every_walking_order() {
 
     for order in [
         Order::Move {
-            target: utils::pos(20, 20),
-            size: CellSize::ONE,
-            range: 0,
+            goal: MoveGoal::Position(utils::pos(20, 20)),
         },
         Order::AttackMove {
             target: utils::pos(20, 20),
@@ -1186,7 +1180,10 @@ fn landed_broodling_obeys_breeder_rally() {
     utils::run_ticks(&mut app, 11);
 
     assert_eq!(type_name_of(&app, grub), "worker");
-    assert_eq!(move_targets(&app, grub), vec![utils::pos(20, 20)]);
+    assert_eq!(
+        move_goals(&app, grub),
+        vec![MoveGoal::Position(utils::pos(20, 20))]
+    );
 }
 
 #[test]
@@ -1334,7 +1331,10 @@ fn hatched_unit_obeys_egg_rally_over_breeder_rally() {
     // The egg's rally is gone with the egg; its target sent the worker on.
     assert_eq!(type_name_of(&app, grub), "worker");
     assert!(app.world().get::<RallyPointComponent>(grub).is_none());
-    assert_eq!(move_targets(&app, grub), vec![utils::pos(25, 25)]);
+    assert_eq!(
+        move_goals(&app, grub),
+        vec![MoveGoal::Position(utils::pos(25, 25))]
+    );
 }
 
 #[test]
@@ -1901,7 +1901,10 @@ fn egg_hatching_while_interim_form_is_worn_obeys_breeder_rally() {
 
     assert_eq!(type_name_of(&app, hatch), "shell");
     assert_eq!(type_name_of(&app, grub), "worker");
-    assert_eq!(move_targets(&app, grub), vec![utils::pos(20, 20)]);
+    assert_eq!(
+        move_goals(&app, grub),
+        vec![MoveGoal::Position(utils::pos(20, 20))]
+    );
 }
 
 #[test]
@@ -2481,14 +2484,11 @@ fn order_morph(app: &mut App, entity: Entity, type_name: &str) {
         );
 }
 
-/// The targets of every Move in `entity`'s queue, front first.
-fn move_targets(app: &App, entity: Entity) -> Vec<ferrets_math::fixed_uvec2::FixedUVec2> {
+/// Where every walk in `entity`'s queue goes, front first.
+fn move_goals(app: &App, entity: Entity) -> Vec<MoveGoal> {
     entity_def::orders(app.world(), entity)
         .iter()
-        .filter_map(|order| match order {
-            Order::Move { target, .. } => Some(*target),
-            _ => None,
-        })
+        .filter_map(Order::move_goal)
         .collect()
 }
 

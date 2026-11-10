@@ -33,6 +33,7 @@ use ferrets_simulation::{
     entity_def,
     entity_index::EntityIndex,
     movement_model::MovementModel,
+    order::MoveGoal,
     spawn,
 };
 
@@ -546,7 +547,10 @@ fn rising_mover_that_trains_goes_to_its_rally_and_keeps_none() {
 
     // The rally had the one goal: the risen ark walks there, and starts its
     // life as a trainer with no rally for what it trains.
-    assert_eq!(utils::move_target(&app, ark), Some(utils::pos(20, 8)));
+    assert_eq!(
+        utils::move_goal(&app, ark),
+        Some(MoveGoal::Position(utils::pos(20, 8)))
+    );
     let rally = app
         .world()
         .get::<RallyPointComponent>(ark)
@@ -588,7 +592,7 @@ fn captured_rising_mover_loses_rally_old_owner_set() {
     // Risen, it goes nowhere.
     utils::run_ticks(&mut app, RALLY_RISE_TIME + 1);
     assert!(!entity_def::rising(app.world(), ark));
-    assert_eq!(utils::move_target(&app, ark), None);
+    assert_eq!(utils::move_goal(&app, ark), None);
 }
 
 //

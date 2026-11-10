@@ -35,7 +35,7 @@ use crate::{
     make_way::{self, Asked, Need, Yielding},
     map::Map,
     movement_model::{self, MovementModel, Settling},
-    order::Order,
+    order::{MoveGoal, Order},
     session::GameSession,
     simulation_id::SimulationId,
 };
@@ -202,14 +202,14 @@ const CONTINUOUS_STUCK_TICKS: u32 = 15;
 /// no blocked checks — contact is the pushing pass's concern — and its
 /// claim follows it onto each footprint its position anchors.
 fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> OrderState {
-    let (target, size, range) = order.move_params().expect("Move order must have params");
+    let ordered = order.move_goal().expect("a Move order has a goal");
 
     let position = entity_def::position(world, entity);
     let speed = entity_def::effective_stat(world, entity, EntityStatId::SPEED)
         .expect("movable entities have a speed stat");
     let location_def = entity_def::of(world, entity).location.unwrap();
     let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
-    let (target, goal) = goal_of(world, target, size, range, shape.size);
+    let (target, goal, range) = goal_of(world, ordered, shape.size);
     let holder = entity_def::simulation_id(world, entity);
 
     let Some(mut move_component) = world.entity_mut(entity).take::<MoveComponent>() else {
@@ -228,6 +228,8 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     // The mover is judged by its anchor — the cell its claim is stamped on.
     let current_cell = entity_def::location(world, entity).anchor();
     let projection = world.resource::<Map>().projection();
+    // With the path empty, a walk within a range is measured from the middle
+    // of its rectangle's first cell.
     let pursued = move_component.path.last().map_or(target, |&waypoint| {
         anchored_point(world, waypoint, shape.size)
     });
@@ -244,10 +246,10 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
             // Peer arrival, as on the cell ladder's rung: a settled ally
             // already inside the acceptance means the spot is taken —
             // arriving beside it kills the pushing contest. Point moves
-            // only; a ranged walk finishing short would break its parent
-            // order's range semantics.
-            let effective_range = acceptance(range, move_component.frustration);
-            if range == 0
+            // only; a walk within a range finishing short would break its
+            // parent order's reach.
+            let effective_range = acceptance(ordered, move_component.frustration);
+            if ordered.is_position()
                 && projection.in_range_of_rect(current_cell, goal, effective_range + 1)
                 && resting_ally_within(world, entity, shape.layers, goal, effective_range)
             {
@@ -264,7 +266,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
                     waypoint,
                     shape,
                     goal,
-                    range,
+                    ordered,
                     move_component.frustration,
                 )
                 && settled_body_over(world, entity, shape, waypoint)
@@ -304,28 +306,25 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
             }
         }
     }
-    let effective_range = acceptance(range, move_component.frustration);
+    let effective_range = acceptance(ordered, move_component.frustration);
     // An uncrowded point order lands its middle exactly on the ordered spot, to
     // the bit — an anchored position is just a spot that happens to be on the
     // lattice. Contested spots do not grind forever: the stall clock raises
-    // frustration, and a frustrated walk accepts by cells like every ranged or
-    // wider-than-one-cell move.
-    let arrived = if range == 0 && size == CellSize::ONE && move_component.frustration == 0 {
-        movement_model::at_point(world, entity, target)
-    } else {
+    // frustration, and a frustrated point move accepts by cells.
+    let arrived = match ordered {
+        MoveGoal::Position(_) if move_component.frustration == 0 => {
+            movement_model::at_point(world, entity, target)
+        }
         // A crowded point move accepts its anchor within the frustration
-        // ring of the spot; a ranged walk accepts as every search does,
-        // reaching from its footprint, a touch only across an edge it could
-        // step.
-        match range {
-            0 => projection.in_range_of_rect(current_cell, goal, effective_range),
-            _ => world.resource::<Map>().nav_grid().accepts(
-                projection,
-                current_cell,
-                shape,
-                goal,
-                range,
-            ),
+        // ring of the spot.
+        MoveGoal::Position(_) => projection.in_range_of_rect(current_cell, goal, effective_range),
+        // A walk within a range accepts as every search does, reaching from its
+        // footprint, a touch only across an edge it could step.
+        MoveGoal::Within { range, .. } => {
+            world
+                .resource::<Map>()
+                .nav_grid()
+                .accepts(projection, current_cell, shape, goal, range)
         }
     };
     if arrived {
@@ -335,7 +334,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
     // A point order is honored to the bit, so its walk cannot end on the goal
     // cell's anchored position like the cell-resolution plans do: the final leg
     // aims at the ordered spot itself.
-    let point_order = range == 0 && size == CellSize::ONE;
+    let point_order = ordered.is_position();
 
     if move_component.path.is_empty() {
         // Wound down: the step it was told to finish has landed, so the walk is
@@ -606,7 +605,7 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
 /// `MoveComponent` is taken from the entity at the start and reinserted on
 /// `InProcessing`; on `Finished` it is simply dropped (removed by not reinserting).
 fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState {
-    let (target, size, range) = order.move_params().expect("Move order must have params");
+    let ordered = order.move_goal().expect("a Move order has a goal");
 
     let standing = entity_def::location(world, entity);
     let position = standing.middle();
@@ -616,7 +615,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
         .expect("movable entities have a speed stat");
     let location_def = entity_def::of(world, entity).location.unwrap();
     let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
-    let (_, goal) = goal_of(world, target, size, range, shape.size);
+    let (target, goal, range) = goal_of(world, ordered, shape.size);
     let holder = entity_def::simulation_id(world, entity);
 
     let Some(mut move_component) = world.entity_mut(entity).take::<MoveComponent>() else {
@@ -653,7 +652,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
                     crossed_into,
                     shape,
                     goal,
-                    range,
+                    ordered,
                 )
             {
                 return OrderState::Finished;
@@ -665,26 +664,27 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
 
     // At rest on a cell — check if the goal is already reached. Frustration
     // grows the acceptance of point moves so a crowded destination settles
-    // into a ring; ranged walks keep their exact contract — a chase that
-    // finished short would break its parent order's range semantics.
-    let arrived = if range == 0 && size == CellSize::ONE && move_component.frustration == 0 {
-        movement_model::at_point(world, entity, target)
-    } else {
-        cell_arrived(
+    // into a ring; a walk within a range keeps it exactly — a chase that
+    // finished short would break its parent order's reach.
+    let arrived = match ordered {
+        MoveGoal::Position(_) if move_component.frustration == 0 => {
+            movement_model::at_point(world, entity, target)
+        }
+        MoveGoal::Position(_) | MoveGoal::Within { .. } => cell_arrived(
             world.resource::<Map>(),
             current_cell,
             shape,
             goal,
-            range,
+            ordered,
             move_component.frustration,
-        )
+        ),
     };
     if arrived {
         return OrderState::Finished;
     }
     // The crowd ladder measures against the same acceptance the arrival check
     // just used.
-    let effective_range = acceptance(range, move_component.frustration);
+    let effective_range = acceptance(ordered, move_component.frustration);
 
     // Continue the plan — or make one — when the current segment runs out.
     if move_component.path.is_empty() {
@@ -723,6 +723,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
             shape,
             holder,
             goal,
+            ordered,
             range,
             effective_range,
         );
@@ -772,7 +773,7 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
                 next_cell,
                 shape,
                 goal,
-                range,
+                ordered,
             )
         {
             return OrderState::Finished;
@@ -928,25 +929,17 @@ fn next_segment(
     )
 }
 
-/// Where a move toward `target` aims and the cells it closes on: for a point
-/// move, the point held so a walker of `walker_size` lies wholly on the map
-/// with its middle there, and the cell it is anchored at; otherwise the
-/// target itself and the `size` footprint from the cell it lies in.
-fn goal_of(
-    world: &World,
-    target: FixedUVec2,
-    size: CellSize,
-    range: u32,
-    walker_size: CellSize,
-) -> (FixedUVec2, CellRect) {
-    match (range, size == CellSize::ONE) {
-        (0, true) => {
-            let spot = world
-                .resource::<Map>()
-                .location_clamped(target, walker_size);
-            (spot.middle(), CellRect::cell(spot.anchor()))
+/// Where a walk to `goal` aims, the cells it closes on and how near: for a
+/// point, the point held so a walker of `walker_size` lies wholly on the map
+/// with its middle there, the cell it is anchored at, and `0`; for a
+/// rectangle, the middle of its first cell, the rectangle and its range.
+fn goal_of(world: &World, goal: MoveGoal, walker_size: CellSize) -> (FixedUVec2, CellRect, u32) {
+    match goal {
+        MoveGoal::Position(point) => {
+            let spot = world.resource::<Map>().location_clamped(point, walker_size);
+            (spot.middle(), CellRect::cell(spot.anchor()), 0)
         }
-        _ => (target, CellRect::new(CellPos::from(target), size)),
+        MoveGoal::Within { rect, range } => (rect.origin.middle(), rect, range),
     }
 }
 
@@ -971,13 +964,12 @@ fn claim_aware_route(
     )
 }
 
-/// The range a walk accepts right now: point moves grow with frustration so
-/// crowds settle into a ring; ranged walks keep their exact contract.
-fn acceptance(range: u32, frustration: u32) -> u32 {
-    if range == 0 {
-        frustration.min(MAX_ACCEPTANCE_GROWTH)
-    } else {
-        range
+/// The range a walk accepts right now: a point move grows with frustration so
+/// a crowd settles into a ring; a walk within a range keeps it exactly.
+fn acceptance(ordered: MoveGoal, frustration: u32) -> u32 {
+    match ordered {
+        MoveGoal::Position(_) => frustration.min(MAX_ACCEPTANCE_GROWTH),
+        MoveGoal::Within { range, .. } => range,
     }
 }
 
@@ -990,30 +982,32 @@ fn cell_walk_done(
     cell: CellPos,
     shape: MoverShape,
     goal: CellRect,
-    range: u32,
+    ordered: MoveGoal,
 ) -> bool {
     move_component.winding_down
-        || cell_arrived(map, cell, shape, goal, range, move_component.frustration)
+        || cell_arrived(map, cell, shape, goal, ordered, move_component.frustration)
 }
 
 /// Whether a cell-model walk's goal is satisfied from `cell`: a point move
-/// within the frustration ring of its spot, a ranged walk as every search
-/// accepts.
+/// within the frustration ring of its spot, a walk within a range as every
+/// search accepts.
 fn cell_arrived(
     map: &Map,
     cell: CellPos,
     shape: MoverShape,
     goal: CellRect,
-    range: u32,
+    ordered: MoveGoal,
     frustration: u32,
 ) -> bool {
-    match range {
-        0 => map
-            .projection()
-            .in_range_of_rect(cell, goal, acceptance(range, frustration)),
-        _ => map
-            .nav_grid()
-            .accepts(map.projection(), cell, shape, goal, range),
+    match ordered {
+        MoveGoal::Position(_) => {
+            map.projection()
+                .in_range_of_rect(cell, goal, acceptance(ordered, frustration))
+        }
+        MoveGoal::Within { range, .. } => {
+            map.nav_grid()
+                .accepts(map.projection(), cell, shape, goal, range)
+        }
     }
 }
 
@@ -1046,6 +1040,7 @@ fn resolve_blocked_crossing(
     shape: MoverShape,
     holder: SimulationId,
     goal: CellRect,
+    ordered: MoveGoal,
     range: u32,
     effective_range: u32,
 ) -> OrderState {
@@ -1087,7 +1082,7 @@ fn resolve_blocked_crossing(
                 next_cell,
                 blocker,
                 goal,
-                range,
+                ordered,
             );
         }
 
@@ -1104,9 +1099,9 @@ fn resolve_blocked_crossing(
         let blocking = if settled_ally {
             // Peer arrival: a settled ally already inside my acceptance
             // means the spot is taken — arriving beside it kills the
-            // pushing contest. Point moves only; a ranged walk finishing
-            // short would break its parent order's range semantics.
-            if range == 0
+            // pushing contest. Point moves only; a walk within a range
+            // finishing short would break its parent order's reach.
+            if ordered.is_position()
                 && projection.in_range_of_rect(next_cell, goal, effective_range)
                 && projection.in_range_of_rect(current_cell, goal, effective_range + 1)
             {
@@ -1166,7 +1161,7 @@ fn resolve_blocked_crossing(
                         next_cell,
                         shape,
                         goal,
-                        range,
+                        ordered,
                         move_component.frustration,
                     )
             }
@@ -1249,7 +1244,7 @@ fn swap_crossings(
     next_cell: CellPos,
     blocker: Entity,
     goal: CellRect,
-    range: u32,
+    ordered: MoveGoal,
 ) -> OrderState {
     movement_model::swap_claims(world, entity, blocker);
     let next_point = anchored_point(world, next_cell, shape.size);
@@ -1300,7 +1295,7 @@ fn swap_crossings(
                 next_cell,
                 shape,
                 goal,
-                range,
+                ordered,
             )
         {
             return OrderState::Finished;

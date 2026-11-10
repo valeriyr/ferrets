@@ -508,6 +508,31 @@ fn body_gone_before_caster_arrives_ends_order() {
 }
 
 #[test]
+fn reach_zero_caster_asks_ally_off_body_it_must_stand_on() {
+    // `raise_atop` reaches 0: the caster must stand on the corpse at (12, 5).
+    // An idle allied necromancer holds that cell; the caster asks it off
+    // rather than stopping beside it, steps on and raises.
+    let mut app = app();
+    let body = fallen(&mut app, 12, 5);
+    let (ally, _) = utils::create_owned(&mut app, "necromancer", 12, 5, 0);
+    let (necromancer, necromancer_id) = utils::create_owned(&mut app, "necromancer", 8, 5, 0);
+
+    utils::cast_on(&mut app, necromancer_id, "raise_atop", body);
+    // The raise lands on the thirteenth tick.
+    utils::run_ticks(&mut app, 13);
+
+    // The two the skill names.
+    assert_eq!(count_of(&app, "skeleton"), 2, "the raise landed");
+    assert_eq!(
+        utils::anchor_of(app.world(), necromancer),
+        CellPos::new(12, 5)
+    );
+    // The ally makes way to the nearest cell not behind the caster's heading
+    // east, the first of that ring's ties: one north, (12, 4).
+    assert_eq!(utils::anchor_of(app.world(), ally), CellPos::new(12, 4));
+}
+
+#[test]
 fn caster_without_reach_casts_where_it_stands() {
     let mut app = app();
     // The acolyte's raise declares no reach, so it lands at once however far
@@ -2070,6 +2095,13 @@ fn app() -> App {
             "ghoul",
             Reach::Within(Quantity::Constant(4)),
         );
+        // A raise the caster must stand on the body for: reach 0.
+        let raise_atop = raises(
+            &mut registry,
+            "raise_atop",
+            "skeleton",
+            Reach::Within(Quantity::Constant(0)),
+        );
         // A cast that brings its own caster down.
         let self_immolate = registry.register_skill(
             "self_immolate",
@@ -2431,6 +2463,7 @@ fn app() -> App {
                     raise_colossus,
                     raise_wardens,
                     raise_ghouls,
+                    raise_atop,
                     blood_rite,
                     raise_slowly,
                     raise_by_stat,

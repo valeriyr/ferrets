@@ -2,7 +2,9 @@
 
 use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{PendingInput, TickPacing};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
@@ -16,7 +18,7 @@ use ferrets_simulation::{
     },
     map::Map,
     movement_model::MovementModel,
-    order::{AttackTarget, BuildTask, Order},
+    order::{AttackTarget, BuildTask, MoveGoal, Order},
     selection::Selection,
     session::GameSession,
     visibility::{Sighting, VisibilityGrid},
@@ -437,11 +439,16 @@ pub fn draw_hierarchy(
 /// Draws every unit's order queue while the debug overlay is on: a line per
 /// order from the unit to its target, colored by the order's kind (run in
 /// `Update`).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_orders(
     mut gizmos: Gizmos,
     debug: Res<DebugState>,
     registry: Res<ContentRegistry>,
     map: Res<Map>,
+    session: Res<GameSession>,
+    fog: Res<VisibilityGrid>,
+    watch: Res<render::ObserverPerspective>,
+    reveal: Res<FogReveal>,
     units: Query<(
         &EntityInfoComponent,
         &LocationComponent,
@@ -469,7 +476,7 @@ pub fn draw_orders(
         return;
     }
 
-    // A footprint goal is named by its first cell; its line ends at the
+    // A site to found is named by its anchor; its line ends at the
     // footprint's middle.
     let footprint_middle = |anchor: CellPos, size: CellSize| {
         render::world_point(map.location_at_clamped(anchor, size).middle()).truncate()
@@ -485,6 +492,64 @@ pub fn draw_orders(
             .map(|(_, location, ..)| render::world_point(location.position).truncate())
     };
 
+    // A line to a target, or none for a target the perspective does not
+    // make out.
+    let line = |end: Option<Vec2>, color: Color| match end {
+        Some(end) => OrderLine::To { end, color },
+        None => OrderLine::Unseen,
+    };
+    let to = |end: Vec2, color: Color| OrderLine::To { end, color };
+    let end_of = |order: &Order| -> OrderLine {
+        match order {
+            Order::Move { goal } => match goal {
+                MoveGoal::Position(target) => to(point(*target), MOVE),
+                MoveGoal::Within { .. } => OrderLine::Lineless,
+            },
+            Order::AttackMove { target } => to(point(*target), COMBAT),
+            Order::Attack { target, .. } => match target {
+                AttackTarget::Entity(id) => line(entity_center(*id), COMBAT),
+                AttackTarget::Cell(cell) => to(render::cell_point(*cell).truncate(), COMBAT),
+            },
+            Order::Guard { target } => line(entity_center(*target), GUARD),
+            Order::Follow { target } => line(entity_center(*target), GUARD),
+            Order::Harvest { target } => line(entity_center(*target), HARVEST),
+            Order::Build { task } => match task {
+                BuildTask::Found { type_name, anchor } => {
+                    let size = registry
+                        .entity(type_name)
+                        .and_then(|def| def.location)
+                        .map_or(CellSize::ONE, |location| location.size());
+                    to(footprint_middle(*anchor, size), BUILD)
+                }
+                BuildTask::Join { site } => line(entity_center(*site), BUILD),
+            },
+            Order::Repair { target } => line(entity_center(*target), REPAIR),
+            Order::Patrol { .. } => OrderLine::Lineless,
+            Order::Board { target } => line(entity_center(*target), GUARD),
+            Order::Load { target } => line(entity_center(*target), GUARD),
+            Order::Unload { at } => match at {
+                Some(cell) => to(render::cell_point(*cell).truncate(), GUARD),
+                None => OrderLine::Lineless,
+            },
+            Order::Cast { target, .. } => match target {
+                Some(SkillTarget::Entity(id)) => line(entity_center(*id), COMBAT),
+                Some(SkillTarget::Cell(cell)) => to(render::cell_point(*cell).truncate(), COMBAT),
+                None => OrderLine::Lineless,
+            },
+            // A form change happens where the unit stands, so it has no line.
+            Order::Train | Order::Research { .. } | Order::Morph { .. } | Order::Die => {
+                OrderLine::Lineless
+            }
+        }
+    };
+    // Whether the perspective sees every cell of `rect`.
+    let sees_all = |rect: CellRect| {
+        reveal.reveals()
+            || rect
+                .cells()
+                .all(|cell| render::sees(&session, &watch, &fog, cell.x, cell.y))
+    };
+
     for (_, location, queue, patrol, visibility, sighted) in &units {
         // Don't reveal the orders of a unit the fog hides or the perspective
         // only glimpses.
@@ -492,41 +557,46 @@ pub fn draw_orders(
             continue;
         }
         let start = render::world_point(location.position).truncate();
-        for entry in &queue.0 {
-            let (end, color) = match &entry.order {
+        for (index, entry) in queue.0.iter().enumerate() {
+            match &entry.order {
                 Order::Move {
-                    target,
-                    size,
-                    range,
+                    goal: MoveGoal::Within { rect, range },
                 } => {
-                    let end = if *range == 0 && *size == CellSize::ONE {
-                        point(*target)
-                    } else {
-                        footprint_middle(CellPos::from(*target), *size)
+                    // A walk within a range closes on what the order after it
+                    // is aimed at, and is drawn in its color only where that
+                    // order's line is and the perspective sees every cell it
+                    // closes on.
+                    let Some(OrderLine::To { color, .. }) =
+                        queue.0.get(index + 1).map(|parent| end_of(&parent.order))
+                    else {
+                        continue;
                     };
-                    (Some(end), MOVE)
+                    if !sees_all(*rect) {
+                        continue;
+                    }
+                    // The cells the walk closes on, the reach its range
+                    // grants around them, and a line to their nearest
+                    // point — where the walker heads.
+                    let bounds = rect.bounds();
+                    let low = render::world_point(bounds.min()).truncate();
+                    let high = render::world_point(bounds.max()).truncate();
+                    let middle = (low + high) / 2.0;
+                    let size = (high - low).abs();
+                    gizmos.rect_2d(Isometry2d::from_translation(middle), size, color);
+                    if *range > 0 {
+                        let reach = *range as f32 * CELL_PX;
+                        let grown = size + Vec2::splat(2.0 * reach);
+                        let corner = match map.projection() {
+                            Projection::Isometric => 0.0,
+                            Projection::Orthogonal => reach,
+                        };
+                        gizmos
+                            .rounded_rect_2d(Isometry2d::from_translation(middle), grown, color)
+                            .corner_radius(corner);
+                    }
+                    let nearest = start.clamp(low.min(high), low.max(high));
+                    gizmos.line_2d(start, nearest, color);
                 }
-                Order::AttackMove { target } => (Some(point(*target)), COMBAT),
-                Order::Attack { target, .. } => match target {
-                    AttackTarget::Entity(id) => (entity_center(*id), COMBAT),
-                    AttackTarget::Cell(cell) => {
-                        (Some(render::cell_point(*cell).truncate()), COMBAT)
-                    }
-                },
-                Order::Guard { target } => (entity_center(*target), GUARD),
-                Order::Follow { target } => (entity_center(*target), GUARD),
-                Order::Harvest { target } => (entity_center(*target), HARVEST),
-                Order::Build { task } => match task {
-                    BuildTask::Found { type_name, anchor } => {
-                        let size = registry
-                            .entity(type_name)
-                            .and_then(|def| def.location)
-                            .map_or(CellSize::ONE, |location| location.size());
-                        (Some(footprint_middle(*anchor, size)), BUILD)
-                    }
-                    BuildTask::Join { site } => (entity_center(*site), BUILD),
-                },
-                Order::Repair { target } => (entity_center(*target), REPAIR),
                 Order::Patrol { target } => {
                     // Both patrol endpoints; before the order starts, the
                     // return point is where the unit stands.
@@ -535,32 +605,52 @@ pub fn draw_orders(
                     gizmos.line_2d(home, end, COMBAT);
                     gizmos.circle_2d(end, CELL_PX * 0.25, COMBAT);
                     gizmos.circle_2d(home, CELL_PX * 0.25, COMBAT);
-                    continue;
                 }
-                Order::Board { target } => (entity_center(*target), GUARD),
-                Order::Load { target } => (entity_center(*target), GUARD),
-                Order::Unload { at } => match at {
-                    Some(cell) => (Some(render::cell_point(*cell).truncate()), GUARD),
-                    None => continue,
-                },
-                Order::Cast { target, .. } => match target {
-                    Some(SkillTarget::Entity(id)) => (entity_center(*id), COMBAT),
-                    Some(SkillTarget::Cell(cell)) => {
-                        (Some(render::cell_point(*cell).truncate()), COMBAT)
+                order @ (Order::Move {
+                    goal: MoveGoal::Position(_),
+                }
+                | Order::AttackMove { .. }
+                | Order::Attack { .. }
+                | Order::Guard { .. }
+                | Order::Follow { .. }
+                | Order::Harvest { .. }
+                | Order::Build { .. }
+                | Order::Repair { .. }
+                | Order::Board { .. }
+                | Order::Load { .. }
+                | Order::Unload { .. }
+                | Order::Cast { .. }
+                | Order::Train
+                | Order::Research { .. }
+                | Order::Morph { .. }
+                | Order::Die) => {
+                    match end_of(order) {
+                        OrderLine::To { end, color } => {
+                            gizmos.line_2d(start, end, color);
+                            gizmos.circle_2d(end, CELL_PX * 0.25, color);
+                        }
+                        // A vanished target leaves nothing to point at.
+                        OrderLine::Lineless | OrderLine::Unseen => {}
                     }
-                    None => continue,
-                },
-                // A form change happens where the unit stands, so it has no line.
-                Order::Train | Order::Research { .. } | Order::Morph { .. } | Order::Die => {
-                    continue;
                 }
-            };
-            // A vanished target leaves nothing to point at.
-            let Some(end) = end else { continue };
-            gizmos.line_2d(start, end, color);
-            gizmos.circle_2d(end, CELL_PX * 0.25, color);
+            }
         }
     }
+}
+
+/// Where an order's debug line goes.
+enum OrderLine {
+    /// The order draws no line to a target.
+    Lineless,
+    /// The order's target is one the perspective does not make out.
+    Unseen,
+    /// A line to `end`, in `color`.
+    To {
+        /// Where the line ends.
+        end: Vec2,
+        /// The order kind's color.
+        color: Color,
+    },
 }
 
 /// Tints a single cell red by stacking translucent lines (gizmos have no fill).

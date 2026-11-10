@@ -1,6 +1,6 @@
 //! Internal resolved orders — what entity systems actually execute each tick.
 
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use serde::{Deserialize, Serialize};
 
@@ -75,19 +75,38 @@ impl BuildTask {
     }
 }
 
+/// Where a walk ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveGoal {
+    /// A place the walk itself is for: the walker's middle on the point, held
+    /// on the map for its size, or near it when a crowd holds the point.
+    Position(FixedUVec2),
+    /// Within `range` cells of a rectangle, the reach another order judges the
+    /// walk by: it arrives only there.
+    Within {
+        /// The cells closed on.
+        rect: CellRect,
+        /// How near, in whole cells, measured from the walker's footprint;
+        /// `0` puts the walker's anchor in the rectangle.
+        range: u32,
+    },
+}
+
+impl MoveGoal {
+    /// Whether the walk ends on a point.
+    pub fn is_position(self) -> bool {
+        match self {
+            MoveGoal::Position(_) => true,
+            MoveGoal::Within { .. } => false,
+        }
+    }
+}
+
 /// An order an entity is executing or waiting to execute.
 #[derive(Debug, Clone)]
 pub enum Order {
-    /// Move to `target`. With `range` `0` and `size` [`CellSize::ONE`], a point
-    /// move: the walker's middle to `target`, held on the map for its size.
-    /// Otherwise to within `range` grid cells of the `size` footprint anchored
-    /// at the cell `target` lies in: a walk to a building ends at its nearest
-    /// cells.
-    Move {
-        target: FixedUVec2,
-        size: CellSize,
-        range: u32,
-    },
+    /// Walk to `goal`.
+    Move { goal: MoveGoal },
     /// Attack what `target` names — an entity, or a cell for a weapon that sends its
     /// shots to one. An entity target ends the order once it is gone or unreachable; a
     /// cell is never gone, so a ground attack keeps firing until it is canceled. A
@@ -152,15 +171,11 @@ pub enum Order {
 }
 
 impl Order {
-    /// If this order is a move order, returns the destination footprint and range.
-    /// Otherwise, returns `None`.
-    pub fn move_params(&self) -> Option<(FixedUVec2, CellSize, u32)> {
+    /// If this order is a move order, returns where it goes. Otherwise,
+    /// returns `None`.
+    pub fn move_goal(&self) -> Option<MoveGoal> {
         match self {
-            Order::Move {
-                target,
-                size,
-                range,
-            } => Some((*target, *size, *range)),
+            Order::Move { goal } => Some(*goal),
             _ => None,
         }
     }
