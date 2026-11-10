@@ -39,7 +39,7 @@ use ferrets_content::{
     work::{Attachment, BerthStance},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::FixedU64;
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     layer_id::LayerId,
@@ -58,11 +58,11 @@ use ferrets_simulation::{
     make_way,
     map::Map,
     map_data::MapData,
-    movement_model::{self, MovementModel},
+    movement_model::MovementModel,
     order::Order,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
-    spawn::{self, Boarding, FieldReach},
+    spawn::{self, At, Boarding, FieldReach},
 };
 
 //
@@ -85,10 +85,10 @@ fn walker_climbs_plateau_only_by_its_ramp() {
         // on the ramp's rows, 6 and 7. It arrives on tick 22: eleven steps of
         // two ticks at half a cell a tick, four diagonals down to row 6, three
         // east over the ramp, and four back up to row 2: 11 × 2 = 22.
-        let mut last = utils::cell_of(app.world(), walker);
+        let mut last = utils::anchor_of(app.world(), walker);
         for _ in 0..22 {
             utils::run_ticks(&mut app, 1);
-            let cell = utils::cell_of(app.world(), walker);
+            let cell = utils::anchor_of(app.world(), walker);
             if last.x == 7 && cell.x == 8 {
                 assert!(
                     (6..=7).contains(&last.y),
@@ -115,7 +115,7 @@ fn walker_never_reaches_plateau_without_ramp() {
     // at the cliff's foot on tick 8, four steps of two ticks, and it stays.
     for _ in 0..20 {
         utils::run_ticks(&mut app, 1);
-        assert!(utils::cell_of(app.world(), walker).x <= 6);
+        assert!(utils::anchor_of(app.world(), walker).x <= 6);
     }
     assert_eq!(utils::position_of(app.world(), walker), utils::pos(6, 0));
 }
@@ -132,7 +132,7 @@ fn cliff_walker_climbs_straight_up() {
         for _ in 0..20 {
             utils::run_ticks(&mut app, 1);
             assert_eq!(
-                utils::cell_of(app.world(), strider).y,
+                utils::anchor_of(app.world(), strider).y,
                 2,
                 "{model:?}: it keeps to row 2"
             );
@@ -158,7 +158,7 @@ fn cliff_walker_stops_at_cliff_two_levels_tall() {
         // (12, 2), and the first by cell order is (7, 0).
         for _ in 0..30 {
             utils::run_ticks(&mut app, 1);
-            assert!(utils::cell_of(app.world(), strider).x <= 7, "{model:?}");
+            assert!(utils::anchor_of(app.world(), strider).x <= 7, "{model:?}");
         }
         assert_eq!(
             utils::position_of(app.world(), strider),
@@ -179,10 +179,10 @@ fn only_cliff_walker_stands_on_cliff() {
     // (7, 2) is the cliff's low edge, (8, 2) its high edge.
     for x in [7, 8] {
         assert!(
-            utils::create_entity(app.world_mut(), "walker", utils::pos(x, 2), Some(0)).is_none()
+            utils::create_entity(app.world_mut(), "walker", utils::cell(x, 2), Some(0)).is_none()
         );
         assert!(
-            utils::create_entity(app.world_mut(), "strider", utils::pos(x, 2), Some(0)).is_some()
+            utils::create_entity(app.world_mut(), "strider", utils::cell(x, 2), Some(0)).is_some()
         );
     }
 }
@@ -194,10 +194,10 @@ fn big_cliff_walker_stands_across_cliff_edge() {
     // Anchored at (7, 2), a 2×2 spans low ground at column 7 and the
     // plateau at column 8.
     assert!(
-        utils::create_entity(app.world_mut(), "big_walker", utils::pos(7, 2), Some(0)).is_none()
+        utils::create_entity(app.world_mut(), "big_walker", utils::cell(7, 2), Some(0)).is_none()
     );
     assert!(
-        utils::create_entity(app.world_mut(), "big_strider", utils::pos(7, 2), Some(0)).is_some()
+        utils::create_entity(app.world_mut(), "big_strider", utils::cell(7, 2), Some(0)).is_some()
     );
 }
 
@@ -208,7 +208,7 @@ fn static_body_of_flat_layer_stands_over_slopes() {
     let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
     for (x, y) in [(7, 6), (7, 2), (8, 2)] {
         assert!(
-            utils::create_entity(app.world_mut(), "beacon", utils::pos(x, y), Some(0)).is_some(),
+            utils::create_entity(app.world_mut(), "beacon", utils::cell(x, y), Some(0)).is_some(),
             "a beacon stands over ({x}, {y})"
         );
     }
@@ -218,7 +218,7 @@ fn static_body_of_flat_layer_stands_over_slopes() {
 fn static_footprint_stands_only_on_level_ground() {
     let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
     let depot = |app: &mut App, x, y| {
-        utils::create_entity(app.world_mut(), "depot", utils::pos(x, y), Some(0)).is_some()
+        utils::create_entity(app.world_mut(), "depot", utils::cell(x, y), Some(0)).is_some()
     };
 
     // Over the ramp's low half at (7, 6) and (7, 7), though all four cells
@@ -250,16 +250,16 @@ fn cliff_walker_strikes_across_cliff() {
 
     // The first strike lands on the third tick, from where the strider
     // stands: 100 − 10 = 90.
-    assert_eq!(utils::cell_of(app.world(), strider), CellPos::new(7, 2));
-    assert_eq!(utils::cell_of(app.world(), post), CellPos::new(8, 2));
+    assert_eq!(utils::anchor_of(app.world(), strider), CellPos::new(7, 2));
+    assert_eq!(utils::anchor_of(app.world(), post), CellPos::new(8, 2));
     assert_eq!(utils::health_as_u32(&app, post), 90);
 }
 
 #[test]
 fn walker_ordered_across_cliff_corner_strikes_from_ramp_top() {
     for (model, struck_from) in [
-        (MovementModel::Cell, utils::pos(8, 6)),
-        (MovementModel::Continuous, utils::part_way("7.5", "6")),
+        (MovementModel::Cell, utils::point("8.5", "6.5")),
+        (MovementModel::Continuous, utils::point("8", "6.5")),
     ] {
         // The walker on the ramp's low cell (7, 6); the post on the cliff's
         // high cell (8, 5), a diagonal away across the cliff's corner. It
@@ -272,10 +272,10 @@ fn walker_ordered_across_cliff_corner_strikes_from_ramp_top() {
         utils::attack(&mut app, walker_id, post_id);
 
         // The order is in on tick 3, when the chase starts its step east at
-        // half a cell a tick; the walker is at 7.5 on tick 4 and switches to
-        // the attack on tick 5 — on (8, 6) under the cell model, still at 7.5
-        // under the continuous one — whose damage point, one tick in, lands on
-        // tick 6 under either: 100 − 10 = 90.
+        // half a cell a tick; the walker's middle is at 8 on tick 4 and it
+        // switches to the attack on tick 5 — lined up on (8, 6) under the cell
+        // model, still at 8 under the continuous one — whose damage point,
+        // one tick in, lands on tick 6 under either: 100 − 10 = 90.
         utils::run_ticks(&mut app, 5);
         assert_eq!(utils::health_as_u32(&app, post), 100, "{model:?}");
         utils::run_ticks(&mut app, 1);
@@ -312,7 +312,7 @@ fn stand_ground_melee_never_acquires_across_cliff_corner() {
         let orders = app.world().get::<OrderQueueComponent>(walker).unwrap();
         assert!(orders.front().is_none(), "it acquired the post");
     }
-    assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(7, 6));
+    assert_eq!(utils::anchor_of(app.world(), walker), CellPos::new(7, 6));
     assert_eq!(utils::health_as_u32(&app, post), 100);
 }
 
@@ -351,11 +351,12 @@ fn trained_static_body_is_set_down_on_flat_ground() {
 #[test]
 fn trained_static_body_waits_on_ally_lying_onto_its_cell() {
     // Under the continuous model walls leave a hut on (3, 10) and the two
-    // cells east of it. An idle own recruit rests at (4.7, 10): it claims
-    // (5, 10), and its half-cell circle, centered at 5.2, lies over (4, 10)
-    // too. The cairn the hut trains, a static body, finds no free cell; the
-    // nearest the recruit lies over, (4, 10), is asked clear, the recruit
-    // settling 0.3 back onto (5, 10), and the cairn stands on (4, 10).
+    // cells east of it. An idle own recruit rests with its middle at
+    // (5.2, 10.5): it claims (5, 10), and its half-cell circle lies from 4.7
+    // to 5.7, over (4, 10) too. The cairn the hut trains, a static body, finds
+    // no free cell; the nearest the recruit lies over, (4, 10), is asked
+    // clear, the recruit settling 0.3 back to (5.5, 10.5) on (5, 10), and the
+    // cairn stands on (4, 10).
     let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
     {
@@ -366,7 +367,7 @@ fn trained_static_body_waits_on_ally_lying_onto_its_cell() {
     }
     let (_, hut_id) = utils::create_owned(&mut app, "hut", 3, 10, 0);
     let (recruit, _) = utils::create_owned(&mut app, "recruit", 5, 10, 0);
-    utils::walk_onto(&mut app, recruit, utils::part_way("4.7", "10"), 10);
+    utils::walk_onto(&mut app, recruit, utils::point("5.2", "10.5"), 10);
 
     utils::push_command(
         &mut app,
@@ -447,7 +448,7 @@ fn passenger_let_out_from_above_takes_highest_level_first() {
     utils::unload(&mut app, airship_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), recruit), CellPos::new(9, 0));
+    assert_eq!(utils::anchor_of(app.world(), recruit), CellPos::new(9, 0));
 }
 
 #[test]
@@ -469,7 +470,7 @@ fn passenger_let_out_from_above_takes_lower_level_when_highest_is_full() {
     utils::unload(&mut app, airship_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), recruit), CellPos::new(6, 0));
+    assert_eq!(utils::anchor_of(app.world(), recruit), CellPos::new(6, 0));
 }
 
 #[test]
@@ -536,7 +537,7 @@ fn unit_summoned_at_point_lands_in_its_region() {
     assert_eq!(
         utils::owned_of_type(app.world_mut(), "walker", 0)
             .into_iter()
-            .map(|walker| utils::cell_of(app.world(), walker))
+            .map(|walker| utils::anchor_of(app.world(), walker))
             .collect::<Vec<_>>(),
         vec![CellPos::new(2, 0)]
     );
@@ -590,7 +591,7 @@ fn gateway_letting_out_toward_point_up_cliff_lets_out_only_what_steps_from_it() 
         }
     }
 
-    utils::unload(&mut app, burrow_id, Some(utils::pos(9, 0)));
+    utils::unload(&mut app, burrow_id, Some(utils::cell(9, 0)));
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert!(entity_def::hidden(app.world(), recruit));
@@ -683,15 +684,15 @@ fn static_body_summoned_at_point_never_lands_below_cliff() {
 #[test]
 fn change_into_static_form_is_refused_over_body_lying_past_its_claim() {
     // Under the continuous model a seedling at (3, 10) is to grow into a
-    // grove on (3..4, 10..11), a static body. An enemy recruit rests at
-    // (4.7, 10): it claims (5, 10), the cell its position rounds to, and its
-    // half-cell circle, centered at 5.2, lies from 4.7 to 5.7, over (4, 10)
-    // too, so the change is refused for want of room. Walked on to (5, 10),
-    // its body lies on (5, 10) alone and the change may start.
+    // grove on (3..4, 10..11), a static body. An enemy recruit rests with its
+    // middle at (5.2, 10.5): it claims (5, 10), the cell it is anchored at,
+    // and its half-cell circle lies from 4.7 to 5.7, over (4, 10) too, so the
+    // change is refused for want of room. Walked on to (5.5, 10.5), its body
+    // lies on (5, 10) alone and the change may start.
     let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
     let (seedling, _) = utils::create_owned(&mut app, "seedling", 3, 10, 0);
     let (recruit, _) = utils::create_owned(&mut app, "recruit", 6, 10, 1);
-    utils::walk_onto(&mut app, recruit, utils::part_way("4.7", "10"), 10);
+    utils::walk_onto(&mut app, recruit, utils::point("5.2", "10.5"), 10);
     let order = Order::Morph {
         type_name: "grove".to_string(),
     };
@@ -718,7 +719,7 @@ fn reserving_change_moved_off_its_ground_lands_only_where_ground_takes_it() {
     utils::order_morph(&mut app, stayed, "cairn");
     utils::run_ticks(&mut app, 3);
 
-    movement_model::move_body(app.world_mut(), moved, utils::pos(7, 6));
+    utils::move_body(&mut app, moved, utils::pos(7, 6));
     utils::run_ticks(&mut app, 12);
 
     assert_eq!(entity_def::type_name(app.world(), moved), "settler");
@@ -740,9 +741,9 @@ fn reserving_change_into_walkable_form_lands_under_standing_units() {
     utils::run_ticks(&mut app, 12);
 
     assert_eq!(entity_def::type_name(app.world(), weaver), "mat");
-    assert_eq!(utils::cell_of(app.world(), weaver), CellPos::new(3, 3));
-    assert_eq!(utils::cell_of(app.world(), west), CellPos::new(2, 3));
-    assert_eq!(utils::cell_of(app.world(), east), CellPos::new(4, 3));
+    assert_eq!(utils::anchor_of(app.world(), weaver), CellPos::new(3, 3));
+    assert_eq!(utils::anchor_of(app.world(), west), CellPos::new(2, 3));
+    assert_eq!(utils::anchor_of(app.world(), east), CellPos::new(4, 3));
 }
 
 #[test]
@@ -759,9 +760,9 @@ fn reserving_change_into_passable_form_lands_under_standing_units() {
     utils::run_ticks(&mut app, 12);
 
     assert_eq!(entity_def::type_name(app.world(), netter), "net");
-    assert_eq!(utils::cell_of(app.world(), netter), CellPos::new(3, 3));
-    assert_eq!(utils::cell_of(app.world(), west), CellPos::new(2, 3));
-    assert_eq!(utils::cell_of(app.world(), east), CellPos::new(4, 3));
+    assert_eq!(utils::anchor_of(app.world(), netter), CellPos::new(3, 3));
+    assert_eq!(utils::anchor_of(app.world(), west), CellPos::new(2, 3));
+    assert_eq!(utils::anchor_of(app.world(), east), CellPos::new(4, 3));
 }
 
 #[test]
@@ -772,7 +773,7 @@ fn passable_static_body_rises_under_mover_claiming_nothing() {
     let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
     utils::create_owned(&mut app, "wisp", 2, 2, 0);
 
-    let net = utils::create_entity(app.world_mut(), "net", utils::pos(2, 2), Some(0));
+    let net = utils::create_entity(app.world_mut(), "net", utils::cell(2, 2), Some(0));
 
     assert!(net.is_some());
 }
@@ -788,7 +789,7 @@ fn solid_static_footprint_never_rises_over_mover_claiming_nothing() {
     let over = spawn::spawn_placed(
         app.world_mut(),
         "cairn",
-        utils::pos(2, 2),
+        At::Cell(utils::cell(2, 2)),
         Some(0),
         FieldReach::Full,
         &[],
@@ -796,7 +797,7 @@ fn solid_static_footprint_never_rises_over_mover_claiming_nothing() {
     let beside = spawn::spawn_placed(
         app.world_mut(),
         "cairn",
-        utils::pos(2, 3),
+        At::Cell(utils::cell(2, 3)),
         Some(0),
         FieldReach::Full,
         &[],
@@ -813,13 +814,9 @@ fn solid_static_footprint_never_rises_over_any_cell_mover_claiming_nothing_stand
     // it stands.
     let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
     let (wisp, _) = utils::create_owned(&mut app, "wisp", 2, 2, 0);
-    movement_model::move_body(
-        app.world_mut(),
-        wisp,
-        FixedUVec2::new(utils::fixed("2.5"), utils::fixed("2")),
-    );
+    utils::move_body(&mut app, wisp, utils::point("3", "2.5"));
     let place = |app: &mut App, x| {
-        utils::create_entity(app.world_mut(), "cairn", utils::pos(x, 2), Some(0)).is_some()
+        utils::create_entity(app.world_mut(), "cairn", utils::cell(x, 2), Some(0)).is_some()
     };
 
     assert!(!place(&mut app, 2));
@@ -841,7 +838,7 @@ fn change_cut_short_puts_form_back_where_ground_takes_it() {
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
-    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
+    assert_eq!(utils::anchor_of(app.world(), kiln), CellPos::new(3, 3));
 }
 
 #[test]
@@ -861,7 +858,7 @@ fn change_cut_short_where_ground_no_longer_takes_its_form_destroys_it() {
     utils::run_ticks(&mut app, 1);
 
     assert!(!utils::alive(&app, kiln_id));
-    assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(3, 3));
+    assert_eq!(utils::anchor_of(app.world(), walker), CellPos::new(3, 3));
 }
 
 #[test]
@@ -881,31 +878,31 @@ fn change_cut_short_sets_idle_ally_on_its_scaffold_down_beside_it() {
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
-    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
-    assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(3, 2));
+    assert_eq!(utils::anchor_of(app.world(), kiln), CellPos::new(3, 3));
+    assert_eq!(utils::anchor_of(app.world(), walker), CellPos::new(3, 2));
 }
 
 #[test]
 fn change_cut_short_sets_ally_lying_past_its_claim_down_off_it() {
-    // Under the continuous model an own walker rests at (2.3, 3) while the
-    // kiln on (3, 3) changes through its scaffold: it claims (2, 3), and its
-    // half-cell circle, centered at 2.8, lies from 2.3 to 3.3, over the
+    // Under the continuous model an own walker rests with its middle at
+    // (2.8, 3.5) while the kiln on (3, 3) changes through its scaffold: it
+    // claims (2, 3), and its half-cell circle lies from 2.3 to 3.3, over the
     // kiln's cell. Cut short, the kiln — a static body — measures it by its
-    // body and sets it down 0.3 back onto (2, 3), then goes back where it
-    // stood.
+    // body and sets it down 0.3 back to (2.5, 3.5) on (2, 3), then goes back
+    // where it stood.
     let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
     let (kiln, _) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
     utils::order_morph(&mut app, kiln, "furnace");
     utils::run_ticks(&mut app, 3);
     assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
     let (walker, _) = utils::create_owned(&mut app, "walker", 1, 3, 0);
-    utils::walk_onto(&mut app, walker, utils::part_way("2.3", "3"), 20);
+    utils::walk_onto(&mut app, walker, utils::point("2.8", "3.5"), 20);
 
     utils::soft_cancel_orders(app.world_mut(), kiln);
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
-    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
+    assert_eq!(utils::anchor_of(app.world(), kiln), CellPos::new(3, 3));
     assert_eq!(utils::position_of(app.world(), walker), utils::pos(2, 3));
 }
 
@@ -932,7 +929,7 @@ fn change_cut_short_sets_ally_walking_across_its_scaffold_down_beside_it() {
     utils::run_ticks(&mut app, 5);
     assert_eq!(
         utils::position_of(app.world_mut(), walker),
-        utils::part_way("3", "2.5")
+        utils::point("3.5", "3")
     );
 
     utils::soft_cancel_orders(app.world_mut(), kiln);
@@ -940,9 +937,9 @@ fn change_cut_short_sets_ally_walking_across_its_scaffold_down_beside_it() {
 
     assert!(utils::alive(&app, kiln_id));
     assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
-    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
+    assert_eq!(utils::anchor_of(app.world(), kiln), CellPos::new(3, 3));
     utils::run_ticks(&mut app, 20);
-    assert_eq!(utils::cell_of(app.world(), walker), CellPos::new(3, 7));
+    assert_eq!(utils::anchor_of(app.world(), walker), CellPos::new(3, 7));
     assert!(utils::order_queue_is_empty(app.world_mut(), walker));
 }
 
@@ -991,13 +988,13 @@ fn change_cut_short_is_judged_where_walkers_stand_now_under_continuous_model() {
     assert_eq!(entity_def::type_name(app.world(), kiln), "scaffold");
     let (walker, _) = utils::create_owned(&mut app, "walker", 3, 3, 0);
     utils::run_ticks(&mut app, 1);
-    movement_model::move_body(app.world_mut(), walker, utils::pos(5, 3));
+    utils::move_body(&mut app, walker, utils::pos(5, 3));
 
     utils::soft_cancel_orders(app.world_mut(), kiln);
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(entity_def::type_name(app.world(), kiln), "kiln");
-    assert_eq!(utils::cell_of(app.world(), kiln), CellPos::new(3, 3));
+    assert_eq!(utils::anchor_of(app.world(), kiln), CellPos::new(3, 3));
 }
 
 #[test]
@@ -1051,7 +1048,7 @@ fn reserving_change_puts_interim_form_on_inside_its_own_reservation() {
     utils::run_ticks(&mut app, 10);
 
     assert_eq!(entity_def::type_name(app.world(), sprig), "tree");
-    assert_eq!(utils::cell_of(app.world(), sprig), CellPos::new(3, 3));
+    assert_eq!(utils::anchor_of(app.world(), sprig), CellPos::new(3, 3));
 }
 
 #[test]
@@ -1074,15 +1071,16 @@ fn walker_on_ramp_never_changes_through_static_form() {
 
 #[test]
 fn reserving_change_through_static_interim_claims_where_it_lands() {
-    // A seedling at x 3.7 settles its static seed pod on the cell its
-    // position rounds to, (4, 2), and the 2×2 grove the change reserves
-    // settles from the pod, as the landing does: (4, 2) − ½ = (3.5, 1.5),
-    // rounding to (4, 2), over x 4 and 5. A cairn at (5, 2) refuses it; from
-    // 3.7 alone the grove would settle at (3.2, 1.5), rounding to (3, 2),
-    // over x 3 and 4, clear of the cairn.
+    // A seedling with its middle at x 4.2 settles its static seed pod on the
+    // cell it is anchored at, (4, 2), resting at (4.5, 2.5), and the 2×2 grove
+    // the change reserves settles from the pod, as the landing does: its low
+    // corner (4.5, 2.5) − 1 = (3.5, 1.5) rounds to (4, 2), over x 4 and 5. A
+    // cairn at (5, 2) refuses it; from 4.2 alone the grove's low corner would
+    // lie at (3.2, 1.5), rounding to (3, 2), over x 3 and 4, clear of the
+    // cairn.
     let mut app = hills_app(MovementModel::Continuous, Ramps::Short, Rise::One);
     let (seedling, _) = utils::create_owned(&mut app, "seedling", 3, 2, 0);
-    movement_model::move_body(app.world_mut(), seedling, utils::part_way("3.7", "2"));
+    utils::move_body(&mut app, seedling, utils::point("4.2", "2.5"));
     let order = Order::Morph {
         type_name: "grove".into(),
     };
@@ -1126,13 +1124,13 @@ fn larva_changing_from_berth_on_cliff_steps_out_where_its_own_form_stands() {
     utils::create_owned(&mut app, "nest", 4, 4, 0);
     utils::run_ticks(&mut app, 1);
     let larva = brood_of(&app, "larva");
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 7));
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(4, 7));
 
     utils::order_morph(&mut app, larva, "drone");
     utils::run_ticks(&mut app, 1);
 
     assert!(!entity_def::attached(app.world(), larva));
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(3, 6));
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(3, 6));
 }
 
 #[test]
@@ -1144,13 +1142,13 @@ fn underfoot_pod_steps_out_onto_its_own_berth() {
     utils::create_owned(&mut app, "pod_nest", 4, 1, 0);
     utils::run_ticks(&mut app, 1);
     let pod = brood_of(&app, "pod");
-    assert_eq!(utils::cell_of(app.world(), pod), CellPos::new(4, 4));
+    assert_eq!(utils::anchor_of(app.world(), pod), CellPos::new(4, 4));
 
     utils::order_morph(&mut app, pod, "bulb");
     utils::run_ticks(&mut app, 1);
 
     assert!(!entity_def::attached(app.world(), pod));
-    assert_eq!(utils::cell_of(app.world(), pod), CellPos::new(4, 4));
+    assert_eq!(utils::anchor_of(app.world(), pod), CellPos::new(4, 4));
 }
 
 #[test]
@@ -1164,7 +1162,7 @@ fn larva_seated_away_from_its_nest_steps_out_only_from_its_berth() {
     utils::create_owned(&mut app, "cliff_nest", 4, 9, 0);
     utils::run_ticks(&mut app, 1);
     let larva = brood_of(&app, "larva");
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 6));
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(4, 6));
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
     utils::free_cell(&mut app, CellPos::new(3, 9));
 
@@ -1172,7 +1170,7 @@ fn larva_seated_away_from_its_nest_steps_out_only_from_its_berth() {
     utils::run_ticks(&mut app, 1);
 
     assert!(entity_def::attached(app.world(), larva));
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 6));
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(4, 6));
 }
 
 #[test]
@@ -1183,9 +1181,9 @@ fn static_footprint_rises_over_body_seated_in_berth() {
     utils::create_owned(&mut app, "nest", 4, 1, 0);
     utils::run_ticks(&mut app, 1);
     let larva = brood_of(&app, "larva");
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 4));
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(4, 4));
 
-    assert!(utils::create_entity(app.world_mut(), "bulb", utils::pos(4, 4), Some(0)).is_some());
+    assert!(utils::create_entity(app.world_mut(), "bulb", utils::cell(4, 4), Some(0)).is_some());
 }
 
 #[test]
@@ -1203,7 +1201,7 @@ fn larva_changing_straight_steps_out_under_flier_holding_air() {
     utils::run_ticks(&mut app, 1);
 
     assert!(!entity_def::attached(app.world(), larva));
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(3, 6));
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(3, 6));
 }
 
 #[test]
@@ -1215,13 +1213,13 @@ fn underfoot_pod_never_steps_out_onto_another_underfoot_body() {
     utils::create_owned(&mut app, "pod_nest", 4, 1, 0);
     utils::run_ticks(&mut app, 1);
     let pod = brood_of(&app, "pod");
-    assert_eq!(utils::cell_of(app.world(), pod), CellPos::new(4, 4));
+    assert_eq!(utils::anchor_of(app.world(), pod), CellPos::new(4, 4));
 
     utils::order_morph(&mut app, pod, "bulb");
     utils::run_ticks(&mut app, 1);
 
     assert!(!entity_def::attached(app.world(), pod));
-    assert_eq!(utils::cell_of(app.world(), pod), CellPos::new(3, 4));
+    assert_eq!(utils::anchor_of(app.world(), pod), CellPos::new(3, 4));
 }
 
 #[test]
@@ -1238,7 +1236,7 @@ fn underfoot_pod_reserving_static_form_steps_out_onto_its_own_berth() {
 
     assert!(!entity_def::attached(app.world(), pod));
     assert!(entity_def::changing(app.world(), pod));
-    assert_eq!(utils::cell_of(app.world(), pod), CellPos::new(4, 4));
+    assert_eq!(utils::anchor_of(app.world(), pod), CellPos::new(4, 4));
 }
 
 #[test]
@@ -1259,7 +1257,7 @@ fn pod_reserving_form_held_to_field_steps_out_where_field_covers() {
     utils::run_ticks(&mut app, 1);
 
     assert!(!entity_def::attached(app.world(), pod));
-    assert_eq!(utils::cell_of(app.world(), pod), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), pod), CellPos::new(5, 5));
 }
 
 #[test]
@@ -1276,7 +1274,7 @@ fn larva_changing_through_husk_steps_out_where_husk_stands() {
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(entity_def::of(app.world(), larva).name, "husk");
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 7));
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(4, 7));
 }
 
 #[test]
@@ -1292,8 +1290,8 @@ fn bred_body_cut_short_goes_back_to_its_berth_whatever_lies_where_it_stood() {
     utils::order_morph(&mut app, larva, "glider");
     utils::run_ticks(&mut app, 1);
     assert_eq!(entity_def::of(app.world(), larva).name, "husk");
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(4, 4));
-    assert!(utils::create_entity(app.world_mut(), "rug", utils::pos(4, 4), Some(0)).is_some());
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(4, 4));
+    assert!(utils::create_entity(app.world_mut(), "rug", utils::cell(4, 4), Some(0)).is_some());
 
     utils::soft_cancel_orders(app.world_mut(), larva);
     utils::run_ticks(&mut app, 1);
@@ -1314,7 +1312,7 @@ fn bred_body_cut_short_never_stands_over_what_stood_onto_its_interim_form() {
     utils::order_morph(&mut app, nymph, "glider");
     utils::run_ticks(&mut app, 1);
     assert_eq!(entity_def::of(app.world(), nymph).name, "cocoon");
-    assert_eq!(utils::cell_of(app.world(), nymph), CellPos::new(4, 4));
+    assert_eq!(utils::anchor_of(app.world(), nymph), CellPos::new(4, 4));
     let (husk, _) = utils::create_owned(&mut app, "husk", 4, 4, 0);
 
     utils::soft_cancel_orders(app.world_mut(), nymph);
@@ -1322,7 +1320,7 @@ fn bred_body_cut_short_never_stands_over_what_stood_onto_its_interim_form() {
 
     assert_eq!(entity_def::of(app.world(), nymph).name, "nymph");
     assert!(entity_def::attached(app.world(), nymph));
-    assert_eq!(utils::cell_of(app.world(), husk), CellPos::new(4, 4));
+    assert_eq!(utils::anchor_of(app.world(), husk), CellPos::new(4, 4));
     let layers = entity_def::of(app.world(), husk)
         .location
         .expect("a husk stands")
@@ -1338,13 +1336,13 @@ fn bred_body_cut_short_never_stands_over_what_stood_onto_its_interim_form() {
 #[test]
 fn bred_body_cut_short_sits_on_its_berth_point_again() {
     // The offset nest at (4, 1) seats its nymph with its middle on (5.0, 4.5),
-    // its anchor (4.5, 4.0) between cells; cut short as a cocoon, the nymph
-    // sits there again, not on the cell its anchor rounds to.
+    // its body's low corner (4.5, 4.0) between cells; cut short as a cocoon,
+    // the nymph sits there again, not snapped onto the cell it is anchored at.
     let mut app = nest_app();
     utils::create_owned(&mut app, "offset_nymph_nest", 4, 1, 0);
     utils::run_ticks(&mut app, 1);
     let nymph = brood_of(&app, "nymph");
-    let seated = FixedUVec2::new(utils::fixed("4.5"), utils::fixed("4.0"));
+    let seated = utils::point("5", "4.5");
     assert_eq!(entity_def::position(app.world(), nymph), seated);
     utils::order_morph(&mut app, nymph, "glider");
     utils::run_ticks(&mut app, 1);
@@ -1717,7 +1715,7 @@ fn summon_nearby(registry: &mut ContentRegistry, name: &str, summoned: &str) -> 
                 costs: Vec::new(),
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Summon {
-                    at: SummonAt::Cell {
+                    at: SummonAt::Ground {
                         reach: Reach::Wherever,
                     },
                     entity_type,
@@ -1998,7 +1996,7 @@ fn cells_of(app: &App, name: &str) -> Vec<CellPos> {
         .into_iter()
         .map(|(_, entity)| entity)
         .filter(|&entity| entity_def::of(app.world(), entity).name == name)
-        .map(|entity| utils::cell_of(app.world(), entity))
+        .map(|entity| utils::anchor_of(app.world(), entity))
         .collect()
 }
 
@@ -2062,7 +2060,7 @@ fn walker_across_scaffold() -> (App, Entity, SimulationId) {
     utils::run_ticks(&mut app, 5);
     assert_eq!(
         utils::position_of(app.world_mut(), walker),
-        utils::part_way("3", "2.5")
+        utils::point("3.5", "3")
     );
     (app, walker, kiln_id)
 }

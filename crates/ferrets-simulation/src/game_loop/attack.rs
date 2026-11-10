@@ -27,6 +27,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     impacts::{AimedAt, FiredFrom},
+    map::Map,
     order::{AttackTarget, Order},
     reach,
     visibility::{self, Senses},
@@ -65,7 +66,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
                 return Err(Refusal::TargetUnfit);
             }
         }
-        AttackTarget::Position(_) => {
+        AttackTarget::Cell(_) => {
             if !aims_at_cells(world, entity) {
                 return Err(Refusal::TargetUnfit);
             }
@@ -180,13 +181,13 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             }
             AimedAt::Body(target)
         }
-        AttackTarget::Position(cell) => AimedAt::Point(cell),
+        AttackTarget::Cell(cell) => AimedAt::Cell(cell),
     };
     let target = aimed.body();
     let reached = aimed.reached(world);
-    let (target_position, target_size) = aimed.footprint(world);
+    let target_bounds = aimed.bounds(world);
 
-    let size = entity_def::location_size(world, entity);
+    let size = entity_def::size(world, entity);
     // How far the body must be walked is the longest reach it has among the
     // weapons that can serve this target, wherever each is fitted: an order is
     // given to the entity, and a keep's guns are as much a reason to stop walking
@@ -204,7 +205,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         if !reach::reaches(
             world,
             entity,
-            body::standing_rect(leash.anchor, size),
+            body::standing_rect(
+                world
+                    .resource::<Map>()
+                    .location_clamped(leash.position, size),
+            ),
             reached,
             leash.radius,
         ) {
@@ -228,7 +233,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // look in the fight: its guns bear on their own and its walls stay put.
         attack_component.phase = 0;
         if entity_def::of(world, entity).attack.is_some()
-            && let Some(wanted) = chase::bearing_to(world, entity, target_position, target_size)
+            && let Some(wanted) = chase::bearing_to(world, entity, target_bounds)
         {
             turn::toward(world, entity, wanted, turn::Rate::Standing);
         }
@@ -244,13 +249,12 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             target,
             range,
         ),
-        // A bare point is reached at the cell it lies in.
-        None => chase::advance_to_point(
+        // Bare ground is reached at its cell.
+        None => chase::advance_to_rect(
             &mut attack_component.last_chase,
             world,
             entity,
-            target_position,
-            target_size,
+            reached,
             range,
         ),
     };
@@ -298,7 +302,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         // Out of its own reach the swing waits at its start, as every weapon's
         // does, and the body still comes round on what it is waiting for.
         attack_component.phase = 0;
-        if let Some(wanted) = chase::bearing_to(world, entity, target_position, target_size) {
+        if let Some(wanted) = chase::bearing_to(world, entity, target_bounds) {
             turn::toward(world, entity, wanted, turn::Rate::Standing);
         }
         world.entity_mut(entity).insert(attack_component);
@@ -307,7 +311,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
 
     // How far the body still points off its target once it has come round this
     // tick, which is what the arc is judged against.
-    let off_aim = match chase::bearing_to(world, entity, target_position, target_size) {
+    let off_aim = match chase::bearing_to(world, entity, target_bounds) {
         None => 0,
         Some(wanted) => turn::toward(world, entity, wanted, turn::Rate::Standing).distance(wanted),
     };
@@ -326,7 +330,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
         world,
         entity,
         FiredFrom::Body,
-        entity_def::footprint_center(world, entity),
+        entity_def::position(world, entity),
         aimed,
         &stats,
         &mut attack_component.phase,

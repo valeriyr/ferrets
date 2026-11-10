@@ -506,7 +506,7 @@ fn position_attack_hits_concealed_unit_on_its_cell() {
                 mode: SelectMode::Replace,
             },
             PlayerCommand::Attack {
-                target: AttackTarget::Position(utils::pos(5, 10)),
+                target: AttackTarget::Cell(utils::cell(5, 10)),
                 flush: true,
             },
         ],
@@ -876,7 +876,7 @@ fn resource_upkeep_pays_from_stockpile_and_ends_when_it_cannot() {
 fn unowned_bearer_loses_upkeep_buff_at_first_due_tick() {
     let mut app = concealment_app(rivals());
     let (lurker, _) =
-        utils::create_entity(app.world_mut(), "lurker", utils::pos(5, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "lurker", utils::cell(5, 5), None).unwrap();
     let hired = utils::entity_buff_id(&app, "hired");
     utils::apply_buff(app.world_mut(), lurker, hired);
     utils::run_ticks(&mut app, 1);
@@ -1472,7 +1472,7 @@ fn guard_order_lapses_when_ward_cloaks() {
     // a stray lurker the scout may escort, and cannot make out once it hides.
     let (scout, scout_id) = utils::create_owned(&mut app, "scout", 5, 5, 0);
     let (lurker, lurker_id) =
-        utils::create_entity(app.world_mut(), "lurker", utils::pos(5, 8), None)
+        utils::create_entity(app.world_mut(), "lurker", utils::cell(5, 8), None)
             .expect("the lurker fits at (5, 8)");
     utils::select(&mut app, scout_id);
     utils::push_command(
@@ -1787,7 +1787,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         let sweep = registry.register_skill(
             "sweep",
             free_cast(EntityCastEffect::Watch {
-                at: Spot::Cell {
+                at: Spot::Ground {
                     reach: Reach::Wherever,
                 },
                 radius: Quantity::Constant(3),
@@ -1798,7 +1798,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         let ground_sweep = registry.register_skill(
             "ground_sweep",
             free_cast(EntityCastEffect::Watch {
-                at: Spot::Cell {
+                at: Spot::Ground {
                     reach: Reach::Wherever,
                 },
                 radius: Quantity::Constant(3),
@@ -2144,7 +2144,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 Delivery::Projectile(shell),
                 Some(SplashDef::new(
                     SplashShape::Circular,
-                    vec![(1, FixedU64::from_num(0.5))],
+                    vec![(1, utils::fixed("0.5"))],
                     utils::GROUND,
                     false,
                 )),
@@ -2158,7 +2158,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         ));
         registry.register(
             walker("sprinter", utils::GROUND_DOMAIN, 100, 6)
-                .with_stat(EntityStatId::SPEED, FixedU64::from_num(1.5)),
+                .with_stat(EntityStatId::SPEED, utils::fixed("1.5")),
         );
         registry.register(
             walker("lobber", utils::GROUND_DOMAIN, 100, 6)

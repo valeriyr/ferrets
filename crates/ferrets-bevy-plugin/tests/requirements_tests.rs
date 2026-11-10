@@ -121,7 +121,7 @@ fn health_line_is_strict_under_and_inclusive_at_least() {
     assert!(met_by(
         &app,
         mover,
-        Requirement::Health(Bound::Share(Threshold::AtLeast(utils::fixed("1"))))
+        Requirement::Health(Bound::Share(Threshold::AtLeast(FixedU64::from_num(1))))
     ));
     assert!(!met_by(
         &app,
@@ -144,7 +144,7 @@ fn health_line_is_strict_under_and_inclusive_at_least() {
     assert!(!met_by(
         &app,
         mover,
-        Requirement::Health(Bound::Share(Threshold::AtLeast(utils::fixed("1"))))
+        Requirement::Health(Bound::Share(Threshold::AtLeast(FixedU64::from_num(1))))
     ));
 
     // 19 of 40: under the half line.
@@ -171,7 +171,12 @@ fn energy_line_reads_energy_pool() {
 
     // Spent down to 12 of 50: 12 < 12.5, under a quarter.
     assert_eq!(
-        pools::spend(app.world_mut(), mover, PoolId::ENERGY, utils::fixed("38")),
+        pools::spend(
+            app.world_mut(),
+            mover,
+            PoolId::ENERGY,
+            FixedU64::from_num(38)
+        ),
         Spending::Paid
     );
     assert!(met_by(
@@ -186,7 +191,8 @@ fn health_amount_reads_points() {
     let mut app = app();
     let (mover, _) = utils::create_owned(&mut app, "mover", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    let under_twenty = || Requirement::Health(Bound::Amount(Threshold::Under(utils::fixed("20"))));
+    let under_twenty =
+        || Requirement::Health(Bound::Amount(Threshold::Under(FixedU64::from_num(20))));
 
     // 20 of 40 is on the line, not under it; 19 is under.
     utils::wound(&mut app, mover, "20");
@@ -494,7 +500,7 @@ fn every_coverage_needs_whole_footprint_on_terrains() {
     let (raft, _) = utils::create_owned(&mut app, "raft", 9, 5, 0);
     utils::run_ticks(&mut app, 1);
     assert_eq!(
-        entity_def::occupied_rect(app.world(), raft),
+        entity_def::location(app.world(), raft).footprint(),
         CellRect::new(CellPos::new(9, 5), CellSize::new(2, 2)),
         "the raft lies across the coast: column 9 land, column 10 water"
     );
@@ -814,7 +820,11 @@ fn watch_crossing(
     let mut crossed = None;
     for _ in 0..80 {
         utils::run_ticks(app, 1);
-        let at_sea = entity_def::occupied_rect(app.world(), swimmer).origin.x >= 10;
+        let at_sea = entity_def::location(app.world(), swimmer)
+            .footprint()
+            .origin
+            .x
+            >= 10;
         if crossed.is_none() && at_sea == at_sea_after {
             crossed = Some(utils::tick(app));
         }

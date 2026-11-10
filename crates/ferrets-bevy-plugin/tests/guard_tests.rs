@@ -15,9 +15,9 @@ fn guard_follows_moving_ward() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(5, 10), Some(0)).unwrap();
     let (worker, worker_id) =
-        utils::create_entity(world, "worker", utils::pos(6, 10), Some(0)).unwrap();
+        utils::create_entity(world, "worker", utils::cell(6, 10), Some(0)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -51,9 +51,9 @@ fn guard_of_building_holds_station() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(3, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(3, 10), Some(0)).unwrap();
     let (barracks, barracks_id) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -78,9 +78,9 @@ fn guard_finishes_when_ward_dies() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(5, 10), Some(0)).unwrap();
     let (worker, worker_id) =
-        utils::create_entity(world, "worker", utils::pos(6, 10), Some(0)).unwrap();
+        utils::create_entity(world, "worker", utils::cell(6, 10), Some(0)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -97,7 +97,7 @@ fn guard_finishes_when_ward_dies() {
 
     let world = app.world_mut();
     assert!(utils::order_queue_is_empty(world, sentry));
-    assert_eq!(utils::cell_of(world, sentry), CellPos::new(5, 10));
+    assert_eq!(utils::anchor_of(world, sentry), CellPos::new(5, 10));
 }
 
 //
@@ -108,12 +108,12 @@ fn guard_finishes_when_ward_dies() {
 fn guard_engages_attacker_threatening_ward() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (_, guard_id) = utils::create_entity(world, "sentry", utils::pos(8, 10), Some(0)).unwrap();
+    let (_, guard_id) = utils::create_entity(world, "sentry", utils::cell(8, 10), Some(0)).unwrap();
     let (_, barracks_id) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     // The enemy sentry will engage the barracks on its own; the guard must
     // answer for it.
-    let (enemy, _) = utils::create_entity(world, "sentry", utils::pos(15, 10), Some(1)).unwrap();
+    let (enemy, _) = utils::create_entity(world, "sentry", utils::cell(15, 10), Some(1)).unwrap();
 
     utils::select(&mut app, guard_id);
     utils::push_command(
@@ -137,10 +137,11 @@ fn guard_on_hostile_ward_is_refused() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(5, 10), Some(0)).unwrap();
     // Well outside the sentry's acquire range, so only a guard order (escorting
     // toward it) could ever move the sentry — isolating the refusal.
-    let (_, enemy_id) = utils::create_entity(world, "worker", utils::pos(25, 10), Some(1)).unwrap();
+    let (_, enemy_id) =
+        utils::create_entity(world, "worker", utils::cell(25, 10), Some(1)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -156,5 +157,5 @@ fn guard_on_hostile_ward_is_refused() {
     utils::run_ticks(&mut app, 5);
     let world = app.world_mut();
     assert!(utils::order_queue_is_empty(world, sentry));
-    assert_eq!(utils::cell_of(world, sentry), CellPos::new(5, 10));
+    assert_eq!(utils::anchor_of(world, sentry), CellPos::new(5, 10));
 }

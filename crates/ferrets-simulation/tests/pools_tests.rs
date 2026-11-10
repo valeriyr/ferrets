@@ -30,7 +30,7 @@ fn emptied_needs_pool_held_at_zero() {
 fn store_is_empty_only_without_any_pool() {
     assert!(PoolsComponent::default().is_empty());
     let (mut world, unit) = unit_with([Pool::health(1)]);
-    pools::drain(&mut world, unit, PoolId::HEALTH, utils::fixed("1"));
+    pools::drain(&mut world, unit, PoolId::HEALTH, FixedU64::from_num(1));
     assert!(
         !store_of(&world, unit).is_empty(),
         "an emptied pool is still a pool"
@@ -85,7 +85,7 @@ fn spawned_pool_starts_at_its_maximum() {
 fn reseed_starts_drained_pool_again_at_its_initial() {
     // 40 − 25 = 15, started again at the full 40.
     let (mut world, unit) = unit_with([Pool::energy(40)]);
-    pools::drain(&mut world, unit, PoolId::ENERGY, utils::fixed("25"));
+    pools::drain(&mut world, unit, PoolId::ENERGY, FixedU64::from_num(25));
     pools::reseed(&mut world, unit, PoolId::ENERGY, PoolInitial::Full);
     assert_eq!(current_as_u32(&world, unit, PoolId::ENERGY), 40);
 }
@@ -128,8 +128,8 @@ fn stepping_pool_following_maximum_with_work_panics() {
             &registry,
             unit,
             PoolId::HEALTH,
-            utils::fixed("50"),
-            utils::fixed("50"),
+            FixedU64::from_num(50),
+            FixedU64::from_num(50),
         );
     });
 }
@@ -151,8 +151,8 @@ fn stepping_with_work_past_maximum_panics() {
             &registry,
             unit,
             PoolId::HEALTH,
-            utils::fixed("101"),
-            utils::fixed("101"),
+            FixedU64::from_num(101),
+            FixedU64::from_num(101),
         );
     });
 }
@@ -168,7 +168,7 @@ fn reseeding_pool_entity_lacks_panics() {
 fn drain_stops_at_empty() {
     // 30 − 45 is held at 0.
     let (mut world, unit) = unit_with([Pool::health(30)]);
-    pools::drain(&mut world, unit, PoolId::HEALTH, utils::fixed("45"));
+    pools::drain(&mut world, unit, PoolId::HEALTH, FixedU64::from_num(45));
     assert_eq!(current_as_u32(&world, unit, PoolId::HEALTH), 0);
 }
 
@@ -176,7 +176,7 @@ fn drain_stops_at_empty() {
 #[should_panic(expected = "a pool changed is one the entity has")]
 fn draining_pool_entity_lacks_panics() {
     let (mut world, unit) = unit_with([Pool::health(50)]);
-    pools::drain(&mut world, unit, PoolId::ENERGY, utils::fixed("1"));
+    pools::drain(&mut world, unit, PoolId::ENERGY, FixedU64::from_num(1));
 }
 
 #[test]
@@ -184,11 +184,11 @@ fn spend_takes_only_what_pool_holds() {
     // 30 covers 20, leaving 10; 10 does not cover 20, and stays.
     let (mut world, unit) = unit_with([Pool::energy(30)]);
     assert_eq!(
-        pools::spend(&mut world, unit, PoolId::ENERGY, utils::fixed("20")),
+        pools::spend(&mut world, unit, PoolId::ENERGY, FixedU64::from_num(20)),
         Spending::Paid
     );
     assert_eq!(
-        pools::spend(&mut world, unit, PoolId::ENERGY, utils::fixed("20")),
+        pools::spend(&mut world, unit, PoolId::ENERGY, FixedU64::from_num(20)),
         Spending::Short
     );
     assert_eq!(current_as_u32(&world, unit, PoolId::ENERGY), 10);
@@ -206,7 +206,7 @@ fn removed_pool_is_gone_and_others_stay() {
 #[should_panic(expected = "a pool changed is one the entity has")]
 fn restoring_pool_entity_lacks_panics() {
     let (mut world, unit) = unit_with([Pool::health(50)]);
-    pools::restore(&mut world, unit, PoolId::ENERGY, utils::fixed("5"));
+    pools::restore(&mut world, unit, PoolId::ENERGY, FixedU64::from_num(5));
 }
 
 #[test]
@@ -214,7 +214,13 @@ fn restoring_pool_entity_lacks_panics() {
 fn following_past_maximum_panics() {
     let (mut world, unit) = unit_with([Pool::health(100)]);
     world.resource_scope(|world, registry: Mut<ContentRegistry>| {
-        pools::follow_pool(world, &registry, unit, PoolId::HEALTH, utils::fixed("101"));
+        pools::follow_pool(
+            world,
+            &registry,
+            unit,
+            PoolId::HEALTH,
+            FixedU64::from_num(101),
+        );
     });
 }
 

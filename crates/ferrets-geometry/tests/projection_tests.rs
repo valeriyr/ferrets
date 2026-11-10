@@ -9,7 +9,7 @@ use ferrets_geometry::{
     cell_size::CellSize,
     projection::{self, Projection, Step},
 };
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::FixedU64;
 
 //
 // ─── chebyshev and octile ─────────────────────────────────────────────────────
@@ -746,8 +746,8 @@ fn span_takes_euclidean_length_under_orthogonal() {
 fn span_of_single_axis_offset_is_its_length() {
     for projection in [Projection::Isometric, Projection::Orthogonal] {
         assert_eq!(
-            projection.span(FixedU64::from_num(2.5), FixedU64::ZERO),
-            FixedU64::from_num(2.5)
+            projection.span(utils::fixed("2.5"), FixedU64::ZERO),
+            utils::fixed("2.5")
         );
         assert_eq!(
             projection.span(FixedU64::ZERO, FixedU64::ZERO),
@@ -785,8 +785,9 @@ fn orthogonal_step_normalizes_diagonal_travel() {
     let stepped =
         Projection::Orthogonal.step_toward(utils::world(0, 0), utils::world(10, 10), FixedU64::ONE);
 
-    // Each axis advances by 1/√2, so one cell of diagonal ground costs √2 time.
-    assert!(stepped.x > FixedU64::from_num(0.7069) && stepped.x < FixedU64::from_num(0.7072));
+    // Each axis advances by 1/√2, so one cell of diagonal ground costs √2 time:
+    // 1/√2 × 2^32 = 3037000499.97…, to the nearest step 3037000500.
+    assert_eq!(stepped.x, FixedU64::from_bits(3_037_000_500));
     assert_eq!(stepped.x, stepped.y);
 }
 
@@ -800,7 +801,7 @@ fn orthogonal_cardinal_step_moves_at_full_speed() {
 
 #[test]
 fn step_within_reach_lands_exactly_on_target() {
-    let target = FixedUVec2::new(FixedU64::from_num(0.5), FixedU64::from_num(0.5));
+    let target = utils::point("0.5", "0.5");
 
     for projection in [Projection::Isometric, Projection::Orthogonal] {
         assert_eq!(

@@ -210,7 +210,7 @@ fn empty_targetable_panics() {
 fn walker(name: &str, domain: DomainId) -> EntityTypeDef {
     utils::standing(name, domain).with_movement(
         FixedU64::ONE,
-        FixedU64::from_num(0.5),
+        utils::fixed("0.5"),
         FixedU64::ONE,
         FixedU64::from_num(360),
         FixedU64::from_num(360),

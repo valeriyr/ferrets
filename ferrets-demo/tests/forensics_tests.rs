@@ -14,6 +14,11 @@
 //! field's coverage as a map at that tick, with every source of it marked.
 //! `PASSIVES=<type substring>` prints every tick the set of buffs a matching
 //! entity bears changes, with its pools, within the same range.
+//! `FOCUS=<id>` dumps that entity's state per tick within the range, with
+//! its owner's stockpile.
+//! `AREA=<x>,<y>,<width>,<height>` prints, every tick within the same range,
+//! each body whose footprint, covered cells or grid mark meets that cell
+//! rectangle, with its position, those three rects and its front order.
 //! `COMMANDS=<substring>` prints every recorded command whose text holds the
 //! substring, with the tick and the player it came from.
 //! `REFRESH_TIMES=1` times every hierarchy refresh the game runs — on a copy,
@@ -25,6 +30,8 @@
 //! count, total, mean and longest of each, with the recompute's share of the
 //! tick.
 
+mod utils;
+
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -35,14 +42,13 @@ use std::{
 use bevy::prelude::*;
 use ferrets_content::{pool_def::PoolId, registry::ContentRegistry};
 use ferrets_demo::playback;
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{
-    FixedI64, FixedU64,
+    FixedI64,
     facing::{self, Facing},
     fixed_uvec2::FixedUVec2,
     fixed_vec2::FixedVec2,
 };
-use ferrets_physics::body;
 use ferrets_replay::replay::Replay;
 use ferrets_simulation::{
     components::{
@@ -56,6 +62,7 @@ use ferrets_simulation::{
     fields::{self, FieldGrid},
     game_loop::visibility,
     map::Map,
+    resources::PlayerResources,
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
     visibility::VisibilityGrid,
@@ -121,6 +128,16 @@ fn replay_forensics() {
     });
     let mut was_concealed: BTreeMap<SimulationId, bool> = BTreeMap::new();
     let passives: Option<String> = std::env::var("PASSIVES").ok();
+    let area: Option<CellRect> = std::env::var("AREA").ok().map(|spec| {
+        let numbers: Vec<u32> = spec
+            .split(',')
+            .map(|number| number.parse().expect("AREA holds whole numbers"))
+            .collect();
+        let [x, y, width, height] = numbers[..] else {
+            panic!("AREA is <x>,<y>,<width>,<height>");
+        };
+        CellRect::new(CellPos::new(x, y), CellSize::new(width, height))
+    });
     let mut refreshes: Option<Vec<(u32, Duration)>> =
         std::env::var("REFRESH_TIMES").ok().map(|_| Vec::new());
     let mut visibility_times: Option<(Vec<Duration>, Vec<Duration>)> =
@@ -179,7 +196,7 @@ fn replay_forensics() {
                     continue;
                 }
                 let location = entity_ref.get::<LocationComponent>();
-                let anchor = location.map(|location| body::anchor(location.position));
+                let anchor = location.map(|_| entity_def::location(world, entity).anchor());
                 // The veil over every cell the body occupies, and the fold the
                 // simulation makes of them by the type's own coverage rule: a
                 // covered anchor beside a marker that just went is a wide body
@@ -188,7 +205,8 @@ fn replay_forensics() {
                 let covered = match (veil, location) {
                     (Some(veil), Some(_)) => {
                         let grid = world.resource::<FieldGrid>();
-                        let cells: Vec<String> = entity_def::occupied_rect_of(world, def, entity)
+                        let cells: Vec<String> = entity_def::location(world, entity)
+                            .footprint()
                             .cells()
                             .map(|cell| {
                                 format!("({},{}) {:?}", cell.x, cell.y, grid.covered(veil, cell))
@@ -210,6 +228,44 @@ fn replay_forensics() {
                     "t{tick} {id:?} {} concealed {concealed} (was {before:?}) pos {:?} anchor {anchor:?} veil {covered} hidden {hidden} front {front:?}",
                     info.type_name(),
                     location.map(|location| location.position),
+                );
+            }
+        }
+        if let Some(area) = area
+            && (focus_from..=focus_to).contains(&tick)
+        {
+            for (id, entity) in world.resource::<EntityIndex>().alive_entries() {
+                let entity_ref = world.entity(entity);
+                let (Some(info), Some(location)) = (
+                    entity_ref.get::<EntityInfoComponent>(),
+                    entity_ref.get::<LocationComponent>(),
+                ) else {
+                    continue;
+                };
+                if entity_ref.contains::<HiddenComponent>() {
+                    continue;
+                }
+                let footprint = entity_def::location(world, entity).footprint();
+                let covered = if entity_def::of(world, entity).can_move() {
+                    entity_def::covered_rect(world, entity)
+                } else {
+                    footprint
+                };
+                let mark = entity_def::grid_mark(world, entity);
+                if !footprint.intersects(area)
+                    && !covered.intersects(area)
+                    && !mark.is_some_and(|mark| mark.footprint.intersects(area))
+                {
+                    continue;
+                }
+                let front = entity_ref
+                    .get::<OrderQueueComponent>()
+                    .and_then(|queue| queue.0.front().map(|entry| format!("{:?}", entry.order)));
+                println!(
+                    "t{tick} AREA {id:?} {} pos ({}, {}) footprint {footprint:?} covered {covered:?} mark {mark:?} front {front:?}",
+                    info.type_name(),
+                    location.position.x,
+                    location.position.y,
                 );
             }
         }
@@ -291,8 +347,14 @@ fn replay_forensics() {
             let owner = entity_ref
                 .get::<OwnerComponent>()
                 .map(|owner| owner.player());
+            let stock: Vec<String> = world
+                .resource::<PlayerResources>()
+                .iter()
+                .filter(|(player, _, _)| Some(*player) == owner)
+                .map(|(_, kind, amount)| format!("{kind} {amount}"))
+                .collect();
             println!(
-                "t{tick} owner {owner:?} form {form:?} pos {position:?} facing {facing:?} carried {carried:?} hidden {hidden} front {front:?} move {movement:?}"
+                "t{tick} owner {owner:?} stock {stock:?} form {form:?} pos {position:?} facing {facing:?} carried {carried:?} hidden {hidden} front {front:?} move {movement:?}"
             );
         }
         if let Some((name, at)) = &field_map
@@ -305,12 +367,12 @@ fn replay_forensics() {
             let mut sources: Vec<(String, CellPos)> = Vec::new();
             for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
                 let entity_ref = world.entity(entity);
-                let (Some(info), Some(location)) = (
-                    entity_ref.get::<EntityInfoComponent>(),
-                    entity_ref.get::<LocationComponent>(),
-                ) else {
+                let Some(info) = entity_ref.get::<EntityInfoComponent>() else {
                     continue;
                 };
+                if !entity_ref.contains::<LocationComponent>() {
+                    continue;
+                }
                 if registry
                     .def(info.type_id())
                     .field_sources
@@ -319,7 +381,7 @@ fn replay_forensics() {
                 {
                     sources.push((
                         info.type_name().to_string(),
-                        body::anchor(location.position),
+                        entity_def::location(world, entity).anchor(),
                     ));
                 }
             }
@@ -503,7 +565,7 @@ fn replay_forensics() {
     // than a job: a builder raising a site and a worker at a seam both stand
     // still for far longer than this with an order in hand, and neither is
     // stuck.
-    let threshold = FixedU64::from_num(0.05);
+    let threshold = utils::fixed("0.05");
     for (id, (name, track)) in &tracks {
         let mut start = 0;
         while start < track.len() {

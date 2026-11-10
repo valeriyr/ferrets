@@ -216,7 +216,7 @@ fn balanced_health_flow_holds_full_pool() {
 
     // Each tick moves by 0.5 − 0.5 = 0: the full 40 stays 40.
     utils::run_ticks(&mut app, 3);
-    assert_eq!(utils::health(&app, troll), utils::fixed("40"));
+    assert_eq!(utils::health(&app, troll), FixedU64::from_num(40));
 }
 
 #[test]

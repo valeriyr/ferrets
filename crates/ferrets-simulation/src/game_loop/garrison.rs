@@ -107,12 +107,12 @@ fn fire(world: &mut World, holder: Entity, passenger: Entity, passenger_id: Simu
         .resource::<EntityIndex>()
         .alive(target_id)
         .expect("a qualifying target is alive");
-    let origin = entity_def::footprint_center(world, holder);
+    let position = entity_def::position(world, holder);
     attack::swing(
         world,
         passenger,
         FiredFrom::Body,
-        origin,
+        position,
         AimedAt::Body(target),
         &stats,
         &mut fire.phase,

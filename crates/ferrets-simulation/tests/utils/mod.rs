@@ -7,8 +7,8 @@ use ferrets_content::{
     domain::DomainDef, entity_type_def::EntityTypeDef, layer::LayerLevel, location::Solidity,
     pool::Pool, registry::ContentRegistry, terrains::Terrains,
 };
-use ferrets_geometry::{cell_size::CellSize, projection::Projection};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
+use ferrets_math::FixedU64;
 use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
     control_groups::ControlGroups,
@@ -28,7 +28,7 @@ use ferrets_simulation::{
         player_type::PlayerType,
     },
     simulation_id::SimulationIds,
-    spawn::{self, Arrival, FieldReach},
+    spawn::{self, Arrival, At, FieldReach},
 };
 
 /// The players a [`world`] seats.
@@ -86,11 +86,10 @@ pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
 
 /// Spawns an unowned `unit` at cell `(x, y)` of a [`world`].
 pub fn spawn_unit(world: &mut World, x: u32, y: u32) -> Entity {
-    let position = FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y));
     spawn::create_entity(
         world,
         "unit",
-        position,
+        At::Cell(CellPos::new(x, y)),
         None,
         FieldReach::Initial,
         Arrival::Standing { starts: &[] },

@@ -312,7 +312,7 @@ pub fn game_view(
                         None => neutral_entities.push(view(&entity_ref, Hold::Withheld)),
                     },
                     Sighting::Glimpsed => {
-                        let footprint = entity_def::occupied_rect(world, entity);
+                        let footprint = entity_def::location(world, entity).footprint();
                         glimpses.push(Glimpse {
                             x: footprint.origin.x,
                             y: footprint.origin.y,
@@ -422,7 +422,8 @@ enum Hold {
 /// job, or the container a waiting return is set down beside, that the brain
 /// neither sides with nor sights, whose cell is not the brain's to know; then
 /// the cell it went in by. A known container is listed by the same rule, and
-/// an entity inside nothing that remains at its [`entity_def::whereabouts`].
+/// an entity inside nothing that remains at the anchor of its
+/// [`entity_def::whereabouts_rect`].
 fn listed_cell(
     world: &World,
     session: &GameSession,
@@ -431,16 +432,9 @@ fn listed_cell(
     detection: AiDetection,
     entity_ref: &EntityRef,
 ) -> CellPos {
-    if let Some(location) = entity_ref.get::<LocationComponent>() {
-        return CellPos::from(location.position);
+    if entity_ref.contains::<LocationComponent>() {
+        return entity_def::location(world, entity_ref.id()).anchor();
     }
-    let went_in = CellPos::from(
-        entity_ref
-            .get::<HiddenComponent>()
-            .expect("an entity with no location is hidden")
-            .went_in
-            .position,
-    );
     match entity_def::inside(world, entity_ref.id()) {
         Some(container) => {
             let known = owner::admits(
@@ -465,10 +459,10 @@ fn listed_cell(
                     &world.entity(container),
                 )
             } else {
-                went_in
+                entity_def::went_in_anchor(world, entity_ref.id())
             }
         }
-        None => CellPos::from(entity_def::whereabouts(world, entity_ref.id())),
+        None => entity_def::whereabouts_rect(world, entity_ref.id()).origin,
     }
 }
 
@@ -584,10 +578,7 @@ fn remains_views(
             }
             let entity_ref = world.entity(entity);
             // Everything the remains index holds is a body lying somewhere.
-            let location = entity_ref
-                .get::<LocationComponent>()
-                .expect("remains lie somewhere");
-            let cell = CellPos::from(location.position);
+            let cell = entity_def::location(world, entity).anchor();
             let fallen = entity_ref
                 .get::<RemainsComponent>()
                 .expect("the remains index holds only remains")

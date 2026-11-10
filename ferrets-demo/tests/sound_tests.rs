@@ -40,8 +40,8 @@ use ferrets_simulation::{
 fn kill_is_heard_where_it_happened() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (victim, _) = utils::create_entity(world, "grunt", utils::at_cell(6, 6), Some(1)).unwrap();
-    let (_, killer) = utils::create_entity(world, "grunt", utils::at_cell(5, 6), Some(0)).unwrap();
+    let (victim, _) = utils::create_entity(world, "grunt", utils::cell(6, 6), Some(1)).unwrap();
+    let (_, killer) = utils::create_entity(world, "grunt", utils::cell(5, 6), Some(0)).unwrap();
     spawn::despawn_killed(world, victim, killer, Some(0), Slain::Remains);
     play(&mut app);
 
@@ -58,20 +58,19 @@ fn hit_on_cargo_inside_holder_makes_no_sound() {
     // Under a seat's own sight, not the fog reveal, so the subject is judged.
     app.world_mut().insert_resource(FogReveal::Fogged);
     let world = app.world_mut();
-    let (bunker, _) = utils::create_entity(world, "bunker", utils::at_cell(6, 6), Some(0)).unwrap();
+    let (bunker, _) = utils::create_entity(world, "bunker", utils::cell(6, 6), Some(0)).unwrap();
     let (cargo, cargo_id) =
-        utils::create_entity(world, "grunt", utils::at_cell(6, 8), Some(0)).unwrap();
+        utils::create_entity(world, "grunt", utils::cell(6, 8), Some(0)).unwrap();
     assert_eq!(spawn::board(world, cargo, bunker), Boarding::Boarded);
-    let (_, standing) =
-        utils::create_entity(world, "grunt", utils::at_cell(8, 8), Some(0)).unwrap();
+    let (_, standing) = utils::create_entity(world, "grunt", utils::cell(8, 8), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
     let world = app.world_mut();
     world
         .resource_mut::<EventRecord>()
-        .emit(hit_at(cargo_id, utils::at_cell(6, 6)));
+        .emit(hit_at(cargo_id, utils::pos(6, 6)));
     world
         .resource_mut::<EventRecord>()
-        .emit(hit_at(standing, utils::at_cell(8, 8)));
+        .emit(hit_at(standing, utils::pos(8, 8)));
     play(&mut app);
 
     // Both cells are in sight; only the subject the seat makes out sounds.
@@ -87,12 +86,11 @@ fn kill_of_cargo_inside_holder_makes_no_sound() {
     let mut app = sound_app();
     app.world_mut().insert_resource(FogReveal::Fogged);
     let world = app.world_mut();
-    let (bunker, _) = utils::create_entity(world, "bunker", utils::at_cell(6, 6), Some(0)).unwrap();
-    let (cargo, _) = utils::create_entity(world, "grunt", utils::at_cell(6, 8), Some(0)).unwrap();
+    let (bunker, _) = utils::create_entity(world, "bunker", utils::cell(6, 6), Some(0)).unwrap();
+    let (cargo, _) = utils::create_entity(world, "grunt", utils::cell(6, 8), Some(0)).unwrap();
     assert_eq!(spawn::board(world, cargo, bunker), Boarding::Boarded);
-    let (standing, _) =
-        utils::create_entity(world, "grunt", utils::at_cell(8, 8), Some(0)).unwrap();
-    let (_, killer) = utils::create_entity(world, "grunt", utils::at_cell(9, 8), Some(1)).unwrap();
+    let (standing, _) = utils::create_entity(world, "grunt", utils::cell(8, 8), Some(0)).unwrap();
+    let (_, killer) = utils::create_entity(world, "grunt", utils::cell(9, 8), Some(1)).unwrap();
     utils::run_ticks(&mut app, 1);
     let world = app.world_mut();
     spawn::despawn_killed(world, cargo, killer, Some(1), Slain::Remains);
@@ -111,9 +109,9 @@ fn capture_of_holder_and_its_cargo_is_heard_once() {
     let mut app = sound_app();
     let world = app.world_mut();
     let (bunker, bunker_id) =
-        utils::create_entity(world, "bunker", utils::at_cell(6, 6), Some(1)).unwrap();
+        utils::create_entity(world, "bunker", utils::cell(6, 6), Some(1)).unwrap();
     let (cargo, cargo_id) =
-        utils::create_entity(world, "grunt", utils::at_cell(6, 8), Some(1)).unwrap();
+        utils::create_entity(world, "grunt", utils::cell(6, 8), Some(1)).unwrap();
     assert_eq!(spawn::board(world, cargo, bunker), Boarding::Boarded);
     utils::run_ticks(&mut app, 1);
     let world = app.world_mut();
@@ -123,9 +121,11 @@ fn capture_of_holder_and_its_cargo_is_heard_once() {
     world.resource_mut::<EventRecord>().emit(cargo_taken);
     play(&mut app);
 
+    // Both are heard at the 2×2 bunker's middle, (6, 6) + 1 = (7, 7), where
+    // its cargo went in.
     assert_eq!(
         cue_cells(&mut app),
-        vec![CellPos::new(6, 6)],
+        vec![CellPos::new(7, 7)],
         "everything taken in one place at once is heard once"
     );
 }
@@ -134,7 +134,7 @@ fn capture_of_holder_and_its_cargo_is_heard_once() {
 fn canceled_death_makes_no_sound() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (site, _) = utils::create_entity(world, "grunt", utils::at_cell(6, 6), Some(0)).unwrap();
+    let (site, _) = utils::create_entity(world, "grunt", utils::cell(6, 6), Some(0)).unwrap();
     spawn::despawn_entity(world, site, DeathCause::Canceled);
     play(&mut app);
 
@@ -149,7 +149,7 @@ fn burst_of_cues_stops_at_ceiling() {
     let mut app = sound_app();
     for step in 0..30u32 {
         let world = app.world_mut();
-        let placed = utils::create_entity(world, "grunt", utils::at_cell(4 + step, 8), Some(1));
+        let placed = utils::create_entity(world, "grunt", utils::cell(4 + step, 8), Some(1));
         let Some((victim, _)) = placed else {
             continue;
         };
@@ -172,17 +172,17 @@ fn cue_out_of_earshot_leaves_slot_for_near_one() {
     // the map's far corner, beyond two views of the listener — then one on a
     // grunt beside the listener.
     for step in 0..sound::MAX_CONCURRENT_CUES as u32 {
-        let far = utils::at_cell(95 - step, 95);
+        let far = utils::cell(95 - step, 95);
         let (_, victim) = utils::create_entity(world, "grunt", far, Some(1)).unwrap();
         world
             .resource_mut::<EventRecord>()
-            .emit(hit_at(victim, far));
+            .emit(hit_at(victim, far.middle()));
     }
-    let near = utils::at_cell(5, 5);
+    let near = utils::cell(5, 5);
     let (_, victim) = utils::create_entity(world, "grunt", near, Some(1)).unwrap();
     world
         .resource_mut::<EventRecord>()
-        .emit(hit_at(victim, near));
+        .emit(hit_at(victim, near.middle()));
     play(&mut app);
 
     assert_eq!(
@@ -196,7 +196,7 @@ fn cue_out_of_earshot_leaves_slot_for_near_one() {
 fn rise_is_heard_at_risen_entity() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (_, risen) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(0)).unwrap();
+    let (_, risen) = utils::create_entity(world, "grunt", utils::cell(7, 7), Some(0)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::EntityRisen {
@@ -217,7 +217,7 @@ fn rise_is_heard_at_risen_entity() {
 fn warped_rise_is_heard_at_risen_entity() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (_, risen) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(0)).unwrap();
+    let (_, risen) = utils::create_entity(world, "grunt", utils::cell(7, 7), Some(0)).unwrap();
     let warp_gate = world
         .resource::<ContentRegistry>()
         .type_id("warp_gate")
@@ -246,7 +246,7 @@ fn warped_rise_is_heard_at_risen_entity() {
 fn enemy_rise_is_not_heard() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (_, risen) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(1)).unwrap();
+    let (_, risen) = utils::create_entity(world, "grunt", utils::cell(7, 7), Some(1)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::EntityRisen {
@@ -266,7 +266,7 @@ fn enemy_rise_is_not_heard() {
 fn summon_rising_is_not_heard_as_completion() {
     let mut app = sound_app();
     let world = app.world_mut();
-    let (_, risen) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(0)).unwrap();
+    let (_, risen) = utils::create_entity(world, "grunt", utils::cell(7, 7), Some(0)).unwrap();
     let skill = world
         .resource::<ContentRegistry>()
         .skill("raise_burrow")
@@ -295,7 +295,7 @@ fn enemy_research_at_visible_lab_is_not_heard() {
         .research("iron_weapons")
         .expect("demo content declares iron_weapons");
     let world = app.world_mut();
-    let (_, lab) = utils::create_entity(world, "grunt", utils::at_cell(7, 7), Some(1)).unwrap();
+    let (_, lab) = utils::create_entity(world, "grunt", utils::cell(7, 7), Some(1)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::ResearchCompleted {
@@ -394,7 +394,7 @@ fn fire_in_sight_of_watched_side_is_heard() {
     let mut app = sound_app_as(LocalRole::Observer);
     app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
-    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+    utils::create_entity(app.world_mut(), "marine", utils::cell(11, 8), Some(1))
         .expect("the demo content defines a marine");
     burning_depot(&mut app, 0);
     utils::run_ticks(&mut app, 1);
@@ -410,7 +410,7 @@ fn concealed_fire_in_sight_of_watched_side_is_not_heard() {
     let mut app = sound_app_as(LocalRole::Observer);
     app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
-    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+    utils::create_entity(app.world_mut(), "marine", utils::cell(11, 8), Some(1))
         .expect("the demo content defines a marine");
     let depot = burning_depot(&mut app, 0);
     let ambushing = app
@@ -436,15 +436,11 @@ fn capture_of_concealed_depot_in_sight_of_watched_side_is_not_heard() {
     let mut app = sound_app_as(LocalRole::Observer);
     app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
-    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+    utils::create_entity(app.world_mut(), "marine", utils::cell(11, 8), Some(1))
         .expect("the demo content defines a marine");
-    let (depot, depot_id) = utils::create_entity(
-        app.world_mut(),
-        "supply_depot",
-        utils::at_cell(8, 8),
-        Some(0),
-    )
-    .expect("the demo content defines a supply depot");
+    let (depot, depot_id) =
+        utils::create_entity(app.world_mut(), "supply_depot", utils::cell(8, 8), Some(0))
+            .expect("the demo content defines a supply depot");
     let ambushing = app
         .world()
         .resource::<ContentRegistry>()
@@ -469,15 +465,11 @@ fn rise_of_concealed_depot_in_sight_of_watched_side_is_not_heard() {
     let mut app = sound_app_as(LocalRole::Observer);
     app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
-    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+    utils::create_entity(app.world_mut(), "marine", utils::cell(11, 8), Some(1))
         .expect("the demo content defines a marine");
-    let (depot, depot_id) = utils::create_entity(
-        app.world_mut(),
-        "supply_depot",
-        utils::at_cell(8, 8),
-        Some(0),
-    )
-    .expect("the demo content defines a supply depot");
+    let (depot, depot_id) =
+        utils::create_entity(app.world_mut(), "supply_depot", utils::cell(8, 8), Some(0))
+            .expect("the demo content defines a supply depot");
     let ambushing = app
         .world()
         .resource::<ContentRegistry>()
@@ -510,7 +502,7 @@ fn fires_catching_at_once_stop_at_ceiling() {
         let (depot, _) = utils::create_entity(
             world,
             "supply_depot",
-            utils::at_cell(4 + 3 * (step % 7), 8 + 4 * (step / 7)),
+            utils::cell(4 + 3 * (step % 7), 8 + 4 * (step / 7)),
             Some(0),
         )
         .expect("the demo content defines a supply depot");
@@ -550,8 +542,8 @@ fn cast_across_map_is_heard_at_both_ends() {
     let mut app = sound_app();
     let skill = battle_focus(&app);
     let world = app.world_mut();
-    let (_, mage) = utils::create_entity(world, "grunt", utils::at_cell(4, 4), Some(0)).unwrap();
-    let (_, victim) = utils::create_entity(world, "grunt", utils::at_cell(20, 4), Some(1)).unwrap();
+    let (_, mage) = utils::create_entity(world, "grunt", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, victim) = utils::create_entity(world, "grunt", utils::cell(20, 4), Some(1)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::SkillCast {
@@ -573,7 +565,7 @@ fn self_cast_is_heard_once() {
     let mut app = sound_app();
     let skill = battle_focus(&app);
     let world = app.world_mut();
-    let (_, mage) = utils::create_entity(world, "grunt", utils::at_cell(4, 4), Some(0)).unwrap();
+    let (_, mage) = utils::create_entity(world, "grunt", utils::cell(4, 4), Some(0)).unwrap();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::SkillCast {
@@ -598,16 +590,16 @@ fn cast_of_unseen_caster_at_cell_in_sight_is_not_heard() {
     app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
     let skill = battle_focus(&app);
-    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+    utils::create_entity(app.world_mut(), "marine", utils::cell(11, 8), Some(1))
         .expect("the demo content defines a marine");
     let (_, mage) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(30, 30), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(30, 30), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
     app.world_mut()
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::SkillCast {
             caster: mage,
-            target: SkillTarget::Position(utils::at_cell(11, 9)),
+            target: SkillTarget::Cell(utils::cell(11, 9)),
             skill,
         });
     play(&mut app);
@@ -624,14 +616,14 @@ fn cast_of_concealed_caster_on_cell_in_sight_is_not_heard() {
     app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
     let skill = battle_focus(&app);
-    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+    utils::create_entity(app.world_mut(), "marine", utils::cell(11, 8), Some(1))
         .expect("the demo content defines a marine");
     let grunt = ambushing_grunt(&mut app, 11, 10);
     app.world_mut()
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::SkillCast {
             caster: grunt,
-            target: SkillTarget::Position(utils::at_cell(11, 10)),
+            target: SkillTarget::Cell(utils::cell(11, 10)),
             skill,
         });
     play(&mut app);
@@ -647,10 +639,10 @@ fn cast_on_concealed_target_on_cell_in_sight_is_not_heard() {
     app.insert_resource(FogReveal::Fogged);
     app.insert_resource(ObserverPerspective(Some(1)));
     let skill = battle_focus(&app);
-    utils::create_entity(app.world_mut(), "marine", utils::at_cell(11, 8), Some(1))
+    utils::create_entity(app.world_mut(), "marine", utils::cell(11, 8), Some(1))
         .expect("the demo content defines a marine");
     let (_, mage) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(30, 30), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(30, 30), Some(0)).unwrap();
     let grunt = ambushing_grunt(&mut app, 11, 10);
     app.world_mut()
         .resource_mut::<EventRecord>()
@@ -874,7 +866,7 @@ fn sound_app_as(role: LocalRole) -> App {
 fn burning_depot(app: &mut App, owner: PlayerId) -> Entity {
     let on_fire = fire(app);
     let world = app.world_mut();
-    let (depot, _) = utils::create_entity(world, "supply_depot", utils::at_cell(8, 8), Some(owner))
+    let (depot, _) = utils::create_entity(world, "supply_depot", utils::cell(8, 8), Some(owner))
         .expect("the demo content defines a supply depot");
     let lost = entity_def::pool_value(world, depot, PoolId::HEALTH)
         .expect("a supply depot has health")
@@ -1014,7 +1006,7 @@ fn battle_focus(app: &App) -> SkillId {
 /// concealed.
 fn ambushing_grunt(app: &mut App, x: u32, y: u32) -> SimulationId {
     let (grunt, grunt_id) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(x, y), Some(0))
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(x, y), Some(0))
             .expect("the demo content defines a grunt");
     let ambushing = app
         .world()

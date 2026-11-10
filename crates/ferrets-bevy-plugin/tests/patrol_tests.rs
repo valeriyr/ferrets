@@ -16,7 +16,7 @@ fn patrol_ping_pongs_between_endpoints() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(5, 10), Some(0)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -42,6 +42,37 @@ fn patrol_ping_pongs_between_endpoints() {
     assert!(!utils::order_queue_is_empty(app.world_mut(), sentry));
 }
 
+#[test]
+fn wide_patroller_keeps_its_endpoints() {
+    // The wagon covers (5..6, 10..11), its middle at (6, 11), and patrols to
+    // the point (11, 11): one end anchored at (5, 10), the other at
+    // (11 − 1, 11 − 1) = (10, 10), round after round, under either movement
+    // model.
+    let apps: [fn() -> App; 2] = [utils::orders_app, utils::continuous_orders_app];
+    for app in apps {
+        let mut app = app();
+        let (wagon, wagon_id) =
+            utils::create_entity(app.world_mut(), "wagon", utils::cell(5, 10), Some(0)).unwrap();
+
+        utils::select(&mut app, wagon_id);
+        utils::push_command(
+            &mut app,
+            PlayerCommand::Patrol {
+                target: utils::point("11", "11"),
+                flush: true,
+            },
+        );
+
+        // Five cells a leg at half a cell a tick: 120 ticks walk several
+        // rounds.
+        let cells = trace(&mut app, wagon, 120);
+        let east = cells.iter().map(|cell| cell.x).max().unwrap();
+        let west = cells[30..].iter().map(|cell| cell.x).min().unwrap();
+        assert_eq!((west, east), (5, 10));
+        assert!(cells.iter().all(|cell| cell.y == 10));
+    }
+}
+
 //
 // ─── Engagement ─────────────────────────────────────────────────────────────
 //
@@ -51,9 +82,9 @@ fn patrol_engages_en_route_and_resumes_route() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(5, 10), Some(0)).unwrap();
     let (barracks, _) =
-        utils::create_entity(world, "barracks", utils::pos(8, 12), Some(1)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(8, 12), Some(1)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -84,7 +115,7 @@ fn trace(app: &mut App, entity: Entity, ticks: u32) -> Vec<CellPos> {
     let mut cells = Vec::new();
     for _ in 0..ticks {
         utils::run_ticks(app, 1);
-        cells.push(utils::cell_of(app.world_mut(), entity));
+        cells.push(utils::anchor_of(app.world_mut(), entity));
     }
     cells
 }

@@ -52,8 +52,8 @@ pub struct MoveComponent {
     /// must escalate instead, while a long way round keeps consuming
     /// waypoints and never escalates.
     pub best_distance: FixedU64,
-    /// The pursued waypoint is a lattice point the walk regains after being
-    /// walled off, and pops only on exact arrival: the ordinary half-body
+    /// The pursued waypoint is an anchored position the walk regains after
+    /// being walled off, and pops only on exact arrival: the ordinary half-body
     /// slack would consume it early and leave the body off-lattice, still
     /// pressed into the corner it was regaining from.
     pub regaining: bool,
@@ -165,10 +165,10 @@ impl MoveComponent {
     }
 
     /// Consumes the reached waypoint; the next one starts its own progress
-    /// record. An ordinary waypoint is progress and forgives every
-    /// escalation; a regained lattice point is not — it only put the body
-    /// back where it was walled off, and forgiving there would let a loop of
-    /// wall, regain, wall reset its own give-up clock each pass.
+    /// record. An ordinary waypoint is progress and forgives every escalation;
+    /// a regained anchored position is not — it only put the body back where it
+    /// was walled off, and forgiving there would let a loop of wall, regain,
+    /// wall reset its own give-up clock each pass.
     pub fn consume_waypoint(&mut self) {
         self.path.pop();
         self.best_distance = FixedU64::MAX;

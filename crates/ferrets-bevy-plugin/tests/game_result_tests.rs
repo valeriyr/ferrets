@@ -50,7 +50,7 @@ fn surviving_unit_does_not_save_player_whose_last_building_falls() {
 
     // Player 1 keeps a soldier on the field, but only buildings count.
     let world = app.world_mut();
-    utils::create_entity(world, "soldier", utils::pos(20, 20), Some(1)).unwrap();
+    utils::create_entity(world, "soldier", utils::cell(20, 20), Some(1)).unwrap();
     utils::run_ticks(&mut app, 1);
     assert_eq!(result(&app), None);
 
@@ -157,7 +157,7 @@ fn eliminated_player_regaining_building_stays_out() {
 
     // A new building appears for the eliminated player — as a build order
     // still in flight at the defeat would place one.
-    utils::create_entity(app.world_mut(), "base", utils::pos(14, 2), Some(1)).expect("late base");
+    utils::create_entity(app.world_mut(), "base", utils::cell(14, 2), Some(1)).expect("late base");
     destroy(&mut app, bases[2]);
     utils::run_ticks(&mut app, 1);
 
@@ -459,7 +459,7 @@ fn bases_app(teams: &[Option<TeamId>]) -> (App, Vec<Entity>) {
                 let (entity, _) = utils::create_entity(
                     world,
                     "base",
-                    utils::pos(2 + id as u32 * 4, 2),
+                    utils::cell(2 + id as u32 * 4, 2),
                     Some(id as PlayerId),
                 )
                 .expect("base placement");
@@ -502,7 +502,7 @@ fn bases_app_with_environment(teams: &[Option<TeamId>]) -> (App, Vec<Entity>, En
             let (entity, _) = utils::create_entity(
                 world,
                 "base",
-                utils::pos(2 + id as u32 * 4, 2),
+                utils::cell(2 + id as u32 * 4, 2),
                 Some(id as PlayerId),
             )
             .expect("base placement");
@@ -510,7 +510,7 @@ fn bases_app_with_environment(teams: &[Option<TeamId>]) -> (App, Vec<Entity>, En
         })
         .collect();
     let (environment_base, _) =
-        utils::create_entity(world, "base", utils::pos(2, 8), Some(environment))
+        utils::create_entity(world, "base", utils::cell(2, 8), Some(environment))
             .expect("environment base placement");
 
     utils::start_game(&mut app);

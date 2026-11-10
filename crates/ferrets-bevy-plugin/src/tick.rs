@@ -61,10 +61,10 @@ pub const MIN_PEER_THROTTLE: FixedU64 = FixedU64::lit("0.5");
 /// measure. Both are far past anything a game asks for, and keeping the
 /// arithmetic under [`FixedU64`]'s ceiling is what lets it saturate rather than
 /// wrap when a machine does something extraordinary.
-pub const MAX_FACTOR: FixedU64 = FixedU64::lit("1024");
-const MAX_MILLIS: FixedU64 = FixedU64::lit("60000");
+pub const MAX_FACTOR: FixedU64 = FixedU64::const_from_int(1024);
+const MAX_MILLIS: FixedU64 = FixedU64::const_from_int(60000);
 
-const THOUSAND: FixedU64 = FixedU64::lit("1000");
+const THOUSAND: FixedU64 = FixedU64::const_from_int(1000);
 
 /// The wall time one frame may spend inside a seek. What remains of the seek
 /// carries over to the next frame, so the app keeps redrawing and reading input

@@ -82,8 +82,8 @@ pub fn idles_alone(world: &World, entity: Entity) -> bool {
 
 /// Where the annex of `dock` stands, in map cells.
 fn dock_anchor(world: &World, primary: Entity, dock: &DockDef) -> CellPos {
-    let origin = entity_def::footprint_rect(world, primary).origin;
-    CellPos::new(origin.x + dock.at().x, origin.y + dock.at().y)
+    let anchor = entity_def::location(world, primary).anchor();
+    CellPos::new(anchor.x + dock.at().x, anchor.y + dock.at().y)
 }
 
 /// The anchor of the first dock of `primary` that takes `type_name`, or `None`
@@ -217,7 +217,7 @@ fn tend_sites(world: &mut World, offers: &[Offer]) {
     sites.sort_unstable_by_key(|&(id, _)| id);
 
     for (_, site) in sites {
-        let anchor = entity_def::footprint_rect(world, site).origin;
+        let anchor = entity_def::location(world, site).anchor();
         let annex = entity_def::of(world, site);
         let owner = entity_def::owner(world, site);
         // Only the owner's own primary works it: a rival's landing beside a
@@ -318,7 +318,7 @@ fn standing_annexes(world: &mut World) -> Vec<Entity> {
 /// The primary whose dock `annex` stands in, among the offers its claim
 /// admits. Ties go to the lowest id.
 fn primary_among(world: &World, annex: Entity, offers: &[Offer]) -> Docking {
-    let anchor = entity_def::footprint_rect(world, annex).origin;
+    let anchor = entity_def::location(world, annex).anchor();
     let annex_def = entity_def::of(world, annex);
     let claim = terms(world, annex).claim();
     let owner = entity_def::owner(world, annex);
@@ -449,7 +449,7 @@ fn rebuild_docks(world: &mut World, docked: &[(Entity, Docking)], offers: &[Offe
             .iter()
             .find(|offer| {
                 offer.primary_id == primary_id
-                    && offer.anchor == entity_def::footprint_rect(world, annex).origin
+                    && offer.anchor == entity_def::location(world, annex).anchor()
             })
             .expect("a bond was settled from an offer, and nothing has moved since");
         let annex_id = entity_def::simulation_id(world, annex);

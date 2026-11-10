@@ -67,7 +67,7 @@ pub fn recompute_fields(world: &mut World) {
         let Some(player) = entity_def::owner(world, entity) else {
             continue;
         };
-        let footprint = entity_def::occupied_rect(world, entity);
+        let footprint = entity_def::location(world, entity).footprint();
         let operation = entity_def::operation(world, entity);
         let sources = def.field_sources.clone();
 
@@ -163,7 +163,8 @@ pub fn recompute_fields(world: &mut World) {
     }
 }
 
-/// Covers or clears `field` around `center` for `player`, as a cast does.
+/// Covers or clears `field` around the cell `center` for `player`: the
+/// one-cell [`apply_action_around`].
 ///
 /// Covered cells have no source sustaining them, so they live by the field's
 /// decay policy from the next recompute on; clearing removes only what no
@@ -176,14 +177,7 @@ pub fn apply_action(
     radius: u32,
     action: FieldAction,
 ) {
-    apply_action_around(
-        world,
-        player,
-        field,
-        CellRect::new(center, CellSize::ONE),
-        radius,
-        action,
-    );
+    apply_action_around(world, player, field, CellRect::cell(center), radius, action);
 }
 
 /// Covers or clears `field` within `radius` of `footprint`. A cover spreads
@@ -216,10 +210,11 @@ pub fn apply_action_around(
     }
 }
 
-/// The cells within `reach` of `footprint` connected to it through cells on
-/// the field's terrains, in the order a breadth-first walk from the
-/// footprint visits them. The footprint's own cells are included whatever
-/// their terrain.
+/// The cells on the field's terrains within `reach` of `footprint` and
+/// connected to it through such cells, in the order a breadth-first walk
+/// from the footprint visits them. The walk starts from every cell of the
+/// footprint, whatever its terrain; a footprint cell the field's terrains
+/// reject is walked from but not covered.
 fn flood(map: &Map, def: &FieldDef, footprint: CellRect, reach: u32) -> Vec<CellPos> {
     let (width, height) = (map.width(), map.height());
     // The walk never leaves the disc's bounding box, so that is all the
@@ -236,11 +231,18 @@ fn flood(map: &Map, def: &FieldDef, footprint: CellRect, reach: u32) -> Vec<Cell
     let index = |cell: CellPos| ((cell.y - low.y) * span.width + (cell.x - low.x)) as usize;
     let mut queue: VecDeque<CellPos> = VecDeque::new();
     let mut out = Vec::new();
+    let lies_on = |cell: CellPos| {
+        map.nav_grid()
+            .terrain(cell)
+            .is_some_and(|terrain| def.terrains().admits(terrain))
+    };
 
     for cell in footprint.cells().filter(|&cell| map.contains(cell)) {
         visited[index(cell)] = true;
         queue.push_back(cell);
-        out.push(cell);
+        if lies_on(cell) {
+            out.push(cell);
+        }
     }
 
     while let Some(cell) = queue.pop_front() {
@@ -258,11 +260,7 @@ fn flood(map: &Map, def: &FieldDef, footprint: CellRect, reach: u32) -> Vec<Cell
                 continue;
             }
             visited[index(next)] = true;
-            let lies_there = map
-                .nav_grid()
-                .terrain(next)
-                .is_some_and(|terrain| def.terrains().admits(terrain));
-            if !lies_there {
+            if !lies_on(next) {
                 continue;
             }
             queue.push_back(next);

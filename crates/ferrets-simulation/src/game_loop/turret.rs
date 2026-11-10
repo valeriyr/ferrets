@@ -16,7 +16,7 @@ use ferrets_content::{
     turret::{TurretFire, TurretId, TurretStats, WeaponConduct},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use super::{
@@ -204,11 +204,11 @@ fn work_turret(world: &mut World, entity: Entity, gun: &Gun, state: &mut TurretS
         state.switch_quarry(None);
         return;
     };
-    let (target_position, target_size) = aimed.footprint(world);
+    let target_bounds = aimed.bounds(world);
 
     // Coming round happens whether or not the shot can be taken, so an approach is
     // spent aiming rather than waiting.
-    let off_aim = match chase::bearing_to(world, entity, target_position, target_size) {
+    let off_aim = match chase::bearing_to(world, entity, target_bounds) {
         None => 0,
         Some(wanted) => {
             let allowance = turn::units(world, entity, gun.reads.aim_rate);
@@ -225,7 +225,7 @@ fn work_turret(world: &mut World, entity: Entity, gun: &Gun, state: &mut TurretS
         gun.reads.period,
         gun.reads.damage_point,
     );
-    let position = entity_def::position(world, entity);
+    let bounds = entity_def::location(world, entity).bounds();
     // Reach is the body's, not the gun's corner: a target in range of what carries
     // the guns is in range of all of them.
     if !reach::in_reach(world, entity, aimed.reached(world), stats.range) {
@@ -246,7 +246,7 @@ fn work_turret(world: &mut World, entity: Entity, gun: &Gun, state: &mut TurretS
         world,
         entity,
         FiredFrom::Turret(gun.turret),
-        muzzle(position, gun),
+        muzzle(bounds, gun),
         aimed,
         &stats,
         &mut state.phase,
@@ -264,12 +264,14 @@ fn gun_rect(world: &World, entity: Entity, gun: &Gun) -> CellRect {
     )
 }
 
-/// Where a mounted gun's shot leaves from: the middle of the patch it sits on.
-fn muzzle(position: FixedUVec2, gun: &Gun) -> FixedUVec2 {
+/// Where a mounted gun's shot leaves from: the middle of the patch it sits on
+/// within its body's `bounds`.
+fn muzzle(bounds: FixedURect, gun: &Gun) -> FixedUVec2 {
     let half = |cells: u32| FixedU64::from_num(cells) / 2;
+    let corner = bounds.min();
     FixedUVec2::new(
-        position.x + FixedU64::from_num(gun.origin.0) + half(gun.size.width),
-        position.y + FixedU64::from_num(gun.origin.1) + half(gun.size.height),
+        corner.x + FixedU64::from_num(gun.origin.0) + half(gun.size.width),
+        corner.y + FixedU64::from_num(gun.origin.1) + half(gun.size.height),
     )
 }
 
@@ -277,7 +279,7 @@ fn muzzle(position: FixedUVec2, gun: &Gun) -> FixedUVec2 {
 /// shot was sent to. A body that is gone is nothing to work.
 fn resolve(world: &World, quarry: AttackTarget) -> Option<AimedAt> {
     match quarry {
-        AttackTarget::Position(cell) => Some(AimedAt::Point(cell)),
+        AttackTarget::Cell(cell) => Some(AimedAt::Cell(cell)),
         AttackTarget::Entity(id) => world
             .resource::<EntityIndex>()
             .interactable(world, id)
@@ -307,7 +309,7 @@ fn bears(world: &World, entity: Entity, gun: &Gun, ordered: AttackTarget) -> boo
         }
         // A bare cell is worked only by a gun whose shots are sent to one; the
         // rest are left free to answer what has a body.
-        AimedAt::Point(_) => {
+        AimedAt::Cell(_) => {
             if !gun.aims_at_cells {
                 return false;
             }

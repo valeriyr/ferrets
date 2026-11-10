@@ -1,13 +1,13 @@
-//! Patches of map a player sees for a while, whatever stands there.
+//! Sight over the map a player keeps for a while, whatever stands there.
 //!
-//! A watch is sight over a patch of map that outlives the cast that made it
-//! and then stops. It belongs to no entity, and counts down the ticks it has
-//! left: one that reaches zero is dropped as it does, so everything the store
-//! holds is in force.
+//! A watch is sight within reach of a patch of cells that outlives the cast
+//! that made it and then stops. It belongs to no entity, and counts down the
+//! ticks it has left: one that reaches zero is dropped as it does, so
+//! everything the store holds is in force.
 
 use bevy_ecs::prelude::*;
 use ferrets_content::detection::Detection;
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, projection};
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
@@ -15,40 +15,36 @@ use crate::{
     simulation_id::SimulationId,
 };
 
-/// One patch of map in a player's sight for a while yet.
+/// Sight within reach of a patch of cells, a player's for a while yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Watch {
-    /// The player whose sight it is; its allies see the patch as they see
-    /// anything that player sees.
+    /// The player whose sight it is; its allies see what it reaches as they
+    /// see anything that player sees.
     pub player: PlayerId,
-    /// What cast it, for a reader that wants to name the source of a patch.
+    /// What cast it, for a reader that wants to name the source of a watch.
     /// It does not decide the watch's life: a watch outlives its caster.
     pub caster: SimulationId,
-    /// The cell it is centered on.
-    pub center: CellPos,
-    /// How far from the center it reaches, in cells.
+    /// The cells it reaches out from: an aimed cell, or the footprint of
+    /// what it was aimed at.
+    pub patch: CellRect,
+    /// How far from the patch it reaches, in cells.
     pub radius: u32,
     /// Ticks it still holds for.
     pub remaining: u32,
-    /// What it does for the player against the concealed entities standing on
-    /// the patch.
+    /// What it does for the player against the concealed entities standing
+    /// within its reach.
     pub detection: Detection,
 }
 
 impl Watch {
-    /// Every cell of the patch, row-major, unclipped to any map.
+    /// Every cell the watch reaches, row-major, unclipped to any map.
     pub fn cells(&self) -> Vec<CellPos> {
-        projection::circle_cells(self.patch(), self.radius)
+        projection::circle_cells(self.patch, self.radius)
     }
 
-    /// Whether the patch holds `cell`.
+    /// Whether the watch reaches `cell`.
     fn holds(&self, cell: CellPos) -> bool {
-        projection::in_circle(cell, self.patch(), self.radius)
-    }
-
-    /// The footprint the radius reaches out from: the center cell alone.
-    fn patch(&self) -> CellRect {
-        CellRect::new(self.center, CellSize::ONE)
+        projection::in_circle(cell, self.patch, self.radius)
     }
 }
 
@@ -90,25 +86,25 @@ pub fn detects(world: &World, player: PlayerId, cell: CellPos, layers: LayerMask
     })
 }
 
-/// Puts a watch in force for `player`, `radius` cells around `center`,
+/// Puts a watch in force for `player`, `radius` cells around `patch`,
 /// holding for `duration` ticks and detecting as `detection` says, cast by
 /// `caster`.
 pub fn open(
     world: &mut World,
     player: PlayerId,
     caster: SimulationId,
-    center: CellPos,
+    patch: CellRect,
     radius: u32,
     duration: u32,
     detection: Detection,
 ) {
     // The tick of the cast ages the watch once before the next recompute
-    // reads it, so the seat is one above the duration: the patch holds
+    // reads it, so the seat is one above the duration: the watch holds
     // through the `duration` ticks after the one it was cast in.
     world.resource_mut::<Watches>().add(Watch {
         player,
         caster,
-        center,
+        patch,
         radius,
         remaining: duration + 1,
         detection,

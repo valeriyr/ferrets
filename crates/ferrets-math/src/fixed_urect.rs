@@ -59,6 +59,16 @@ impl FixedURect {
             && point.y <= self.max.y
     }
 
+    /// Returns `true` if `point` lies inside or on the near edges, the far
+    /// edges excluded: rectangles that share an edge never both hold a point.
+    #[inline]
+    pub fn contains_half_open(self, point: FixedUVec2) -> bool {
+        point.x >= self.min.x
+            && point.x < self.max.x
+            && point.y >= self.min.y
+            && point.y < self.max.y
+    }
+
     /// Returns `true` if the two rectangles overlap (touching edges count).
     #[inline]
     pub fn intersects(self, other: Self) -> bool {

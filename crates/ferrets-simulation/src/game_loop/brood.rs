@@ -138,7 +138,7 @@ fn take_in(world: &mut World, breeder: Entity, terms: &BreederDef, distance: u32
     }
     let owner = entity_def::owner(world, breeder);
     let projection = world.resource::<Map>().projection();
-    let footprint = entity_def::footprint_rect(world, breeder);
+    let footprint = entity_def::location(world, breeder).footprint();
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
         if brood::broodlings(world, breeder).len() >= terms.limit() {
             return;

@@ -35,9 +35,8 @@ use ferrets_content::{
     pool_def::PoolId,
     registry::ContentRegistry,
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_physics::body;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, location::Location};
+use ferrets_math::FixedU64;
 
 use super::{
     buffs,
@@ -311,20 +310,20 @@ struct Start {
     /// The anchor and location a reserving change claims, judged from where
     /// the entity will stand; `None` for a change that does not reserve, an
     /// entity off the grid, or a destination that claims no cells.
-    reservation: Option<(FixedUVec2, LocationDef)>,
+    reservation: Option<(CellPos, LocationDef)>,
 }
 
-/// Judges a change of `entity` into `type_name` without touching anything,
-/// and settles what beginning it needs. Refused when the type declares no
-/// such transition or the destination is nothing to stand as, when the
-/// destination cannot seat what is aboard, when the player's supply has no
-/// room for what the new form costs over the old, when the queue holds work a
-/// soft flush would leave or others sit in the entity's berths, when the
-/// entity does not operate, and when the ground refuses: no cell for an
-/// attached entity to step onto, none under the interim form where it will
-/// stand, or none under the footprint a reserving change would claim, where
-/// something holds it. Ground only own and allied movers that clear stand on
-/// is [`Judged::Clears`], with those movers.
+/// Judges a change of `entity` into `type_name` without touching anything, and
+/// settles what beginning it needs. Refused when the type declares no such
+/// transition or the destination is nothing to stand as, when the destination
+/// cannot seat what is aboard, when the player's supply has no room for what
+/// the new form costs over the old, when the queue holds work a soft flush
+/// would leave or others sit in the entity's berths, when the entity does not
+/// operate, and when the ground refuses: a new form wider or taller than the
+/// map, no cell for an attached entity to step onto, none under the interim
+/// form where it will stand, or none under the footprint a reserving change
+/// would claim, where something holds it. Ground only own and allied movers
+/// that clear stand on is [`Judged::Clears`], with those movers.
 fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refusal> {
     let Some(transition) = transition_into(world, entity, type_name) else {
         return Err(Refusal::Incapable);
@@ -335,6 +334,10 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
     let Some(from) = entity_def::of(world, entity).location else {
         return Err(Refusal::Incapable);
     };
+    // A form wider or taller than the map has no place on it.
+    if !world.resource::<Map>().fits(to.size()) {
+        return Err(Refusal::NoRoom);
+    }
     if !cargo_fits(world, entity, type_id) {
         return Err(Refusal::TargetUnfit);
     }
@@ -378,19 +381,26 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
         }
         None => None,
     };
-    let reserved_at = |standing: FixedUVec2| match via {
-        Some((via_id, worn)) => settled(
-            world,
-            type_id,
-            settled(world, via_id, standing, from, worn),
-            worn,
-            to,
-        ),
-        None => settled(world, type_id, standing, from, to),
+    // The footprint the destination takes, settled from where the entity
+    // stands as the landing settles it.
+    let map = world.resource::<Map>();
+    let reserved_at = |standing: Location| {
+        let landed = match via {
+            Some((via_id, _)) => settled(world, type_id, settled(world, via_id, standing)),
+            None => settled(world, type_id, standing),
+        };
+        landed.footprint()
     };
     let owner = entity_def::owner(world, entity);
     let allowed =
-        |worn_id: EntityTypeId, anchor: FixedUVec2| fields_allow(world, owner, worn_id, anchor);
+        |worn_id: EntityTypeId, anchor: CellPos| fields_allow(world, owner, worn_id, anchor);
+
+    // The size of the form standing through the change, which a stepped-out
+    // body lands as.
+    let stands_size = match via {
+        Some((_, worn)) => worn.size(),
+        None => from.size(),
+    };
 
     // An attached entity holds no cells: before it changes it steps onto the
     // nearest cell to its berth that takes the form standing there through the
@@ -427,10 +437,9 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
         };
         let found = landing::set_down(world, lander, &[], &[entity], |cell, _| match reserved {
             Some(class) => {
-                let anchor = reserved_at(FixedUVec2::from(cell));
-                let placed = LocationComponent::new(anchor, spawn::DEFAULT_FACING);
-                allowed(type_id, anchor)
-                    && ground::can_place_clear_of(world, &placed, to, class, &[], &holders)
+                let footprint = reserved_at(map.location_at(cell, stands_size));
+                allowed(type_id, footprint.origin)
+                    && ground::can_place_clear_of(world, footprint.origin, to, class, &[], &holders)
             }
             None => true,
         });
@@ -439,26 +448,26 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
         None
     };
     // Where the change begins, and what the entity holds there: a body that
-    // steps out holds nothing yet, one off the grid nothing at all, one
-    // standing its own footprint — which the forms it takes may overlap.
-    let standing = step_out.map_or_else(|| entity_def::position(world, entity), FixedUVec2::from);
+    // steps out stands as the form it lands as and holds nothing yet, one off
+    // the grid nothing at all, one standing its own footprint — which the
+    // forms it takes may overlap.
+    let standing = step_out.map_or_else(
+        || entity_def::location(world, entity),
+        |cell| map.location_at(cell, stands_size),
+    );
     let on_grid = step_out.is_some() || entity_def::stands_on_grid(world, entity);
-    let own = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .filter(|_| step_out.is_none() && on_grid);
+    let own = (step_out.is_none() && on_grid).then(|| entity_def::location(world, entity).anchor());
     let own_class = OccupancyClass::of(entity_def::of(world, entity));
     let holder = entity_def::simulation_id(world, entity);
     // The body never stands in its own way, standing or stepped out; the
     // movers whose `marks` are lifted, `bodies`, are set aside with it.
     let takes = |worn_id: EntityTypeId,
                  worn: LocationDef,
-                 anchor: FixedUVec2,
+                 anchor: CellPos,
                  marks: &[GridMark],
                  bodies: &[Entity]| {
-        let placed = LocationComponent::new(anchor, spawn::DEFAULT_FACING);
         let lifted: Vec<GridMark> = own
-            .and_then(|location| entity_def::grid_mark_of(holder, location, from, own_class))
+            .and_then(|anchor| entity_def::grid_mark_of(holder, anchor, from, own_class))
             .into_iter()
             .chain(marks.iter().copied())
             .collect();
@@ -468,7 +477,7 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
         allowed(worn_id, anchor)
             && ground::can_place(
                 world,
-                &placed,
+                anchor,
                 worn,
                 OccupancyClass::of(world.resource::<ContentRegistry>().def(worn_id)),
                 &lifted,
@@ -479,16 +488,15 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
     // be asked off: `false` when what stands there will not move or the
     // ground refuses it whoever does.
     let mut clears: Vec<(Entity, CellRect)> = Vec::new();
-    let mut cleared = |worn_id: EntityTypeId, worn: LocationDef, anchor: FixedUVec2| {
-        let footprint = CellRect::new(body::anchor(anchor), worn.size());
-        match make_way::clearance(
+    let mut cleared =
+        |worn_id: EntityTypeId, worn: LocationDef, footprint: CellRect| match make_way::clearance(
             world,
             owner,
             footprint,
             worn.occupies(),
             OccupancyClass::of(world.resource::<ContentRegistry>().def(worn_id)),
             &[entity],
-            |marks, bodies| takes(worn_id, worn, anchor, marks, bodies),
+            |marks, bodies| takes(worn_id, worn, footprint.origin, marks, bodies),
         ) {
             Clearance::Clear => true,
             Clearance::Clears(bodies) => {
@@ -496,19 +504,18 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
                 true
             }
             Clearance::Held => false,
-        }
-    };
+        };
 
     let reservation = match transition.placement() {
         MorphPlacement::Reserve if on_grid => {
-            let anchor = reserved_at(standing);
-            if !cleared(type_id, to, anchor) {
+            let footprint = reserved_at(standing);
+            if !cleared(type_id, to, footprint) {
                 return Err(Refusal::NoRoom);
             }
             // A form that claims no cells holds none ahead: its ground is
             // judged again where it lands.
             match to.solidity() {
-                Solidity::Solid => Some((anchor, to)),
+                Solidity::Solid => Some((footprint.origin, to)),
                 Solidity::Underfoot | Solidity::Passable => None,
             }
         }
@@ -522,7 +529,7 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
     if let Some((via_id, worn)) = via
         && on_grid
     {
-        let anchor = settled(world, via_id, standing, from, worn);
+        let footprint = settled(world, via_id, standing).footprint();
         let registry = world.resource::<ContentRegistry>();
         let stands = if holds_ground_as(
             registry,
@@ -531,9 +538,9 @@ fn judge(world: &World, entity: Entity, type_name: &str) -> Result<Judged, Refus
             worn,
             OccupancyClass::of(registry.def(via_id)),
         ) {
-            allowed(via_id, anchor)
+            allowed(via_id, footprint.origin)
         } else {
-            cleared(via_id, worn, anchor)
+            cleared(via_id, worn, footprint)
         };
         if !stands {
             return Err(Refusal::NoRoom);
@@ -633,18 +640,12 @@ fn begin(
         !matches!(
             world.resource::<Map>().movement_model(),
             MovementModel::Cell
-        ) || !movement_model::is_mid_crossing(entity_def::position(world, entity)),
+        ) || !movement_model::is_mid_crossing(world, entity),
         "a cell-model mover finishes its crossing before another order starts"
     );
     // The ground ahead is claimed last, around what the entity now marks.
     if let Some((anchor, to)) = reservation {
-        let held = reservation::reserve(
-            world,
-            entity,
-            to.occupies(),
-            body::anchor(anchor),
-            to.size(),
-        );
+        let held = reservation::reserve(world, entity, to.occupies(), anchor, to.size());
         let mut morph = world
             .get_mut::<MorphComponent>(entity)
             .expect("the change was put on above");
@@ -835,7 +836,7 @@ fn land(
     match landing {
         Landing::Reserved | Landing::Revalidated | Landing::Nearby => {
             if let MovementModel::Cell = world.resource::<Map>().movement_model()
-                && movement_model::is_mid_crossing(position)
+                && movement_model::is_mid_crossing(world, entity)
             {
                 return false;
             }
@@ -850,17 +851,18 @@ fn land(
         Landing::Return | Landing::Interim => {}
     }
 
-    // The footprint is anchored at its origin, so a size change recenters it:
-    // growing from the same corner would shift the unit's middle sideways. A
-    // form that stands still then settles onto the cells it holds — or, on a
-    // nearby landing, onto the nearest cells that take it. A body off the
-    // grid holds no cells, and keeps its middle where it sits.
-    let anchor = if entity_def::stands_on_grid(world, entity) {
-        settled(world, type_id, position, from, to)
+    // The middle stays where it is through a change of size, held on the
+    // map. A form that stands still then settles onto the cells it holds —
+    // or, on a nearby landing, onto the nearest cells that take it. A body
+    // off the grid holds no cells, and keeps its middle where it sits.
+    let settled_at = if entity_def::stands_on_grid(world, entity) {
+        settled(world, type_id, entity_def::location(world, entity))
     } else {
-        recentered(position, from, to)
+        world
+            .resource::<Map>()
+            .location_clamped(position, to.size())
     };
-    let Some(anchor) = reoccupy(world, entity, position, anchor, from, to, type_id, landing) else {
+    let Some(settled_at) = reoccupy(world, entity, settled_at, from, to, type_id, landing) else {
         return false;
     };
     // The brood seated on the old form, to be aligned with the new, each with
@@ -880,7 +882,7 @@ fn land(
     // A gateway whose new form leaves its link loses it under the old form.
     spawn::keep_or_leave_link(world, entity, type_id, Lean::Nothing);
 
-    // Identity stays; the type is rewritten under it, and the anchor follows.
+    // Identity stays; the type is rewritten under it, and the position follows.
     let worn = entity_def::type_id(world, entity);
     let base_stats = world
         .resource::<ContentRegistry>()
@@ -890,8 +892,8 @@ fn land(
     if let Some(mut info) = world.entity_mut(entity).get_mut::<EntityInfoComponent>() {
         info.become_type(type_id, type_name);
     }
-    if let Some(mut location) = world.entity_mut(entity).get_mut::<LocationComponent>() {
-        location.position = anchor;
+    if world.entity(entity).contains::<LocationComponent>() {
+        entity_def::set_location(world, entity, settled_at);
     }
 
     // Each pool the entity holds and the maximum it stands under, read before
@@ -1099,7 +1101,7 @@ fn land(
 }
 
 /// Moves the entity's presence on the grid from the old footprint to the new
-/// one, returning the anchor the new footprint took, or `None` with the old
+/// one, returning the position the new form takes, or `None` with the old
 /// footprint untouched when the new one does not fit.
 ///
 /// The decision comes before anything moves: a revalidated landing asks the
@@ -1112,16 +1114,15 @@ fn land(
 fn reoccupy(
     world: &mut World,
     entity: Entity,
-    position: FixedUVec2,
-    anchor: FixedUVec2,
+    settled_at: Location,
     from: LocationDef,
     to: LocationDef,
     type_id: EntityTypeId,
     landing: Landing,
-) -> Option<FixedUVec2> {
+) -> Option<Location> {
     // An entity off the grid holds no cells at all, so there is nothing to move.
     if !entity_def::stands_on_grid(world, entity) {
-        return Some(anchor);
+        return Some(settled_at);
     }
     let old_class = OccupancyClass::of(entity_def::of(world, entity));
     let new_class = OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id));
@@ -1139,32 +1140,27 @@ fn reoccupy(
             new_class,
         );
 
-    let facing = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .map(|location| location.facing)
-        .unwrap_or(spawn::DEFAULT_FACING);
-    let standing = LocationComponent::new(position, facing);
+    let standing = entity_def::location(world, entity).anchor();
+    let settled_anchor = settled_at.anchor();
     let owner = entity_def::owner(world, entity);
     let holder = entity_def::simulation_id(world, entity);
 
-    // Whether the ground takes the new form at `anchor`, looking past the
-    // footprint the entity holds now: its own presence never stands in its
+    // Whether the ground takes the new form at `settled_anchor`, looking past
+    // the footprint the entity holds now: its own presence never stands in its
     // way.
     let ground_takes = |world: &World| {
-        let placed = LocationComponent::new(anchor, facing);
         same_ground
             || ground::can_place(
                 world,
-                &placed,
+                settled_anchor,
                 to,
                 new_class,
-                entity_def::grid_mark_of(holder, &standing, from, old_class).as_slice(),
+                entity_def::grid_mark_of(holder, standing, from, old_class).as_slice(),
                 &[entity],
             )
     };
 
-    let anchor = match landing {
+    let (settled_at, settled_anchor) = match landing {
         // What it held passes to it only where it still stands: a body moved
         // off it during the change, like one going back to the form it
         // started from, is judged where it settles now.
@@ -1172,19 +1168,19 @@ fn reoccupy(
             if !ground_takes(world) {
                 return None;
             }
-            anchor
+            (settled_at, settled_anchor)
         }
-        Landing::Interim => anchor,
+        Landing::Interim => (settled_at, settled_anchor),
         Landing::Revalidated => {
-            if !(fields_allow(world, owner, type_id, anchor) && ground_takes(world)) {
+            if !(fields_allow(world, owner, type_id, settled_anchor) && ground_takes(world)) {
                 return None;
             }
-            anchor
+            (settled_at, settled_anchor)
         }
         Landing::Nearby => {
             // Its own presence never stands in its way: the search looks past
             // the cells it holds now.
-            let standing_mark = entity_def::grid_mark_of(holder, &standing, from, old_class);
+            let standing_mark = entity_def::grid_mark_of(holder, standing, from, old_class);
             let around = entity_def::standing_rect(world, entity);
             let lander = Lander {
                 def: world.resource::<ContentRegistry>().def(type_id),
@@ -1194,30 +1190,26 @@ fn reoccupy(
                 around,
                 toward: around,
             };
-            FixedUVec2::from(landing::set_down(
+            let cell = landing::set_down(
                 world,
                 lander,
                 standing_mark.as_slice(),
                 &[entity],
                 |_, _| true,
-            )?)
+            )?;
+            (world.resource::<Map>().location_at(cell, to.size()), cell)
         }
     };
     if unchanged {
-        return Some(anchor);
+        return Some(settled_at);
     }
 
     spawn::remark(
         world,
-        entity_def::grid_mark_of(holder, &standing, from, old_class),
-        entity_def::grid_mark_of(
-            holder,
-            &LocationComponent::new(anchor, facing),
-            to,
-            new_class,
-        ),
+        entity_def::grid_mark_of(holder, standing, from, old_class),
+        entity_def::grid_mark_of(holder, settled_anchor, to, new_class),
     );
-    Some(anchor)
+    Some(settled_at)
 }
 
 //
@@ -1442,27 +1434,21 @@ fn return_to_origin(
         .def(from)
         .location
         .expect("a form changed from stands somewhere");
-    let anchor = settled(world, from, entity_def::position(world, entity), worn, to);
-    let footprint = CellRect::new(body::anchor(anchor), to.size());
+    let footprint = settled(world, from, entity_def::location(world, entity)).footprint();
     let owner = entity_def::owner(world, entity);
-    let standing = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .expect("a form changing back on the grid stands")
-        .clone();
+    let standing = entity_def::location(world, entity).anchor();
     let holder = entity_def::simulation_id(world, entity);
     let worn_class = OccupancyClass::of(entity_def::of(world, entity));
     let origin_class = OccupancyClass::of(world.resource::<ContentRegistry>().def(from));
     let takes = |world: &World, marks: &[GridMark], bodies: &[Entity]| {
-        let placed = LocationComponent::new(anchor, standing.facing);
-        let lifted: Vec<GridMark> = entity_def::grid_mark_of(holder, &standing, worn, worn_class)
+        let lifted: Vec<GridMark> = entity_def::grid_mark_of(holder, standing, worn, worn_class)
             .into_iter()
             .chain(marks.iter().copied())
             .collect();
         let ignored: Vec<Entity> = std::iter::once(entity)
             .chain(bodies.iter().copied())
             .collect();
-        ground::can_place(world, &placed, to, origin_class, &lifted, &ignored)
+        ground::can_place(world, footprint.origin, to, origin_class, &lifted, &ignored)
     };
     match make_way::shove_off(
         world,
@@ -1581,56 +1567,24 @@ fn cargo_fits(world: &World, entity: Entity, type_id: EntityTypeId) -> bool {
     capacity >= slots
 }
 
-/// The anchor a footprint of the destination's size takes so that its middle
-/// stays where the old one's was.
-fn recentered(position: FixedUVec2, from: LocationDef, to: LocationDef) -> FixedUVec2 {
-    let shift = |value: FixedU64, old: u32, new: u32| {
-        let half = |cells: u32| FixedU64::from_num(cells) / 2;
-        // Saturating, because a footprint recentered at the grid's edge would
-        // otherwise run off it; placement then refuses on its own terms.
-        if new >= old {
-            value.saturating_sub(half(new) - half(old))
-        } else {
-            value + (half(old) - half(new))
-        }
-    };
-    FixedUVec2::new(
-        shift(position.x, from.size().width, to.size().width),
-        shift(position.y, from.size().height, to.size().height),
-    )
+/// Where a form of `type_id` settles from the place `from`: its middle kept,
+/// a half between two cells taking the one nearer `from`'s anchor (see
+/// [`entity_def::settled`]).
+fn settled(world: &World, type_id: EntityTypeId, from: Location) -> Location {
+    let def = world.resource::<ContentRegistry>().def(type_id);
+    entity_def::settled(world, def, from.middle(), from.anchor())
 }
 
-/// Where a form settles: the [`recentered`] anchor, on the lattice when the
-/// destination stands still or the cell model keeps every body on it.
-fn settled(
-    world: &World,
-    type_id: EntityTypeId,
-    position: FixedUVec2,
-    from: LocationDef,
-    to: LocationDef,
-) -> FixedUVec2 {
-    let anchor = recentered(position, from, to);
-    let class = OccupancyClass::of(world.resource::<ContentRegistry>().def(type_id));
-    match (class, world.resource::<Map>().movement_model()) {
-        // A standing footprint holds the cells its anchor rounds to, so a form
-        // left between them would be drawn — and would reach — off its own
-        // cells; a cell-model mover left there would read as mid-crossing.
-        (OccupancyClass::Static, _) | (OccupancyClass::Claim, MovementModel::Cell) => {
-            FixedUVec2::from(body::anchor(anchor))
-        }
-        (OccupancyClass::Claim, MovementModel::Continuous) => anchor,
-    }
-}
-
-/// Whether the fields let `owner` put a body of `type_id` at `anchor`.
+/// Whether the fields let `owner` put a body of `type_id` anchored at
+/// `anchor`.
 fn fields_allow(
     world: &World,
     owner: Option<PlayerId>,
     type_id: EntityTypeId,
-    anchor: FixedUVec2,
+    anchor: CellPos,
 ) -> bool {
     let def = world.resource::<ContentRegistry>().def(type_id);
-    fields::allows_placement(world, owner, def, body::anchor(anchor))
+    fields::allows_placement(world, owner, def, anchor)
 }
 
 /// Writes `value` into `entity`'s `pool` through the checked fold write,

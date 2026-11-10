@@ -1,20 +1,18 @@
 //! A moving thing's physical presence: a circle over the cell grid.
 
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, location::Location,
+};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_nav_grid::layer_mask::LayerMask;
 
-/// One body during a contact-resolution pass: a circle inscribed in the
-/// footprint anchored at its position — where it is rendered — with a radius in
-/// cells.
+/// One body during a contact-resolution pass: a circle around its position —
+/// where it is rendered — with a radius in cells.
 #[derive(Debug, Clone, Copy)]
 pub struct Body {
-    /// The anchor position, in cells with sub-cell precision. The footprint
-    /// extends from here, as a standing entity's does.
-    pub position: FixedUVec2,
-    /// The size of the footprint the body moves as, which places its circle:
-    /// the circle is centered half the size past the anchor.
-    pub size: CellSize,
+    /// The body's place: its middle, in cells with sub-cell precision, is
+    /// the circle's center, and its size the footprint it moves as.
+    pub location: Location,
     /// The circle's radius, in cells.
     pub radius: FixedU64,
     /// How strongly the body resists displacement, relative to what it meets.
@@ -29,67 +27,37 @@ pub struct Body {
     pub heading: Option<FixedVec2>,
 }
 
-/// The center of the circle a footprint of `size` anchored at `position`
-/// inscribes — half the size past the anchor, which is half a cell for the
-/// single-cell case.
-pub fn center(position: FixedUVec2, size: CellSize) -> FixedUVec2 {
-    let half = |extent: u32| FixedU64::from_num(extent) / 2;
-    FixedUVec2::new(
-        position.x + half(size.width),
-        position.y + half(size.height),
-    )
-}
-
-/// The anchor of the footprint a body at `position` currently occupies:
-/// the position rounded to the nearest lattice point, which is the footprint
-/// the eye puts it on and the one a settled body comes to hold exclusively
-/// (see [`contact::separations`](crate::contact::separations)).
-///
-/// Independent of footprint size, because the footprint extends from the
-/// anchor either way — a wider body holds more cells from the same anchor.
-pub fn anchor(position: FixedUVec2) -> CellPos {
-    let half = FixedU64::from_num(0.5);
-    CellPos::from(FixedUVec2::new(position.x + half, position.y + half))
-}
-
-/// The whole cells a body of `size` at `position` stands on for a reach
-/// measure: the hull of the footprint its position floors into and the one its
-/// [`anchor`] rounds to.
+/// The whole cells a body at `location` stands on for a reach measure: the
+/// hull of its footprint ([`Location::footprint`]) and the footprint its
+/// bounds' low corner floors into.
 ///
 /// Both, because a body lying across a cell boundary is standing on the cells
 /// either side of it and neither quantization alone says so. A body a little
 /// past a footprint's corner floors one cell short on one axis while rounding
 /// one cell long on the other, so each single cell reads it as out of reach of
 /// what it is plainly standing beside — and the hull, whose gap on an axis is
-/// the nearer of the two, does not. A body resting on a lattice point floors and
+/// the nearer of the two, does not. A body lined up on its cells floors and
 /// rounds to the same cell, so this is exactly its footprint; one part way
 /// across a boundary — a continuous mover anywhere, a cell mover mid-crossing —
 /// stands on both.
-pub fn standing_rect(position: FixedUVec2, size: CellSize) -> CellRect {
-    CellRect::new(anchor(position), size).union(CellRect::new(CellPos::from(position), size))
+pub fn standing_rect(location: Location) -> CellRect {
+    let floored = CellPos::from(location.bounds().min());
+    location
+        .footprint()
+        .union(CellRect::new(floored, location.size()))
 }
 
-/// The whole cells a footprint of `size` anchored at `position` lies over:
-/// from the cell the position floors into to the one its far edge reaches, a
-/// far edge exactly on a cell boundary not entering the next cell.
-pub fn covered_rect(position: FixedUVec2, size: CellSize) -> CellRect {
-    let span = |low: FixedU64, extent: u32| {
-        let high = low + FixedU64::from_num(extent);
-        let first = low.floor().to_num::<u32>();
-        let last = high.ceil().to_num::<u32>() - 1;
-        (first, last - first + 1)
-    };
-    let (x, width) = span(position.x, size.width);
-    let (y, height) = span(position.y, size.height);
-    CellRect::new(CellPos::new(x, y), CellSize::new(width, height))
+/// The whole cells the bounds of a body at `location` lie over
+/// ([`CellRect::covering`]).
+pub fn covered_rect(location: Location) -> CellRect {
+    CellRect::covering(location.bounds())
 }
 
-/// The whole cells the bounding box of the circle a body of `size` anchored
-/// at `position` moves as spans: every cell its circle overlaps, and a corner
-/// cell the circle misses. Touching a cell boundary exactly does not enter
-/// the next cell; coordinates are unclamped, as [`overlapped_cells`]' are.
-pub fn circle_rect(position: FixedUVec2, size: CellSize, radius: FixedU64) -> CellRect {
-    let center = center(position, size);
+/// The whole cells the bounding box of a circle of `radius` around
+/// `position` spans: every cell the circle overlaps, and a corner cell it
+/// misses. Touching a cell boundary exactly does not enter the next cell;
+/// coordinates are unclamped, as [`overlapped_cells`]' are.
+pub fn circle_rect(position: FixedUVec2, radius: FixedU64) -> CellRect {
     let span = |center: FixedU64| {
         let low = center.saturating_sub(radius);
         let high = center + radius;
@@ -103,30 +71,29 @@ pub fn circle_rect(position: FixedUVec2, size: CellSize, radius: FixedU64) -> Ce
         let last = last.max(first);
         (first, last - first + 1)
     };
-    let (x, width) = span(center.x);
-    let (y, height) = span(center.y);
+    let (x, width) = span(position.x);
+    let (y, height) = span(position.y);
     CellRect::new(CellPos::new(x, y), CellSize::new(width, height))
 }
 
-/// The cells a body of `size` anchored at `position` physically overlaps, in
+/// The cells a circle of `radius` around `position` physically overlaps, in
 /// row-major order: a bounding-box corner cell the circle misses does not
 /// count, and touching a cell boundary exactly does not enter the next
 /// cell. Coordinates are unclamped — a body hanging over the grid's far
 /// edge names cells past it, which readers treat as they see fit (the
 /// terrain checks read them as impassable).
-pub fn overlapped_cells(position: FixedUVec2, size: CellSize, radius: FixedU64) -> Vec<CellPos> {
-    let center = center(position, size);
+pub fn overlapped_cells(position: FixedUVec2, radius: FixedU64) -> Vec<CellPos> {
     // Exact on raw bits: overlap requires the circle to reach past the
     // cell's nearest point strictly.
     let nearest = |value: FixedU64, cell: u32| {
         value.clamp(FixedU64::from_num(cell), FixedU64::from_num(cell + 1))
     };
     let reach = radius.to_bits() as u128;
-    circle_rect(position, size, radius)
+    circle_rect(position, radius)
         .cells()
         .filter(|cell| {
-            let off_x = center.x.abs_diff(nearest(center.x, cell.x)).to_bits() as u128;
-            let off_y = center.y.abs_diff(nearest(center.y, cell.y)).to_bits() as u128;
+            let off_x = position.x.abs_diff(nearest(position.x, cell.x)).to_bits() as u128;
+            let off_y = position.y.abs_diff(nearest(position.y, cell.y)).to_bits() as u128;
             off_x * off_x + off_y * off_y < reach * reach
         })
         .collect()

@@ -16,7 +16,7 @@ use ferrets_content::{
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
-use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
+use ferrets_math::FixedU64;
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     layer_id::LayerId,
@@ -29,7 +29,6 @@ use ferrets_nav_grid::{
     terrain_mask::TerrainMask,
 };
 use ferrets_simulation::{
-    components::location::LocationComponent,
     ground,
     map::Map,
     map_data::{MapData, Placement},
@@ -220,9 +219,9 @@ fn placed_footprint_reaches_hierarchy_after_refresh() {
     // A 3×2 wall splits an 8×2 map once placed, refreshed, and only then.
     let mut map = wall_test_map();
     let wall = shape(CellSize::new(3, 2));
-    let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
+    let anchor = CellPos::new(3, 0);
 
-    map.claim(mark(FIRST, &location, wall, OccupancyClass::Static));
+    map.claim(mark(FIRST, anchor, wall, OccupancyClass::Static));
     assert!(
         map.hierarchy()
             .same_region(CellPos::new(0, 0), ground_shape(), CellPos::new(7, 0)),
@@ -235,7 +234,7 @@ fn placed_footprint_reaches_hierarchy_after_refresh() {
             .same_region(CellPos::new(0, 0), ground_shape(), CellPos::new(7, 0))
     );
 
-    map.unclaim(mark(FIRST, &location, wall, OccupancyClass::Static));
+    map.unclaim(mark(FIRST, anchor, wall, OccupancyClass::Static));
     map.refresh_hierarchy();
     assert!(
         map.hierarchy()
@@ -253,10 +252,10 @@ fn footprint_step_only_writes_cells_that_change_hands() {
     // column is released and the leading one taken, and the overlap is never
     // touched — which is what lets one-claimant-per-cell hold through a crossing.
     let mut map = wall_test_map();
-    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let anchor = CellPos::new(2, 0);
     map.claim(mark(
         FIRST,
-        &location,
+        anchor,
         shape(CellSize::new(2, 2)),
         OccupancyClass::Claim,
     ));
@@ -264,13 +263,13 @@ fn footprint_step_only_writes_cells_that_change_hands() {
     map.move_claim(
         mark(
             FIRST,
-            &location,
+            anchor,
             shape(CellSize::new(2, 2)),
             OccupancyClass::Claim,
         ),
         mark(
             FIRST,
-            &LocationComponent::new(world_pos(3, 0), Facing::SOUTH),
+            CellPos::new(3, 0),
             shape(CellSize::new(2, 2)),
             OccupancyClass::Claim,
         ),
@@ -296,8 +295,8 @@ fn footprint_step_only_writes_cells_that_change_hands() {
 fn footprint_step_is_blocked_by_all_but_its_own_claim() {
     let mut map = wall_test_map();
     let unit = shape(CellSize::new(2, 2));
-    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
-    map.claim(mark(FIRST, &location, unit, OccupancyClass::Claim));
+    let anchor = CellPos::new(2, 0);
+    map.claim(mark(FIRST, anchor, unit, OccupancyClass::Claim));
 
     // Its own claim must not read as a blockage, or a wide mover could never
     // take a step that keeps most of its footprint where it was.
@@ -308,7 +307,7 @@ fn footprint_step_is_blocked_by_all_but_its_own_claim() {
     // A wall on the leading column does block it.
     map.claim(mark(
         FIRST,
-        &LocationComponent::new(world_pos(4, 0), Facing::SOUTH),
+        CellPos::new(4, 0),
         shape(CellSize::new(1, 2)),
         OccupancyClass::Static,
     ));
@@ -332,9 +331,9 @@ fn footprint_step_is_blocked_by_terrain_off_its_shape() {
 fn claimed_footprint_never_reaches_hierarchy() {
     let mut map = wall_test_map();
     let unit = shape(CellSize::new(3, 2));
-    let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
+    let anchor = CellPos::new(3, 0);
 
-    map.claim(mark(FIRST, &location, unit, OccupancyClass::Claim));
+    map.claim(mark(FIRST, anchor, unit, OccupancyClass::Claim));
     map.refresh_hierarchy();
 
     assert!(
@@ -355,7 +354,7 @@ fn continuous_map_rejects_mover_without_radius() {
     registry.register(
         EntityTypeDef::new("runner")
             .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
-            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
+            .with_stat(EntityStatId::SPEED, utils::fixed("0.5"))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
@@ -376,8 +375,8 @@ fn continuous_map_rejects_radius_beyond_footprint() {
         EntityTypeDef::new("runner")
             .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_movement(
-                FixedU64::from_num(0.5),
-                FixedU64::from_num(0.75),
+                utils::fixed("0.5"),
+                utils::fixed("0.75"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -397,8 +396,8 @@ fn continuous_map_accepts_radius_at_half_footprint() {
         EntityTypeDef::new("runner")
             .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_movement(
-                FixedU64::from_num(0.5),
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -420,10 +419,10 @@ fn continuous_map_rejects_mover_without_weight() {
     registry.register(
         EntityTypeDef::new("runner")
             .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
-            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
+            .with_stat(EntityStatId::SPEED, utils::fixed("0.5"))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360))
-            .with_stat(EntityStatId::RADIUS, FixedU64::from_num(0.5)),
+            .with_stat(EntityStatId::RADIUS, utils::fixed("0.5")),
     );
 
     let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
@@ -441,8 +440,8 @@ fn continuous_map_accepts_weightless_mover() {
         EntityTypeDef::new("runner")
             .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
             .with_movement(
-                FixedU64::from_num(0.5),
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
+                utils::fixed("0.5"),
                 FixedU64::ZERO,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -461,7 +460,7 @@ fn cell_map_accepts_mover_without_weight() {
     registry.register(
         EntityTypeDef::new("runner")
             .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
-            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
+            .with_stat(EntityStatId::SPEED, utils::fixed("0.5"))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
@@ -477,7 +476,7 @@ fn cell_map_accepts_mover_without_radius() {
     registry.register(
         EntityTypeDef::new("runner")
             .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
-            .with_stat(EntityStatId::SPEED, FixedU64::from_num(0.5))
+            .with_stat(EntityStatId::SPEED, utils::fixed("0.5"))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
@@ -931,10 +930,10 @@ fn outer_corner_without_its_low_cell_panics() {
 #[test]
 fn claim_lists_its_holder_on_each_cell() {
     let mut map = wall_test_map();
-    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let anchor = CellPos::new(2, 0);
     map.claim(mark(
         SECOND,
-        &location,
+        anchor,
         shape(CellSize::new(2, 1)),
         OccupancyClass::Claim,
     ));
@@ -948,17 +947,17 @@ fn claim_lists_its_holder_on_each_cell() {
 #[should_panic(expected = "holder 2 takes off only a claim it holds")]
 fn unclaiming_another_holders_claim_panics() {
     let mut map = continuous_test_map();
-    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let anchor = CellPos::new(2, 0);
     map.claim(mark(
         FIRST,
-        &location,
+        anchor,
         shape(CellSize::ONE),
         OccupancyClass::Claim,
     ));
 
     map.unclaim(mark(
         SECOND,
-        &location,
+        anchor,
         shape(CellSize::ONE),
         OccupancyClass::Claim,
     ));
@@ -968,27 +967,17 @@ fn unclaiming_another_holders_claim_panics() {
 #[should_panic(expected = "a mark moves within one holder")]
 fn moving_mark_between_holders_panics() {
     let mut map = wall_test_map();
-    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let anchor = CellPos::new(2, 0);
     map.claim(mark(
         FIRST,
-        &location,
+        anchor,
         shape(CellSize::ONE),
         OccupancyClass::Claim,
     ));
 
     map.move_claim(
-        mark(
-            FIRST,
-            &location,
-            shape(CellSize::ONE),
-            OccupancyClass::Claim,
-        ),
-        mark(
-            SECOND,
-            &location,
-            shape(CellSize::ONE),
-            OccupancyClass::Claim,
-        ),
+        mark(FIRST, anchor, shape(CellSize::ONE), OccupancyClass::Claim),
+        mark(SECOND, anchor, shape(CellSize::ONE), OccupancyClass::Claim),
     );
 }
 
@@ -997,20 +986,15 @@ fn mark_moved_onto_another_plane_leaves_one_and_takes_other() {
     // A 1×1 claim at (2, 0) becomes a 2×1 standing footprint there: the claim
     // is let go and the static plane takes both cells.
     let mut map = wall_test_map();
-    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
-    let claim = mark(
-        FIRST,
-        &location,
-        shape(CellSize::ONE),
-        OccupancyClass::Claim,
-    );
+    let anchor = CellPos::new(2, 0);
+    let claim = mark(FIRST, anchor, shape(CellSize::ONE), OccupancyClass::Claim);
     map.claim(claim);
 
     map.move_claim(
         claim,
         mark(
             FIRST,
-            &location,
+            anchor,
             shape(CellSize::new(2, 1)),
             OccupancyClass::Static,
         ),
@@ -1027,17 +1011,17 @@ fn mark_moved_onto_another_plane_leaves_one_and_takes_other() {
 #[should_panic(expected = "a cell-model claim takes a cell no one claims")]
 fn cell_model_claim_over_claimed_cell_panics() {
     let mut map = wall_test_map();
-    let location = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let anchor = CellPos::new(2, 0);
     map.claim(mark(
         FIRST,
-        &location,
+        anchor,
         shape(CellSize::ONE),
         OccupancyClass::Claim,
     ));
 
     map.claim(mark(
         SECOND,
-        &location,
+        anchor,
         shape(CellSize::ONE),
         OccupancyClass::Claim,
     ));
@@ -1052,27 +1036,27 @@ fn statically_free_ground_ignores_claims_and_what_is_lifted() {
     // A 2×1 footprint at (2, 0): a claim on (2, 0) does not hold it; a
     // standing footprint on (3, 0) does, unless it is the one lifted.
     let mut map = wall_test_map();
-    let placed = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let placed = CellPos::new(2, 0);
     let body = shape(CellSize::new(2, 1));
-    let claimer = LocationComponent::new(world_pos(2, 0), Facing::SOUTH);
+    let claimer = CellPos::new(2, 0);
     map.claim(mark(
         FIRST,
-        &claimer,
+        claimer,
         shape(CellSize::ONE),
         OccupancyClass::Claim,
     ));
-    assert!(map.is_statically_free_over_lifted(&placed, body, &[]));
+    assert!(map.is_statically_free_over_lifted(placed, body, &[]));
 
-    let standing = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
+    let standing = CellPos::new(3, 0);
     let wall = mark(
         FIRST,
-        &standing,
+        standing,
         shape(CellSize::ONE),
         OccupancyClass::Static,
     );
     map.claim(wall);
-    assert!(!map.is_statically_free_over_lifted(&placed, body, &[]));
-    assert!(map.is_statically_free_over_lifted(&placed, body, &[wall]));
+    assert!(!map.is_statically_free_over_lifted(placed, body, &[]));
+    assert!(map.is_statically_free_over_lifted(placed, body, &[wall]));
 }
 
 //
@@ -1085,20 +1069,15 @@ fn shared_cell_stays_claimed_until_its_last_body_leaves() {
     // leaves the cell held by the second, which is then taken off.
     let mut map = continuous_test_map();
     let unit = shape(CellSize::ONE);
-    let location = LocationComponent::new(world_pos(3, 0), Facing::SOUTH);
-    let first = mark(FIRST, &location, unit, OccupancyClass::Claim);
-    let second = mark(SECOND, &location, unit, OccupancyClass::Claim);
+    let anchor = CellPos::new(3, 0);
+    let first = mark(FIRST, anchor, unit, OccupancyClass::Claim);
+    let second = mark(SECOND, anchor, unit, OccupancyClass::Claim);
     map.claim(first);
     map.claim(second);
 
     map.move_claim(
         first,
-        mark(
-            FIRST,
-            &LocationComponent::new(world_pos(4, 0), Facing::SOUTH),
-            unit,
-            OccupancyClass::Claim,
-        ),
+        mark(FIRST, CellPos::new(4, 0), unit, OccupancyClass::Claim),
     );
 
     assert_eq!(
@@ -1140,8 +1119,8 @@ fn static_write_lands_under_mover_claim() {
     // a legal first write, not a double-block.
     let mut map = wall_test_map();
     let unit = shape(CellSize::ONE);
-    let location = LocationComponent::new(world_pos(3, 1), Facing::SOUTH);
-    map.claim(mark(FIRST, &location, unit, OccupancyClass::Claim));
+    let anchor = CellPos::new(3, 1);
+    map.claim(mark(FIRST, anchor, unit, OccupancyClass::Claim));
 
     let cell = CellPos::new(3, 1);
     map.set_static_occupied(GROUND_LAYER, cell, true);
@@ -1196,17 +1175,17 @@ const FIRST: SimulationId = SimulationId(1);
 /// A second holder, for a cell two bodies share or a claim another holds.
 const SECOND: SimulationId = SimulationId(2);
 
-/// What `holder`'s solid body of `shape` standing at `location` marks on the
+/// What `holder`'s solid body of `shape` anchored at `anchor` marks on the
 /// plane `class` selects.
 fn mark(
     holder: SimulationId,
-    location: &LocationComponent,
+    anchor: CellPos,
     shape: MoverShape,
     class: OccupancyClass,
 ) -> GridMark {
     GridMark {
         holder,
-        footprint: CellRect::new(CellPos::from(location.position), shape.size),
+        footprint: CellRect::new(anchor, shape.size),
         layers: shape.layers,
         class,
     }
@@ -1294,10 +1273,6 @@ fn continuous_test_map() -> Map {
         grid(8, 2),
         vec![],
     )
-}
-
-fn world_pos(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
 }
 
 /// A [`land_registry`] that also knows the deep-water terrain.

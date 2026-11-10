@@ -53,7 +53,7 @@ fn placing_entity_announces_spawn() {
     let (_, soldier) = spawn::spawn_placed(
         world,
         "soldier",
-        utils::pos(4, 4),
+        spawn::At::Cell(utils::cell(4, 4)),
         Some(0),
         FieldReach::Initial,
         &[],
@@ -79,8 +79,8 @@ fn destroying_entity_announces_death_with_its_cause() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (entity, soldier) =
-        utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, killer) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
+        utils::create_entity(world, "soldier", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, killer) = utils::create_entity(world, "soldier", utils::cell(6, 4), Some(1)).unwrap();
     world.resource_mut::<EventRecord>().clear();
 
     utils::despawn_killed(world, entity, killer, Some(1));
@@ -103,7 +103,7 @@ fn record_holds_only_current_tick() {
     spawn::spawn_placed(
         app.world_mut(),
         "soldier",
-        utils::pos(4, 4),
+        spawn::At::Cell(utils::cell(4, 4)),
         Some(0),
         FieldReach::Initial,
         &[],
@@ -131,7 +131,7 @@ fn training_unit_counts_toward_production() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (_, barracks) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 30);
 
     utils::push_command(
@@ -161,7 +161,7 @@ fn placed_entity_does_not_count_toward_production() {
     spawn::spawn_placed(
         app.world_mut(),
         "soldier",
-        utils::pos(4, 4),
+        spawn::At::Cell(utils::cell(4, 4)),
         Some(0),
         FieldReach::Initial,
         &[],
@@ -185,17 +185,17 @@ fn entity_killed_same_tick_still_counts_as_produced() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (_, trainer) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     let (entity, _) = spawn::spawn_trained(
         world,
         "soldier",
-        utils::pos(4, 4),
+        spawn::At::Cell(utils::cell(4, 4)),
         0,
         FieldReach::Initial,
         trainer,
     )
     .unwrap();
-    let (_, killer) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
+    let (_, killer) = utils::create_entity(world, "soldier", utils::cell(6, 4), Some(1)).unwrap();
     utils::despawn_killed(world, entity, killer, Some(1));
     utils::run_ticks(&mut app, 1);
 
@@ -245,7 +245,7 @@ fn finished_building_counts_toward_production_naming_finisher() {
         PlayerCommand::BuildEntity {
             builder: worker,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -282,7 +282,7 @@ fn canceled_site_does_not_count_toward_production() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -310,8 +310,8 @@ fn canceled_site_does_not_count_toward_production() {
 fn killed_entity_counts_as_loss_for_owner_and_kill_for_attacker() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, killer) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
+    let (entity, _) = utils::create_entity(world, "soldier", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, killer) = utils::create_entity(world, "soldier", utils::cell(6, 4), Some(1)).unwrap();
 
     utils::despawn_killed(world, entity, killer, Some(1));
     utils::run_ticks(&mut app, 1);
@@ -326,7 +326,7 @@ fn killed_entity_counts_as_loss_for_owner_and_kill_for_attacker() {
 fn canceled_entity_is_neither_loss_nor_kill() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
+    let (entity, _) = utils::create_entity(world, "soldier", utils::cell(4, 4), Some(0)).unwrap();
 
     spawn::despawn_entity(world, entity, DeathCause::Canceled);
     utils::run_ticks(&mut app, 1);
@@ -341,7 +341,7 @@ fn canceled_entity_is_neither_loss_nor_kill() {
 fn decayed_entity_is_loss_nobody_is_credited_with() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
+    let (entity, _) = utils::create_entity(world, "soldier", utils::cell(4, 4), Some(0)).unwrap();
 
     // Withering off the ground that sustained it, burned down under its
     // line, or standing with no primary on terms that raze it: the owner
@@ -359,8 +359,8 @@ fn decayed_entity_is_loss_nobody_is_credited_with() {
 fn captured_entity_moves_no_tally() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, taker) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
+    let (entity, _) = utils::create_entity(world, "soldier", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, taker) = utils::create_entity(world, "soldier", utils::cell(6, 4), Some(1)).unwrap();
 
     spawn::change_owner(world, entity, 1, taker, Lean::Nothing);
     utils::run_ticks(&mut app, 1);
@@ -379,8 +379,8 @@ fn captured_entity_moves_no_tally() {
 fn killing_own_entity_counts_loss_without_crediting_kill() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, own_side) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(0)).unwrap();
+    let (entity, _) = utils::create_entity(world, "soldier", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, own_side) = utils::create_entity(world, "soldier", utils::cell(6, 4), Some(0)).unwrap();
 
     utils::despawn_killed(world, entity, own_side, Some(0));
     utils::run_ticks(&mut app, 1);
@@ -399,8 +399,8 @@ fn killing_own_entity_counts_loss_without_crediting_kill() {
 fn allied_fire_counts_loss_without_kill_credit() {
     let mut app = utils::transport_app();
     let world = app.world_mut();
-    let (entity, _) = utils::create_entity(world, "rifleman", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, ally) = utils::create_entity(world, "rifleman", utils::pos(6, 4), Some(1)).unwrap();
+    let (entity, _) = utils::create_entity(world, "rifleman", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, ally) = utils::create_entity(world, "rifleman", utils::cell(6, 4), Some(1)).unwrap();
 
     utils::despawn_killed(world, entity, ally, Some(1));
     utils::run_ticks(&mut app, 1);
@@ -419,8 +419,8 @@ fn allied_fire_counts_loss_without_kill_credit() {
 fn allied_damage_is_taken_but_not_dealt() {
     let mut app = utils::transport_app();
     let world = app.world_mut();
-    let (entity, _) = utils::create_entity(world, "rifleman", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, ally) = utils::create_entity(world, "rifleman", utils::pos(6, 4), Some(1)).unwrap();
+    let (entity, _) = utils::create_entity(world, "rifleman", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, ally) = utils::create_entity(world, "rifleman", utils::cell(6, 4), Some(1)).unwrap();
 
     damage::apply(world, ally, entity, FixedU64::from_num(10), Slain::Remains);
     utils::run_ticks(&mut app, 1);
@@ -439,8 +439,8 @@ fn dying_attacker_keeps_kill_and_damage_credit() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (attacker_entity, attacker) =
-        utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
-    let (victim, _) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
+        utils::create_entity(world, "soldier", utils::cell(4, 4), Some(0)).unwrap();
+    let (victim, _) = utils::create_entity(world, "soldier", utils::cell(6, 4), Some(1)).unwrap();
 
     // The attacker starts dying, then a shot it already fired lands.
     spawn::despawn_entity(world, attacker_entity, DeathCause::Canceled);
@@ -593,7 +593,7 @@ fn weapon_damage_counts_for_dealer_and_taker() {
     let mut app = utils::combat_app();
     let (_, soldier) = utils::create_owned(&mut app, "soldier", 4, 6, 0);
     let (_, dummy) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(5, 6), Some(1)).unwrap();
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(5, 6), Some(1)).unwrap();
 
     utils::attack(&mut app, soldier, dummy);
     utils::run_ticks(&mut app, 30);
@@ -611,8 +611,8 @@ fn weapon_damage_counts_for_dealer_and_taker() {
 fn skill_damage_counts_like_weapon_hit() {
     let (mut app, smite) = enemy_skill_app();
     let world = app.world_mut();
-    let (_, mage) = utils::create_entity(world, "mage", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, victim) = utils::create_entity(world, "victim", utils::pos(5, 4), Some(1)).unwrap();
+    let (_, mage) = utils::create_entity(world, "mage", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, victim) = utils::create_entity(world, "victim", utils::cell(5, 4), Some(1)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -642,7 +642,7 @@ fn training_charges_count_toward_spending() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (_, barracks) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 30);
 
     utils::push_command(
@@ -690,7 +690,7 @@ fn canceled_build_records_refund_beside_charge() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -730,7 +730,7 @@ fn charge_and_refund_name_same_reason() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -756,7 +756,7 @@ fn banked_load_counts_toward_gathering() {
     let mut app = utils::orders_app();
     let (_, worker) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -789,7 +789,7 @@ fn depleted_source_is_neither_loss_nor_kill() {
     utils::record_announcements(&mut app);
     let (_, worker) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -862,8 +862,8 @@ fn cast_paying_no_resources_announces_no_spend() {
     let (mut app, smite) = enemy_skill_app();
     utils::record_announcements(&mut app);
     let world = app.world_mut();
-    let (_, mage) = utils::create_entity(world, "mage", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, victim) = utils::create_entity(world, "victim", utils::pos(5, 4), Some(1)).unwrap();
+    let (_, mage) = utils::create_entity(world, "mage", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, victim) = utils::create_entity(world, "victim", utils::cell(5, 4), Some(1)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -921,8 +921,8 @@ fn game_slot_sees_tick_already_tallied_and_not_yet_retired() {
     app.add_systems(FixedLast, observe_tick.in_set(GameSet));
 
     let world = app.world_mut();
-    let (entity, _) = utils::create_entity(world, "soldier", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, killer) = utils::create_entity(world, "soldier", utils::pos(6, 4), Some(1)).unwrap();
+    let (entity, _) = utils::create_entity(world, "soldier", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, killer) = utils::create_entity(world, "soldier", utils::cell(6, 4), Some(1)).unwrap();
     utils::despawn_killed(world, entity, killer, Some(1));
 
     utils::run_ticks(&mut app, 1);
@@ -946,8 +946,8 @@ fn game_slot_sees_tick_already_tallied_and_not_yet_retired() {
 fn skill_cast_names_entity_it_was_applied_to() {
     let (mut app, smite) = enemy_skill_app();
     let world = app.world_mut();
-    let (_, mage) = utils::create_entity(world, "mage", utils::pos(4, 4), Some(0)).unwrap();
-    let (_, victim) = utils::create_entity(world, "victim", utils::pos(5, 4), Some(1)).unwrap();
+    let (_, mage) = utils::create_entity(world, "mage", utils::cell(4, 4), Some(0)).unwrap();
+    let (_, victim) = utils::create_entity(world, "victim", utils::cell(5, 4), Some(1)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -974,14 +974,14 @@ fn skill_cast_names_entity_it_was_applied_to() {
 fn cast_on_ground_names_cell_it_landed_on() {
     let (mut app, sweep) = ground_skill_app();
     let world = app.world_mut();
-    let (_, sentry) = utils::create_entity(world, "sentry", utils::pos(4, 4), Some(0)).unwrap();
+    let (_, sentry) = utils::create_entity(world, "sentry", utils::cell(4, 4), Some(0)).unwrap();
 
     utils::push_command(
         &mut app,
         PlayerCommand::UseSkill {
             skill: sweep,
             caster: SkillCasterRef::Entity(sentry),
-            target: Some(SkillTarget::Position(utils::pos(7, 7))),
+            target: Some(SkillTarget::Cell(utils::cell(7, 7))),
         },
     );
 
@@ -990,7 +990,7 @@ fn cast_on_ground_names_cell_it_landed_on() {
 
     assert_eq!(
         app.world().resource::<Announced>().casts(),
-        vec![(sentry, SkillTarget::Position(utils::pos(7, 7)))],
+        vec![(sentry, SkillTarget::Cell(utils::cell(7, 7)))],
         "a cast that lands on ground names the cell, not the caster standing elsewhere"
     );
 }
@@ -1023,8 +1023,8 @@ fn remains_name_entity_they_are_left_by() {
 
     let world = app.world_mut();
     let (dummy, dummy_id) =
-        utils::create_entity(world, "dummy", utils::pos(6, 6), Some(1)).unwrap();
-    let (_, killer) = utils::create_entity(world, "soldier", utils::pos(4, 6), Some(0)).unwrap();
+        utils::create_entity(world, "dummy", utils::cell(6, 6), Some(1)).unwrap();
+    let (_, killer) = utils::create_entity(world, "soldier", utils::cell(4, 6), Some(0)).unwrap();
     utils::despawn_killed(world, dummy, killer, Some(0));
     // Past the dying phase, which is when the remains are left.
     utils::run_ticks(&mut app, 8);
@@ -1183,7 +1183,7 @@ fn ground_skill_app() -> (App, ferrets_content::skills::SkillId) {
                     costs: Vec::new(),
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Watch {
-                        at: Spot::Cell {
+                        at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
                         radius: Quantity::Constant(2),

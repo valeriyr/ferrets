@@ -23,7 +23,7 @@ use bevy::{
     window::PrimaryWindow,
 };
 use ferrets_content::registry::ContentRegistry;
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_simulation::{
     command::SkillTarget,
@@ -35,7 +35,7 @@ use ferrets_simulation::{
     visibility::VisibilityGrid,
 };
 
-use crate::render::{self, FogReveal, ObserverPerspective, world_center};
+use crate::render::{self, FogReveal, ObserverPerspective};
 
 /// Samples per second every generated cue is built at.
 const SAMPLE_RATE: u32 = 44_100;
@@ -506,7 +506,7 @@ fn play_at(
     if !visible {
         return Placed::OutOfSight;
     }
-    let at = world_center(position, CellSize::ONE);
+    let at = render::world_point(position);
     if !is_audible(at, middle, view_width) {
         return Placed::OutOfEarshot;
     }
@@ -624,7 +624,7 @@ fn cues_for(
             let from = at(*caster).filter(|_| made_out(*caster));
             let onto = match target {
                 SkillTarget::Entity(target) => at(*target).filter(|_| made_out(*target)),
-                SkillTarget::Position(position) => Some(*position).filter(|_| made_out(*caster)),
+                SkillTarget::Cell(cell) => Some(cell.middle()).filter(|_| made_out(*caster)),
             };
             out.extend(from.map(|place| (Cue::Cast, Some(place))));
             if onto != from {

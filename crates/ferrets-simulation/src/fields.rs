@@ -407,7 +407,7 @@ pub fn entity_modifiers_of(
     let grid = world.resource::<FieldGrid>();
     let session = world.resource::<GameSession>();
     let player = entity_def::owner(world, entity);
-    let footprint = entity_def::occupied_rect_of(world, def, entity);
+    let footprint = entity_def::footprint_as(world, entity, def);
     let holds =
         |requirement: &Requirement| requirements::met_by(world, player, entity, requirement);
     def.field_effects
@@ -473,7 +473,7 @@ fn holds_effect(
     let grid = world.resource::<FieldGrid>();
     let session = world.resource::<GameSession>();
     let player = entity_def::owner(world, entity);
-    let footprint = entity_def::occupied_rect_of(world, def, entity);
+    let footprint = entity_def::footprint_as(world, entity, def);
     let holds =
         |requirement: &Requirement| requirements::met_by(world, player, entity, requirement);
     candidates.any(|field_effect| {

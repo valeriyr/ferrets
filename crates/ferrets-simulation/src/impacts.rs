@@ -1,8 +1,8 @@
 //! Damage released by a weapon that has not landed yet.
 
 use bevy_ecs::prelude::*;
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
+use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
 use crate::{entity_def, simulation_id::SimulationId};
 use ferrets_content::{
@@ -45,8 +45,8 @@ impl FiredFrom {
 pub(crate) enum AimedAt {
     /// A body: measured, faced and hit by the cells it stands on.
     Body(Entity),
-    /// A bare point on the map.
-    Point(FixedUVec2),
+    /// A bare cell on the map.
+    Cell(CellPos),
 }
 
 impl AimedAt {
@@ -54,24 +54,25 @@ impl AimedAt {
     pub(crate) fn body(self) -> Option<Entity> {
         match self {
             AimedAt::Body(body) => Some(body),
-            AimedAt::Point(_) => None,
+            AimedAt::Cell(_) => None,
         }
     }
 
     /// The cells an attack on it is measured to: every cell the body stands
-    /// on, or the cell the point lies in.
+    /// on, or the cell itself.
     pub(crate) fn reached(self, world: &World) -> CellRect {
         match self {
             AimedAt::Body(body) => entity_def::standing_rect(world, body),
-            AimedAt::Point(point) => CellRect::new(CellPos::from(point), CellSize::ONE),
+            AimedAt::Cell(cell) => CellRect::cell(cell),
         }
     }
 
-    /// Where it lies and the room it takes, as a weapon comes round on it.
-    pub(crate) fn footprint(self, world: &World) -> (FixedUVec2, CellSize) {
+    /// The rectangle a weapon comes round on: a body's bounds, or the cell's
+    /// bounds.
+    pub(crate) fn bounds(self, world: &World) -> FixedURect {
         match self {
-            AimedAt::Body(body) => entity_def::footprint(world, body),
-            AimedAt::Point(point) => (point, CellSize::ONE),
+            AimedAt::Body(body) => entity_def::location(world, body).bounds(),
+            AimedAt::Cell(cell) => CellRect::cell(cell).bounds(),
         }
     }
 }

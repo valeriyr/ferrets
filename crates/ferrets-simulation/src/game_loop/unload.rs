@@ -2,8 +2,7 @@
 //! Called by [`super::orders`] as part of the shared order lifecycle.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 
 use super::{
     chase::{self, Destination},
@@ -111,12 +110,11 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     if let Some(at) = unload.at
         && entity_def::of(world, entity).can_move()
     {
-        match chase::advance_to_point(
+        match chase::advance_to_rect(
             &mut unload.last_chase,
             world,
             entity,
-            at,
-            CellSize::ONE,
+            CellRect::cell(at),
             entity_def::effective_stat_u32(world, entity, EntityStatId::UNLOAD_RANGE),
         ) {
             // The passengers can finish the trip on foot; the hold opens here.
@@ -203,7 +201,7 @@ fn let_out(
     world: &mut World,
     holder: Entity,
     body: Entity,
-    at: Option<FixedUVec2>,
+    at: Option<CellPos>,
     lean: Lean,
 ) -> SetDown {
     match &entity_def::of(world, holder).holder {
@@ -215,20 +213,15 @@ fn let_out(
 
 /// Sends a freshly unloaded passenger on its way: to the order's destination if
 /// it named one, otherwise wherever the holder's rally point says.
-fn dispatch(world: &mut World, holder: Entity, passenger: Entity, at: Option<FixedUVec2>) {
+fn dispatch(world: &mut World, holder: Entity, passenger: Entity, at: Option<CellPos>) {
     match at {
         // A holder sends on only its own owner's units.
         Some(_) if !entity_def::same_owner(world, holder, passenger) => {}
-        Some(target) => {
+        Some(cell) => {
+            // Walked on as a move to the cell is: its middle on the cell's.
+            let walk = orders::move_to_point(cell.middle());
             if let Some(mut queue) = world.entity_mut(passenger).get_mut::<OrderQueueComponent>() {
-                queue.push(
-                    Order::Move {
-                        target,
-                        size: CellSize::ONE,
-                        range: 0,
-                    },
-                    None,
-                );
+                queue.push(walk, None);
             }
         }
         None => rally::mark_rally_due(world, holder, passenger),
@@ -238,20 +231,20 @@ fn dispatch(world: &mut World, holder: Entity, passenger: Entity, at: Option<Fix
 /// Which side of `holder` a passenger it lets out steps onto: toward `at`,
 /// else toward the holder's rally point — an entity there only while the
 /// holder's owner makes it out — else none in particular.
-fn exit_lean(world: &World, holder: Entity, at: Option<FixedUVec2>) -> Lean {
-    let toward_cell =
-        |position: FixedUVec2| Lean::Toward(CellRect::new(CellPos::from(position), CellSize::ONE));
+fn exit_lean(world: &World, holder: Entity, at: Option<CellPos>) -> Lean {
     match at {
-        Some(at) => toward_cell(at),
+        Some(at) => Lean::Toward(CellRect::cell(at)),
         None => match rally::target_of(world, holder) {
-            Some(RallyTarget::Position(position)) => toward_cell(position),
+            Some(RallyTarget::Position(position)) => {
+                Lean::Toward(CellRect::cell(CellPos::from(position)))
+            }
             Some(RallyTarget::Entity(id)) => {
                 let target = match entity_def::owner(world, holder) {
                     Some(owner) => visibility::interactable_to(world, owner, id),
                     None => world.resource::<EntityIndex>().interactable(world, id),
                 };
                 match target {
-                    Some(target) => Lean::Toward(entity_def::footprint_rect(world, target)),
+                    Some(target) => Lean::Toward(entity_def::location(world, target).footprint()),
                     None => Lean::Nothing,
                 }
             }

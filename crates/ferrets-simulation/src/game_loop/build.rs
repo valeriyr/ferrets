@@ -9,7 +9,6 @@ use bevy_ecs::{
     world::World,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
-use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use super::{
@@ -40,6 +39,7 @@ use crate::{
     fields, ground,
     landing::{self, Bound, ComesFrom, Lander},
     make_way::{self, Clearance},
+    map::Map,
     occupancy::{GridMark, OccupancyClass},
     order::{BuildTask, Order},
     overbuild::{self, Cover},
@@ -47,7 +47,7 @@ use crate::{
     resources::{self, PlayerResources},
     session::player_id::PlayerId,
     simulation_id::SimulationId,
-    spawn::{self, FieldReach},
+    spawn::{self, At, FieldReach},
     supply, tunnels,
 };
 use ferrets_content::{
@@ -65,10 +65,7 @@ use ferrets_content::{
 /// walks reaches it.
 pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Refusal> {
     match order.build_task().expect("called with a Build order") {
-        BuildTask::Found {
-            type_name,
-            position,
-        } => can_found(world, entity, type_name, *position),
+        BuildTask::Found { type_name, anchor } => can_found(world, entity, type_name, *anchor),
         BuildTask::Join { site } => can_join(world, entity, *site).map(|_| ()),
     }
 }
@@ -170,13 +167,9 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     };
     match (build_component.stage, task) {
         (BuildStage::Raising(site), _) => construct(world, entity, build_component, site),
-        (
-            BuildStage::Founding(_),
-            BuildTask::Found {
-                type_name,
-                position,
-            },
-        ) => found(world, entity, build_component, &type_name, position),
+        (BuildStage::Founding(_), BuildTask::Found { type_name, anchor }) => {
+            found(world, entity, build_component, &type_name, anchor)
+        }
         (BuildStage::Joining, BuildTask::Join { site }) => {
             join(world, entity, build_component, site)
         }
@@ -191,17 +184,17 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
 // ─── Founding, joining and building ─────────────────────────────────────────
 //
 
-/// One tick of founding a site of `type_name` at `position`: walk within build
-/// range of it, then join a matching own site already under way there, or pay
-/// the price and raise one — a builder in the open in the site's way first
-/// walking off it, own and allied movers on the ground asked off and waited
-/// for (see [`make_way::wait_off`]).
+/// One tick of founding a site of `type_name` anchored at `anchor`: walk within
+/// build range of it, then join a matching own site already under way there, or
+/// pay the price and raise one — a builder in the open in the site's way first
+/// walking off it, own and allied movers on the ground asked off and waited for
+/// (see [`make_way::wait_off`]).
 fn found(
     world: &mut World,
     entity: Entity,
     mut build_component: BuildComponent,
     type_name: &str,
-    position: FixedUVec2,
+    anchor: CellPos,
 ) -> Processing {
     let (building_location_def, price) = {
         let registry = world.resource::<ContentRegistry>();
@@ -213,21 +206,19 @@ fn found(
             type_def.price.clone(),
         )
     };
-    let site_anchor = CellPos::from(position);
     let size = building_location_def.size();
 
     // A builder in the open in the site's way already reaches it, and is
     // walked off it only once the site is judged.
-    let site = CellRect::new(site_anchor, size);
-    let in_way = in_the_way(world, entity, type_name, position);
+    let site = CellRect::new(anchor, size);
+    let in_way = in_the_way(world, entity, type_name, anchor);
     match in_way {
         InTheWay::Clear => {
-            match chase::advance_to_point(
+            match chase::advance_to_rect(
                 &mut build_component.last_chase,
                 world,
                 entity,
-                position,
-                size,
+                site,
                 entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE),
             ) {
                 Destination::OutOfReach => return Processing::state(OrderState::Finished),
@@ -246,13 +237,13 @@ fn found(
         InTheWay::InItsWay => {}
     }
 
-    chase::face(world, entity, position, size);
+    chase::face(world, entity, site.bounds());
 
     let owner = entity_def::owner(world, entity);
 
     // Work already under way here is joined rather than started again: the site
     // holds the cells, so a second placement could only ever fail.
-    if let Some(under_way) = site_under_way_at(world, type_name, site_anchor, owner) {
+    if let Some(under_way) = site_under_way_at(world, type_name, anchor, owner) {
         return take_up(world, entity, build_component, under_way);
     }
 
@@ -284,8 +275,8 @@ fn found(
             .resource::<ContentRegistry>()
             .entity(type_name)
             .expect("type checked in prepare");
-        if !fields::allows_placement(world, owner, def, site_anchor)
-            || !annex::allows_placement(world, entity, def, site_anchor)
+        if !fields::allows_placement(world, owner, def, anchor)
+            || !annex::allows_placement(world, entity, def, anchor)
         {
             return Processing::state(OrderState::Finished);
         }
@@ -323,7 +314,7 @@ fn found(
             let ignored: Vec<Entity> = std::iter::once(entity)
                 .chain(bodies.iter().copied())
                 .collect();
-            ground_takes_site(world, type_name, position, cover, &lifted, &ignored)
+            ground_takes_site(world, type_name, anchor, cover, &lifted, &ignored)
         },
     );
     match clearance {
@@ -367,11 +358,11 @@ fn found(
             let Some(off) = cell_off_site(world, entity, site) else {
                 return Processing::state(OrderState::Finished);
             };
-            return match chase::advance_onto_point(
+            return match chase::advance_onto_cell(
                 &mut build_component.last_chase,
                 world,
                 entity,
-                FixedUVec2::from(off),
+                off,
             ) {
                 Destination::OutOfReach => Processing::state(OrderState::Finished),
                 Destination::Walk(move_order) => {
@@ -413,7 +404,7 @@ fn found(
     let (building, building_sim_id) = spawn::spawn_founded(
         world,
         type_name,
-        position,
+        At::Cell(anchor),
         owner,
         FieldReach::Initial,
         builder,
@@ -567,13 +558,13 @@ fn construct(
     Processing::state(OrderState::InProcessing)
 }
 
-/// Whether `entity` may found a site of `type_name` at `position` (see
+/// Whether `entity` may found a site of `type_name` anchored at `anchor` (see
 /// [`can_start`]).
 fn can_found(
     world: &World,
     entity: Entity,
     type_name: &str,
-    position: FixedUVec2,
+    anchor: CellPos,
 ) -> Result<(), Refusal> {
     if !entity_def::of(world, entity)
         .builder
@@ -599,10 +590,10 @@ fn can_found(
     if entity_def::of(world, entity).can_move() {
         return Ok(());
     }
-    if !reaches_site(world, entity, type_name, position) {
+    if !reaches_site(world, entity, type_name, anchor) {
         return Err(Refusal::OutOfReach);
     }
-    match in_the_way(world, entity, type_name, position) {
+    match in_the_way(world, entity, type_name, anchor) {
         InTheWay::InItsWay => Err(Refusal::NoRoom),
         InTheWay::Clear => Ok(()),
     }
@@ -690,17 +681,23 @@ fn halt_site(world: &mut World, site: SimulationId) {
     }
 }
 
-/// The unfinished site of `type_name` standing at `origin` for `owner`, if there is
-/// one.
+/// The unfinished site of `type_name` anchored at `anchor` for `owner`, if
+/// there is one.
 ///
 /// A site that has started dying is not one: joining it would mean attaching to
 /// something already on its way off the map.
 fn site_under_way_at(
     world: &mut World,
     type_name: &str,
-    origin: CellPos,
+    anchor: CellPos,
     owner: Option<PlayerId>,
 ) -> Option<SimulationId> {
+    let size = world
+        .resource::<ContentRegistry>()
+        .entity(type_name)
+        .and_then(|def| def.location)
+        .expect("a site's type stands somewhere")
+        .size();
     let mut query = world.query_filtered::<(
         &EntityInfoComponent,
         &LocationComponent,
@@ -711,11 +708,12 @@ fn site_under_way_at(
     // a footprint that claims no cells can sit on top of another, so more than one
     // site can answer to a cell, and query order is not something to settle a
     // shared outcome on.
+    let map = world.resource::<Map>();
     query
         .iter(world)
         .filter(|(info, location, site_owner)| {
             info.type_name() == type_name
-                && CellPos::from(location.position) == origin
+                && map.location(location.position, size).anchor() == anchor
                 && site_owner.map(|o| o.player()) == owner
         })
         .map(|(info, _, _)| info.id())
@@ -735,12 +733,12 @@ enum InTheWay {
 }
 
 /// Whether `entity`, a builder, stands in the way of a site of `type_name` at
-/// `position`: one staying in the open while it works, lying over a cell of
+/// `anchor`: one staying in the open while it works, lying over a cell of
 /// the site — measured as a placement on the site's plane measures it (see
 /// [`entity_def::measured_rect`]) — on a layer the site takes, where the
 /// ground — any source under the site set aside — refuses the site with the
 /// builder counted and takes it with the builder set aside.
-fn in_the_way(world: &World, entity: Entity, type_name: &str, position: FixedUVec2) -> InTheWay {
+fn in_the_way(world: &World, entity: Entity, type_name: &str, anchor: CellPos) -> InTheWay {
     match attendance(world, entity) {
         BuilderAttendance::Crew(WorkPresence::Hidden { .. } | WorkPresence::Attached(_))
         | BuilderAttendance::Consumed => return InTheWay::Clear,
@@ -751,7 +749,7 @@ fn in_the_way(world: &World, entity: Entity, type_name: &str, position: FixedUVe
         .entity(type_name)
         .expect("the ordered type is registered");
     let site_def = def.location.expect("validated content defines a location");
-    let site = CellRect::new(CellPos::from(position), site_def.size());
+    let site = CellRect::new(anchor, site_def.size());
     let builder_def = entity_def::of(world, entity)
         .location
         .expect("a builder stands somewhere");
@@ -769,23 +767,23 @@ fn in_the_way(world: &World, entity: Entity, type_name: &str, position: FixedUVe
         },
         None => Cover::Nothing,
     };
-    if ground_takes_site(world, type_name, position, cover, &[], &[]) {
+    if ground_takes_site(world, type_name, anchor, cover, &[], &[]) {
         return InTheWay::Clear;
     }
     let builder_mark: Vec<GridMark> = mark_on_grid(world, entity).into_iter().collect();
-    if ground_takes_site(world, type_name, position, cover, &builder_mark, &[entity]) {
+    if ground_takes_site(world, type_name, anchor, cover, &builder_mark, &[entity]) {
         InTheWay::InItsWay
     } else {
         InTheWay::Clear
     }
 }
 
-/// Whether the ground takes a site of `type_name` at `position` with
+/// Whether the ground takes a site of `type_name` anchored at `anchor` with
 /// `cover`'s source, the `marks` and the `bodies` set aside.
 fn ground_takes_site(
     world: &World,
     type_name: &str,
-    position: FixedUVec2,
+    anchor: CellPos,
     cover: Cover,
     marks: &[GridMark],
     bodies: &[Entity],
@@ -798,10 +796,9 @@ fn ground_takes_site(
     let (mut lifted, mut ignored) = overbuild::set_aside(world, cover);
     lifted.extend_from_slice(marks);
     ignored.extend_from_slice(bodies);
-    let placed = LocationComponent::new(position, spawn::DEFAULT_FACING);
     ground::can_place(
         world,
-        &placed,
+        anchor,
         site_def,
         OccupancyClass::of(def),
         &lifted,
@@ -809,16 +806,16 @@ fn ground_takes_site(
     )
 }
 
-/// Whether `entity` reaches a site of `type_name` at `position` within its
-/// build range from where it stands.
-fn reaches_site(world: &World, entity: Entity, type_name: &str, position: FixedUVec2) -> bool {
+/// Whether `entity` reaches a site of `type_name` anchored at `anchor` within
+/// its build range from where it stands.
+fn reaches_site(world: &World, entity: Entity, type_name: &str, anchor: CellPos) -> bool {
     let site_def = world
         .resource::<ContentRegistry>()
         .entity(type_name)
         .expect("the ordered type is registered")
         .location
         .expect("validated content defines a location");
-    let site = CellRect::new(CellPos::from(position), site_def.size());
+    let site = CellRect::new(anchor, site_def.size());
     let range = entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE);
     reach::in_reach(world, entity, site, range)
 }

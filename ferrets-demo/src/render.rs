@@ -73,6 +73,7 @@ use ferrets_simulation::{
     fields::FieldGrid,
     impacts::{Following, PendingImpacts},
     links::{self, LinkPassengers, Membership},
+    map::Map,
     occupancy::OccupancyClass,
     order::Order,
     selection::Selection,
@@ -245,7 +246,9 @@ enum GhostShape {
 /// and local to this client; persists (stale) even after the real building dies
 /// in the fog, until the cell is seen again.
 struct GhostSprite {
-    origin: (u32, u32),
+    /// The cell the remembered building was anchored at.
+    anchor: (u32, u32),
+    /// The remembered building's middle, in pixels.
     center: Vec2,
     /// The footprint remembered under the outline, for consumers that draw the
     /// remembered building as cells rather than as a shape.
@@ -256,6 +259,7 @@ struct GhostSprite {
     solidity: Solidity,
     /// The plane the remembered building held them on.
     class: OccupancyClass,
+    /// The outline the remembered building is redrawn as.
     shape: GhostShape,
 }
 
@@ -280,14 +284,14 @@ pub struct Ghosts(HashMap<SimulationId, GhostSprite>);
 impl Ghosts {
     /// Where each remembered building stood and how much ground it covered.
     pub(crate) fn remembered(&self) -> impl Iterator<Item = ((u32, u32), CellSize)> {
-        self.0.values().map(|ghost| (ghost.origin, ghost.size))
+        self.0.values().map(|ghost| (ghost.anchor, ghost.size))
     }
 
     /// The footprint of each remembered building.
     pub(crate) fn remembered_footprints(&self) -> impl Iterator<Item = MadeOutFootprint> + '_ {
         self.0.values().map(|ghost| MadeOutFootprint {
             layers: ghost.layers,
-            rect: CellRect::new(CellPos::new(ghost.origin.0, ghost.origin.1), ghost.size),
+            rect: CellRect::new(CellPos::new(ghost.anchor.0, ghost.anchor.1), ghost.size),
             solidity: ghost.solidity,
             class: ghost.class,
         })
@@ -458,15 +462,13 @@ pub fn toggle_smoothing(keys: Res<ButtonInput<KeyCode>>, mut smoothing: ResMut<S
     }
 }
 
-/// World-space center of a footprint, in pixels (Bevy y points up, sim y down).
-pub(crate) fn world_center(position: FixedUVec2, size: CellSize) -> Vec3 {
-    world_point(FixedUVec2::new(
-        position.x + FixedU64::from_num(size.width) / 2,
-        position.y + FixedU64::from_num(size.height) / 2,
-    ))
+/// Where the middle of `cell` is drawn.
+pub(crate) fn cell_point(cell: CellPos) -> Vec3 {
+    world_point(cell.middle())
 }
 
-/// Where a simulation point is drawn.
+/// Where a simulation point is drawn, in pixels (Bevy y points up, sim y
+/// down).
 pub(crate) fn world_point(position: FixedUVec2) -> Vec3 {
     Vec3::new(
         position.x.to_num::<f32>() * CELL_PX,
@@ -795,7 +797,7 @@ pub fn attach_sprites(
     for (entity, info, location, owner, turret, corpse) in &query {
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
-        let center = world_center(location.position, size) + lift(&registry, def);
+        let center = world_point(location.position) + lift(&registry, def);
         // Remains wear whoever fell there: the fallen type's silhouette, greyed
         // and drawn small, so a field of bodies reads as bodies rather than as
         // a crowd of whatever they were.
@@ -1705,7 +1707,7 @@ pub fn record_prev(
     )>,
 ) {
     for (info, location, mut prev, mut looked, turrets) in &mut query {
-        prev.0 = draw_anchor(&registry, registry.def(info.type_id()), location.position);
+        prev.0 = draw_point(&registry, registry.def(info.type_id()), location.position);
         looked.0 = location.facing;
         if let Some((TurretsComponent(turrets), mut previous)) = turrets {
             previous.0 = turrets.iter().map(|turret| turret.bearing).collect();
@@ -1713,11 +1715,10 @@ pub fn record_prev(
     }
 }
 
-/// Where a drawn entity's sprite sits for a position: its footprint's centre,
-/// lifted if it flies. Only entities the sprite attachment accepted carry a
-/// [`PrevPos`], and it takes none without a footprint.
-fn draw_anchor(registry: &ContentRegistry, def: &EntityTypeDef, position: FixedUVec2) -> Vec3 {
-    world_center(position, def.location.unwrap().size()) + lift(registry, def)
+/// Where a drawn entity's sprite sits for a position: the position itself,
+/// lifted if it flies.
+fn draw_point(registry: &ContentRegistry, def: &EntityTypeDef, position: FixedUVec2) -> Vec3 {
+    world_point(position) + lift(registry, def)
 }
 
 /// Snaps a set-down entity's drawing — where it interpolates from, and the
@@ -1765,7 +1766,7 @@ pub fn snap_revealed(
         else {
             continue;
         };
-        prev.0 = draw_anchor(&registry, registry.def(info.type_id()), location.position);
+        prev.0 = draw_point(&registry, registry.def(info.type_id()), location.position);
         looked.0 = location.facing;
         drawn.0 = looked.0;
         if directional.is_some() {
@@ -1809,7 +1810,7 @@ pub fn snap_relocated(
         let Ok((info, location, mut prev)) = query.get_mut(entity) else {
             continue;
         };
-        prev.0 = draw_anchor(&registry, registry.def(info.type_id()), location.position);
+        prev.0 = draw_point(&registry, registry.def(info.type_id()), location.position);
     }
 }
 
@@ -1864,13 +1865,12 @@ pub fn interpolate_sprites(
             continue;
         };
         let def = registry.def(info.type_id());
-        let size = def.location.unwrap().size();
-        let curr = world_center(location.position, size) + lift(&registry, def);
+        let current = world_point(location.position) + lift(&registry, def);
         // Snap rather than slide across teleports/reveals.
-        transform.translation = if prev.0.distance(curr) > 1.5 * CELL_PX {
-            curr
+        transform.translation = if prev.0.distance(current) > 1.5 * CELL_PX {
+            current
         } else {
-            prev.0.lerp(curr, alpha)
+            prev.0.lerp(current, alpha)
         };
         drawn.0 = between(looked.0, location.facing, alpha);
         if directional.is_some() {
@@ -2330,13 +2330,13 @@ pub fn collect_skill_pulses(world: &mut World) {
             };
             let shown = match target {
                 SkillTarget::Entity(_) => true,
-                SkillTarget::Position(_) => index
+                SkillTarget::Cell(_) => index
                     .any(*caster)
                     .is_some_and(|entity| judged(world, judge, entity).is_seen()),
             };
             if shown {
                 let size = match target {
-                    SkillTarget::Position(_) => summoned_size(registry, *skill),
+                    SkillTarget::Cell(_) => summoned_size(registry, *skill),
                     SkillTarget::Entity(_) => CellSize::ONE,
                 };
                 pulses.active.push((*target, size, tick));
@@ -2428,7 +2428,7 @@ pub fn collect_puffs(world: &mut World) {
                         if made_out_before(*entity)
                             && let Some(moved) = index.any(*entity)
                         {
-                            let (_, size) = entity_def::whereabouts_footprint(world, moved);
+                            let size = entity_def::size(world, moved);
                             puffs.active.push((*from, size, PuffKind::Relocated, tick));
                         }
                         made_out_now(*entity).then_some((*entity, Some(*to), PuffKind::Relocated))
@@ -2442,7 +2442,8 @@ pub fn collect_puffs(world: &mut World) {
             if let Some((id, place, kind)) = marked
                 && let Some(entity) = index.any(id)
             {
-                let (whereabouts, size) = entity_def::whereabouts_footprint(world, entity);
+                let whereabouts = entity_def::whereabouts(world, entity);
+                let size = entity_def::size(world, entity);
                 let position = match place {
                     Some(position) => position,
                     None => whereabouts,
@@ -2511,11 +2512,8 @@ pub fn draw_puffs(
         // there rather than always being unit-sized.
         let span = size.width.max(size.height) as f32;
         let radius = CELL_PX * span * (0.2 + 0.4 * progress);
-        // Centred on the footprint like everything else drawn from a position: a
-        // position is a footprint's corner, so drawing on it sits up and to the
-        // left of what it marks.
         gizmos.circle_2d(
-            world_center(position, size).truncate(),
+            world_point(position).truncate(),
             radius,
             kind.color(1.0 - progress),
         );
@@ -2532,6 +2530,7 @@ pub fn draw_puffs(
 pub fn draw_skill_pulses(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
+    map: Res<Map>,
     fixed: Res<Time<Fixed>>,
     grid: Res<VisibilityGrid>,
     watch: Res<ObserverPerspective>,
@@ -2560,10 +2559,17 @@ pub fn draw_skill_pulses(
                     info.id() == id && made_out(visibility, *sighted)
                 })
                 .map(|(_, transform, _, _)| transform.translation),
-            SkillTarget::Position(position) => {
-                let cell = CellPos::from(position);
-                (reveal.reveals() || sees(&session, &watch, &grid, cell.x, cell.y))
-                    .then(|| world_center(position, size))
+            SkillTarget::Cell(cell) => {
+                (reveal.reveals() || sees(&session, &watch, &grid, cell.x, cell.y)).then(|| {
+                    // A summon of a body the map cannot hold sets nothing down;
+                    // its pulse marks the aimed cell.
+                    let middle = if map.fits(size) {
+                        map.location_at_clamped(cell, size).middle()
+                    } else {
+                        cell.middle()
+                    };
+                    world_point(middle)
+                })
             }
         };
         let Some(at) = at else {
@@ -2684,7 +2690,7 @@ pub fn draw_shots(
             .iter()
             .find(|(info, _)| Following::Target(info.id()) == shot.target)
             .map(|(_, transform)| transform.translation)
-            .unwrap_or_else(|| world_center(shot.impact, CellSize::ONE));
+            .unwrap_or_else(|| world_point(shot.impact));
         let at = from.lerp(to, progress);
 
         let cell = CellPos::new(
@@ -2757,7 +2763,6 @@ pub fn draw_rally(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
     selection: Res<Selection>,
-    registry: Res<ContentRegistry>,
     holders: Query<(
         &EntityInfoComponent,
         &LocationComponent,
@@ -2785,30 +2790,24 @@ pub fn draw_rally(
             continue;
         };
         let end = match target {
-            // The move lands in the cell containing the position, so mark that
-            // cell's center rather than the raw sub-cell position.
-            RallyTarget::Position(position) => {
-                world_center(FixedUVec2::from(CellPos::from(position)), CellSize::ONE)
-            }
+            // A rallied unit's middle goes to the point itself.
+            RallyTarget::Position(position) => world_point(position),
             RallyTarget::Entity(id) => {
                 // A vanished target leaves nothing to point at, and one the
                 // perspective does not make out is not pointed at.
-                let Some((target_info, target_location, target_visibility, target_sighted)) =
-                    targets
-                        .iter()
-                        .find(|(target_info, ..)| target_info.id() == id)
+                let Some((_, target_location, target_visibility, target_sighted)) = targets
+                    .iter()
+                    .find(|(target_info, ..)| target_info.id() == id)
                 else {
                     continue;
                 };
                 if !made_out(target_visibility, target_sighted) {
                     continue;
                 }
-                let target_size = registry.def(target_info.type_id()).location.unwrap().size();
-                world_center(target_location.position, target_size)
+                world_point(target_location.position)
             }
         };
-        let start_size = registry.def(info.type_id()).location.unwrap().size();
-        let start = world_center(location.position, start_size);
+        let start = world_point(location.position);
         gizmos.line_2d(start.truncate(), end.truncate(), COLOR);
         gizmos.circle_2d(end.truncate(), CELL_PX * 0.3, COLOR);
     }
@@ -3285,6 +3284,7 @@ pub fn draw_ghosts(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
     registry: Res<ContentRegistry>,
+    map: Res<Map>,
     fog: Res<VisibilityGrid>,
     watch: Res<ObserverPerspective>,
     reveal: Res<FogReveal>,
@@ -3308,10 +3308,6 @@ pub fn draw_ghosts(
         if own_side || !tags.contains(tags::BUILDING) {
             continue;
         }
-        let (x, y) = (
-            location.position.x.to_num::<u32>(),
-            location.position.y.to_num::<u32>(),
-        );
         // A building the perspective only glimpses leaves no ghost: a
         // shimmer is all it was owed while in sight. The stamp judges the
         // whole footprint, so a hall lit only at a corner is seen and
@@ -3320,11 +3316,12 @@ pub fn draw_ghosts(
             seen.insert(info.id());
             let location_def = registry.def(info.type_id()).location.unwrap();
             let size = location_def.size();
+            let anchor = map.location(location.position, size).anchor();
             ghosts.0.insert(
                 info.id(),
                 GhostSprite {
-                    origin: (x, y),
-                    center: world_center(location.position, size).truncate(),
+                    anchor: (anchor.x, anchor.y),
+                    center: world_point(location.position).truncate(),
                     size,
                     layers: location_def.occupies(),
                     solidity: location_def.solidity(),
@@ -3336,7 +3333,7 @@ pub fn draw_ghosts(
     }
 
     ghosts.0.retain(|id, ghost| {
-        match perspective(&session, &watch, &fog, ghost.origin.0, ghost.origin.1) {
+        match perspective(&session, &watch, &fog, ghost.anchor.0, ghost.anchor.1) {
             // Seen again: keep only if the building is seen there still (else
             // it was destroyed or moved away while we were gone, so drop the
             // stale ghost).
@@ -3458,8 +3455,8 @@ const MORPH_WORK_COLOR: Color = Color::srgb(0.85, 0.55, 0.25);
 /// A repairer that cannot pay for this tick's work.
 const STALLED_WORK_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
 
-/// The patch a watch is holding open.
-const WATCH_PATCH_COLOR: Color = Color::srgb(0.55, 0.85, 1.0);
+/// The outline of a watch's reach.
+const WATCH_REACH_COLOR: Color = Color::srgb(0.55, 0.85, 1.0);
 
 /// The coupling between an annex and the primary it stands with.
 const ANNEX_BOND_COLOR: Color = Color::srgb(1.0, 0.62, 0.18);
@@ -3560,14 +3557,14 @@ pub fn draw_work_links(
     }
 }
 
-/// Rings each patch of map a watch is holding open, for as long as it holds
+/// Outlines the reach of each watch in force, for as long as it holds
 /// (run in `Update`).
 ///
 /// Without it a scan cast over ground already in sight leaves no mark at all,
 /// and a scan is the one skill whose whole effect is what it lets the caster
 /// see. Only the watches this node is on the side of are drawn: another
 /// player's reveal is not the viewer's to know about.
-pub fn draw_watch_patches(
+pub fn draw_watch_reach(
     mut gizmos: Gizmos,
     session: Res<GameSession>,
     watch: Res<ObserverPerspective>,
@@ -3582,15 +3579,28 @@ pub fn draw_watch_patches(
         if !shown {
             continue;
         }
-        let center = world_center(FixedUVec2::from(held.center), CellSize::ONE).truncate();
-        // Half a cell beyond the radius, so the ring encloses the outermost
-        // cells the sweep reveals instead of cutting through their centres:
-        // the reveal runs from the patch's whole 1x1 footprint, as reach does.
-        gizmos.circle_2d(
-            center,
-            (held.radius as f32 + 0.5) * CELL_PX,
-            WATCH_PATCH_COLOR,
+        let bounds = held.patch.bounds();
+        let middle = FixedUVec2::new(
+            (bounds.min().x + bounds.max().x) / 2,
+            (bounds.min().y + bounds.max().y) / 2,
         );
+        let center = world_point(middle).truncate();
+        // The patch grown by the radius on every side, its corners rounded half
+        // a cell beyond the radius, so the outline encloses the outermost cells
+        // the watch reveals instead of cutting through their middles: a
+        // one-cell patch draws a circle.
+        let radius = held.radius as f32;
+        let size = Vec2::new(
+            held.patch.size.width as f32 + 2.0 * radius,
+            held.patch.size.height as f32 + 2.0 * radius,
+        );
+        gizmos
+            .rounded_rect_2d(
+                Isometry2d::from_translation(center),
+                size * CELL_PX,
+                WATCH_REACH_COLOR,
+            )
+            .corner_radius((radius + 0.5) * CELL_PX);
     }
 }
 

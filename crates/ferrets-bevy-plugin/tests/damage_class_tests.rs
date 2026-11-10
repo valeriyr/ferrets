@@ -18,9 +18,9 @@ mod utils;
 fn bonus_damage_vs_and_armor_shape_damage_per_hit() {
     let mut app = app();
     let (_, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(5, 5), Some(0)).unwrap();
     let (tank, tank_id) =
-        utils::create_entity(app.world_mut(), "tank", utils::pos(6, 5), Some(1)).unwrap();
+        utils::create_entity(app.world_mut(), "tank", utils::cell(6, 5), Some(1)).unwrap();
 
     utils::attack(&mut app, grunt, tank_id);
     utils::run_ticks(&mut app, 15);
@@ -40,13 +40,13 @@ fn armor_mitigates_and_never_makes_target_immune() {
     // Two identical grunts attack in lockstep, so both land the same number of
     // hits over the same ticks.
     let (_, grunt_a) =
-        utils::create_entity(app.world_mut(), "grunt", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(5, 10), Some(0)).unwrap();
     let (scout, scout_id) =
-        utils::create_entity(app.world_mut(), "scout", utils::pos(6, 10), Some(1)).unwrap();
+        utils::create_entity(app.world_mut(), "scout", utils::cell(6, 10), Some(1)).unwrap();
     let (_, grunt_b) =
-        utils::create_entity(app.world_mut(), "grunt", utils::pos(5, 15), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(5, 15), Some(0)).unwrap();
     let (fortress, fortress_id) =
-        utils::create_entity(app.world_mut(), "fortress", utils::pos(6, 15), Some(1)).unwrap();
+        utils::create_entity(app.world_mut(), "fortress", utils::cell(6, 15), Some(1)).unwrap();
 
     utils::attack(&mut app, grunt_a, scout_id);
     utils::attack(&mut app, grunt_b, fortress_id);

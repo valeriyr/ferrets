@@ -70,7 +70,7 @@ fn blink_moves_caster_to_aimed_cell_keeping_its_facing() {
     utils::cast_at(&mut app, mage_id, "blink", 10, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(10, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(10, 5));
     assert_eq!(utils::facing_of(app.world(), mage), Facing::NORTH);
     assert_eq!(utils::energy_as_u32(&app, mage), 150, "200 - 50");
     assert_eq!(
@@ -94,7 +94,7 @@ fn blink_onto_held_cell_lands_nearest_it_on_side_caster_came_from() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // The first ring around the aim, the cell nearest where it stood first.
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(9, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(9, 5));
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn blink_with_nowhere_to_land_is_refused_unpaid() {
     utils::cast_at(&mut app, mage_id, "blink", 10, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(3, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(3, 5));
     assert_eq!(utils::energy_as_u32(&app, mage), 200, "nothing was paid");
 }
 
@@ -123,13 +123,13 @@ fn sighted_blink_refuses_aim_its_side_does_not_see() {
             0,
             mage,
             skill,
-            Some(SkillTarget::Position(utils::pos(28, 28))),
+            Some(SkillTarget::Cell(utils::cell(28, 28))),
         ),
         Err(AimRefusal::LandingUnseen)
     );
     utils::cast_at(&mut app, mage_id, "blink_sighted", 28, 28);
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(3, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(3, 5));
     assert_eq!(utils::energy_as_u32(&app, mage), 200, "nothing was paid");
 }
 
@@ -141,7 +141,7 @@ fn sighted_blink_lands_on_cell_its_side_sees() {
     utils::cast_at(&mut app, mage_id, "blink_sighted", 10, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(10, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(10, 5));
     assert_eq!(utils::energy_as_u32(&app, mage), 150, "200 - 50");
 }
 
@@ -162,7 +162,7 @@ fn sighted_blink_onto_held_cell_skips_fogged_cells_beside_it() {
 
     // Of the first ring around the aim, the mage's side is held and the rest
     // lies in fog; of the second, (11, 5) is nearest where it stood.
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(11, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(11, 5));
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn sighted_blink_of_omniscient_seat_lands_in_fog() {
     utils::cast_at(&mut app, mage_id, "blink_sighted", 28, 28);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(28, 28));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(28, 28));
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn explored_blink_lands_on_cell_seen_before_but_refuses_one_never_seen() {
             0,
             mage,
             skill,
-            Some(SkillTarget::Position(utils::pos(28, 28))),
+            Some(SkillTarget::Cell(utils::cell(28, 28))),
         ),
         Err(AimRefusal::LandingUnseen),
         "never seen"
@@ -222,7 +222,7 @@ fn explored_blink_lands_on_cell_seen_before_but_refuses_one_never_seen() {
 
     utils::cast_at(&mut app, mage_id, "blink_explored", 28, 28);
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(28, 28));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(28, 28));
 }
 
 #[test]
@@ -233,7 +233,7 @@ fn blink_landing_anywhere_lands_in_fog() {
     utils::cast_at(&mut app, mage_id, "blink", 28, 28);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(28, 28));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(28, 28));
 }
 
 //
@@ -264,7 +264,7 @@ fn recalled_unit_lands_only_where_its_placement_rules_admit_it() {
     utils::cast_at(&mut app, mage_id, "recall_leave", 20, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), sapper), CellPos::new(6, 4));
+    assert_eq!(utils::anchor_of(app.world(), sapper), CellPos::new(6, 4));
 }
 
 #[test]
@@ -283,14 +283,14 @@ fn recall_moves_those_that_fit_and_leaves_rest_standing() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // Nearest the aim first, each on the side of the mage it came from.
-    assert_eq!(utils::cell_of(app.world(), first), CellPos::new(6, 5));
-    assert_eq!(utils::cell_of(app.world(), second), CellPos::new(6, 6));
+    assert_eq!(utils::anchor_of(app.world(), first), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(app.world(), second), CellPos::new(6, 6));
     assert_eq!(
-        utils::cell_of(app.world(), third),
+        utils::anchor_of(app.world(), third),
         CellPos::new(20, 7),
         "the one that fit nowhere stays"
     );
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(5, 5));
     assert_eq!(utils::energy_as_u32(&app, mage), 150, "200 - 50, paid");
 }
 
@@ -306,8 +306,8 @@ fn refusing_recall_with_one_that_fits_nowhere_moves_nobody_unpaid() {
     utils::cast_at(&mut app, mage_id, "recall_refuse", 20, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), first), CellPos::new(20, 5));
-    assert_eq!(utils::cell_of(app.world(), second), CellPos::new(20, 6));
+    assert_eq!(utils::anchor_of(app.world(), first), CellPos::new(20, 5));
+    assert_eq!(utils::anchor_of(app.world(), second), CellPos::new(20, 6));
     assert_eq!(utils::energy_as_u32(&app, mage), 200, "nothing was paid");
 }
 
@@ -328,7 +328,7 @@ fn recall_gathering_nobody_is_refused_unpaid() {
 fn anyones_gathering_takes_resource_source_with_harvester_inside() {
     let mut app = app();
     let (_, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
-    let (mine, _) = utils::create_entity(app.world_mut(), "mine", utils::pos(20, 5), None)
+    let (mine, _) = utils::create_entity(app.world_mut(), "mine", utils::cell(20, 5), None)
         .expect("the fixture defines a mine");
     let (digger, _) = utils::create_owned(&mut app, "footman", 22, 5, 0);
     let mine_id = entity_def::simulation_id(app.world(), mine);
@@ -338,7 +338,7 @@ fn anyones_gathering_takes_resource_source_with_harvester_inside() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // Beside the mage on the side it came from, the digger still inside it.
-    assert_eq!(utils::cell_of(app.world(), mine), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(app.world(), mine), CellPos::new(6, 5));
     assert_eq!(entity_def::inside(app.world(), digger), Some(mine));
 }
 
@@ -349,25 +349,26 @@ fn gathering_takes_body_standing_part_way_into_its_radius() {
     utils::install_map(&mut app, projection, MovementModel::Continuous);
     let (_, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     let (footman, footman_id) = utils::create_owned(&mut app, "footman", 15, 5, 0);
-    // Floored into (17, 5), three cells off the aim at (20, 5); rounded to
-    // (18, 5), two off, inside the recall's two-cell radius.
-    let corner = utils::part_way("17.6", "5");
+    // Its low edge (17.6, 5) floors into (17, 5), three cells off the aim at
+    // (20, 5), and rounds to (18, 5), two off, inside the recall's two-cell
+    // radius.
+    let spot = utils::point("18.1", "5.5");
     utils::select(&mut app, footman_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Move {
-            target: corner,
+            target: spot,
             flush: true,
         },
     );
     utils::run_ticks(&mut app, 30);
-    assert_eq!(utils::position_of(app.world(), footman), corner);
+    assert_eq!(utils::position_of(app.world(), footman), spot);
 
     utils::cast_at(&mut app, mage_id, "recall_leave", 20, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // Beside the mage at (5, 5), on the side it came from.
-    assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(app.world(), footman), CellPos::new(6, 5));
 }
 
 #[test]
@@ -382,10 +383,10 @@ fn gathering_at_most_two_takes_nearest_then_lowest_id() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // Beside the mage, each on the side of the mage it came from.
-    assert_eq!(utils::cell_of(app.world(), nearest), CellPos::new(6, 5));
-    assert_eq!(utils::cell_of(app.world(), lower_id), CellPos::new(6, 6));
+    assert_eq!(utils::anchor_of(app.world(), nearest), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(app.world(), lower_id), CellPos::new(6, 6));
     assert_eq!(
-        utils::cell_of(app.world(), higher_id),
+        utils::anchor_of(app.world(), higher_id),
         CellPos::new(20, 4),
         "a step away like the second, but with the higher id"
     );
@@ -401,7 +402,7 @@ fn gathering_never_takes_rising_entity() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert_eq!(
-        utils::cell_of(app.world(), rising),
+        utils::anchor_of(app.world(), rising),
         CellPos::new(20, 5),
         "a rising entity stays where it stands"
     );
@@ -418,7 +419,7 @@ fn gathering_takes_finished_hall_its_filter_admits() {
 
     // The 2×2 hall stands beside the mage on the side it came from, at
     // (6..8, 5..7).
-    assert_eq!(utils::cell_of(app.world(), hall), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(app.world(), hall), CellPos::new(6, 5));
 }
 
 #[test]
@@ -437,8 +438,8 @@ fn gathered_halls_land_clear_of_what_stands_underfoot() {
     // The first takes (6..8, 6..8), clear of the mole; the second, gathered
     // in the same cast, the next ground beside the mage that takes it,
     // (4..6, 6..8).
-    assert_eq!(utils::cell_of(app.world(), first), CellPos::new(6, 6));
-    assert_eq!(utils::cell_of(app.world(), second), CellPos::new(4, 6));
+    assert_eq!(utils::anchor_of(app.world(), first), CellPos::new(6, 6));
+    assert_eq!(utils::anchor_of(app.world(), second), CellPos::new(4, 6));
 }
 
 #[test]
@@ -455,8 +456,8 @@ fn gathering_never_takes_unit_changing_form() {
 
     // The one changing stays; the other lands beside the mage nearest where
     // it stood.
-    assert_eq!(utils::cell_of(app.world(), changing), CellPos::new(20, 5));
-    assert_eq!(utils::cell_of(app.world(), standing), CellPos::new(6, 6));
+    assert_eq!(utils::anchor_of(app.world(), changing), CellPos::new(20, 5));
+    assert_eq!(utils::anchor_of(app.world(), standing), CellPos::new(6, 6));
 }
 
 #[test]
@@ -473,8 +474,8 @@ fn seen_gathering_takes_only_what_its_side_makes_out() {
     utils::cast_at(&mut app, mage_id, "recall_seen", 15, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), seen), CellPos::new(6, 5));
-    assert_eq!(utils::cell_of(app.world(), fogged), CellPos::new(16, 5));
+    assert_eq!(utils::anchor_of(app.world(), seen), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(app.world(), fogged), CellPos::new(16, 5));
 }
 
 #[test]
@@ -489,8 +490,8 @@ fn blind_gathering_takes_fogged_units_as_well_as_seen() {
 
     // The one on the aim first, on the mage's side toward it; the fogged one
     // on the next cell of the ring, first by row.
-    assert_eq!(utils::cell_of(app.world(), seen), CellPos::new(6, 5));
-    assert_eq!(utils::cell_of(app.world(), fogged), CellPos::new(6, 4));
+    assert_eq!(utils::anchor_of(app.world(), seen), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(app.world(), fogged), CellPos::new(6, 4));
 }
 
 #[test]
@@ -508,7 +509,7 @@ fn relocated_transport_carries_its_passengers_aboard() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert_eq!(
-        utils::cell_of(app.world(), wagon),
+        utils::anchor_of(app.world(), wagon),
         CellPos::new(6, 5),
         "the wagon is recalled beside the mage"
     );
@@ -532,7 +533,7 @@ fn relocated_transport_unloads_passengers_beside_its_new_cell() {
     );
     utils::cast_at(&mut app, mage_id, "recall_leave", 20, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert_eq!(utils::cell_of(app.world(), wagon), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(app.world(), wagon), CellPos::new(6, 5));
 
     utils::unload(&mut app, wagon_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -540,7 +541,7 @@ fn relocated_transport_unloads_passengers_beside_its_new_cell() {
     // Of the ring around the wagon's new cell, the four sides lie nearest its
     // middle, (6, 4) first by row.
     assert!(!entity_def::hidden(app.world(), rider));
-    assert_eq!(utils::cell_of(app.world(), rider), CellPos::new(6, 4));
+    assert_eq!(utils::anchor_of(app.world(), rider), CellPos::new(6, 4));
 }
 
 #[test]
@@ -555,7 +556,7 @@ fn recalled_unit_drops_its_walk() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert_eq!(
-        utils::cell_of(app.world(), footman),
+        utils::anchor_of(app.world(), footman),
         CellPos::new(6, 5),
         "recalled beside the mage"
     );
@@ -588,7 +589,7 @@ fn caster_moved_by_its_own_cast_carries_on_with_what_it_queued_after() {
     );
     // Four cells up from the landing at half a cell a tick takes eight ticks;
     // from where it cast, the walk would still be under way.
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(10, 1));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(10, 1));
     assert!(
         utils::order_queue_is_empty(app.world_mut(), mage),
         "and the walk is done"
@@ -601,15 +602,16 @@ fn walker_moved_by_its_own_transient_cast_drops_its_walk() {
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 3, 5, 0);
 
     // Walking twenty cells up at half a cell a tick, the mage flashes to
-    // (10, 5): set down at rest there, its walk is dropped as any moved body's.
+    // (10, 5): set down lined up there, its walk is dropped as any moved
+    // body's.
     utils::order_move(&mut app, mage, 3, 25);
     utils::run_ticks(&mut app, 1);
     utils::cast_at(&mut app, mage_id, "flash", 10, 5);
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(10, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(10, 5));
     assert!(utils::order_queue_is_empty(app.world_mut(), mage));
     utils::run_ticks(&mut app, 40);
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(10, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(10, 5));
     assert_eq!(utils::energy_as_u32(&app, mage), 150, "200 - 50");
 }
 
@@ -627,7 +629,7 @@ fn pull_brings_target_beside_caster() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // Beside the mage on the side it came from.
-    assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(app.world(), footman), CellPos::new(6, 5));
 }
 
 #[test]
@@ -638,7 +640,7 @@ fn pull_aimed_at_its_own_caster_moves_nothing() {
     utils::cast_on(&mut app, mage_id, "pull", mage_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(5, 5));
     assert_eq!(utils::energy_as_u32(&app, mage), 200, "nothing was paid");
 }
 
@@ -665,8 +667,8 @@ fn body_mid_crossing_lifts_cell_its_crossing_claimed() {
     // (5, 5): the mage takes (5, 5), and the snail the mage's (9, 5). Neither
     // lands with the crossing's claim left standing: the claim kept on (4, 5)
     // and the mage's own on (9, 5) refuse the swap.
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(5, 5));
-    assert_eq!(utils::cell_of(app.world(), snail), CellPos::new(9, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), snail), CellPos::new(9, 5));
 }
 
 #[test]
@@ -678,8 +680,8 @@ fn swap_trades_caster_and_target_places() {
     utils::cast_on(&mut app, mage_id, "swap", footman_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(12, 9));
-    assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(12, 9));
+    assert_eq!(utils::anchor_of(app.world(), footman), CellPos::new(5, 5));
 }
 
 #[test]
@@ -693,8 +695,8 @@ fn swap_with_hall_anchors_each_where_other_stood() {
 
     // Each footprint is lifted for the other, so the mage takes the hall's
     // anchor and the 2×2 hall the mage's, over (5..7, 5..7).
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(20, 20));
-    assert_eq!(utils::cell_of(app.world(), hall), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(20, 20));
+    assert_eq!(utils::anchor_of(app.world(), hall), CellPos::new(5, 5));
 }
 
 #[test]
@@ -707,8 +709,8 @@ fn swap_with_hall_that_fits_nowhere_is_refused_unpaid() {
     utils::cast_on(&mut app, mage_id, "swap", hall_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(5, 5));
-    assert_eq!(utils::cell_of(app.world(), hall), CellPos::new(20, 20));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), hall), CellPos::new(20, 20));
     assert_eq!(utils::energy_as_u32(&app, mage), 200, "nothing was paid");
 }
 
@@ -725,8 +727,8 @@ fn portal_takes_caster_and_those_around_it_to_aimed_hall() {
     // The hall holds (20..22, 20..22): the mage first, on the corner nearest
     // where it stood, then the footman on the next cell nearest where it
     // stood — (20, 19), whose middle lies nearer (6, 5) than (19, 20)'s.
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(19, 19));
-    assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(20, 19));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(19, 19));
+    assert_eq!(utils::anchor_of(app.world(), footman), CellPos::new(20, 19));
 }
 
 #[test]
@@ -742,7 +744,7 @@ fn portal_comes_out_of_aimed_hall_footprint_not_its_corner() {
     utils::cast_on(&mut app, mage_id, "portal", hall_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(2, 2));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(2, 2));
 }
 
 //
@@ -762,42 +764,148 @@ fn homeward_goes_to_nearest_finished_hall() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // Beside the hall at (14..16, 5..7), on the side it came from.
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(13, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(13, 5));
 }
 
 #[test]
 fn homeward_goes_to_home_nearest_by_cells_it_stands_on() {
     // Under the continuous model a caravan, a mover the side counts as a hall,
-    // rests at (10.5, 9), across (10, 9) and (11, 9); a hall stands at
-    // (9..10, 5..6). From the mage at (15, 5) the hall is five cells off and
-    // so is the caravan's floored cell, but the caravan stands on (11, 9), four
-    // off: the mage goes home to the caravan.
-    let mut app = app();
-    app.world_mut().resource_mut::<ContentRegistry>().register(
-        utils::walker("caravan", utils::GROUND_DOMAIN)
-            .with_pool(Pool::health(20))
-            .with_tags(["hall"]),
-    );
-    let projection = app.world().resource::<Map>().projection();
-    utils::install_map(&mut app, projection, MovementModel::Continuous);
+    // rests with its middle at (11, 9.5), across (10, 9) and (11, 9); a hall
+    // stands at (9..10, 5..6). From the mage at (15, 5) the hall is five cells
+    // off and so is the caravan's floored cell, but the caravan stands on
+    // (11, 9), four off: the mage goes home to the caravan.
+    let mut app = continuous_app();
     let (mage, mage_id) = utils::create_owned(&mut app, "mage", 15, 5, 0);
     utils::create_owned(&mut app, "hall", 9, 5, 0);
     let (caravan, _) = utils::create_owned(&mut app, "caravan", 10, 9, 0);
-    utils::walk_onto(&mut app, caravan, utils::part_way("10.5", "9"), 10);
+    utils::walk_onto(&mut app, caravan, utils::point("11", "9.5"), 10);
 
     utils::cast_self(&mut app, mage_id, "homeward");
     utils::run_ticks(&mut app, utils::APPLY);
 
-    // Set down on (10, 9), the free cell nearest the mage beside the caravan's
-    // claim on (11, 9); contact then parts the two a quarter cell each. Gone
-    // home to the hall instead, it would stand at (11, 5).
+    // Set down around the caravan's footprint, (11, 9) — its low corner
+    // (10.5, 9) rounds to it — on the free cell nearest the mage, (12, 8):
+    // its middle (12.5, 8.5), 1.5 off the caravan's on x, so no contact
+    // parts them. Gone home to the hall instead, it would stand at (11, 5).
     assert_eq!(
         utils::position_of(app.world(), mage),
-        utils::part_way("9.75", "9")
+        utils::point("12.5", "8.5")
     );
     assert_eq!(
         utils::position_of(app.world(), caravan),
-        utils::part_way("10.75", "9")
+        utils::point("11", "9.5")
+    );
+}
+
+#[test]
+fn swap_lands_caster_on_footprint_of_body_between_cells() {
+    // Under the continuous model a footman rests with its middle at
+    // (11.25, 10.5): its low corner (10.75, 10) rounds to (11, 10), its
+    // footprint, though it stands across (10, 10) too. Swapped, the mage lands
+    // on that footprint, freed by the swap, its middle (11.5, 10.5) — not on
+    // (10, 10); the footman lands where the mage stood, (5.5, 5.5).
+    let mut app = continuous_app();
+    let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
+    let (footman, footman_id) = utils::create_owned(&mut app, "footman", 10, 10, 0);
+    utils::walk_onto(&mut app, footman, utils::point("11.25", "10.5"), 20);
+
+    utils::cast_on(&mut app, mage_id, "swap", footman_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(
+        utils::position_of(app.world(), mage),
+        utils::point("11.5", "10.5")
+    );
+    assert_eq!(
+        utils::position_of(app.world(), footman),
+        utils::point("5.5", "5.5")
+    );
+}
+
+#[test]
+fn portal_lands_caster_around_footprint_of_body_between_cells() {
+    // A caravan, a mover counted as a hall, rests with its middle at
+    // (11.25, 10.5): footprint (11, 10), standing across (10, 10) too. The
+    // mage portals to it and is set down on the ring of its footprint nearest
+    // where it stood, (10, 9), its middle (10.5, 9.5).
+    let mut app = continuous_app();
+    let (mage, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
+    let (caravan, caravan_id) = utils::create_owned(&mut app, "caravan", 10, 10, 0);
+    utils::walk_onto(&mut app, caravan, utils::point("11.25", "10.5"), 20);
+
+    utils::cast_on(&mut app, mage_id, "portal", caravan_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(
+        utils::position_of(app.world(), mage),
+        utils::point("10.5", "9.5")
+    );
+}
+
+#[test]
+fn portal_gathers_around_caster_footprint() {
+    // The mage rests with its middle at (11.25, 10.5): footprint (11, 10),
+    // standing across (10, 10) too. A footman on (8, 10) is three cells off
+    // the footprint, beyond the gathering's two, though two off (10, 10):
+    // portalled to the hall, the mage goes and the footman stays.
+    let mut app = continuous_app();
+    let (mage, mage_id) = utils::create_owned(&mut app, "mage", 10, 10, 0);
+    utils::walk_onto(&mut app, mage, utils::point("11.25", "10.5"), 20);
+    let (footman, _) = utils::create_owned(&mut app, "footman", 8, 10, 0);
+    let (_, hall_id) = utils::create_owned(&mut app, "hall", 20, 20, 0);
+
+    utils::cast_on(&mut app, mage_id, "portal", hall_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(
+        utils::position_of(app.world(), mage),
+        utils::point("19.5", "19.5")
+    );
+    assert_eq!(
+        utils::position_of(app.world(), footman),
+        utils::point("8.5", "10.5")
+    );
+}
+
+#[test]
+fn send_home_lands_target_around_footprint_of_home_between_cells() {
+    // The caravan, the only home, rests with its middle at (11.25, 10.5):
+    // footprint (11, 10), standing across (10, 10) too. A footman sent home
+    // from (5, 7) is set down on the ring of that footprint nearest it,
+    // (10, 9), its middle (10.5, 9.5).
+    let mut app = continuous_app();
+    let (_, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
+    let (footman, footman_id) = utils::create_owned(&mut app, "footman", 5, 7, 0);
+    let (caravan, _) = utils::create_owned(&mut app, "caravan", 10, 10, 0);
+    utils::walk_onto(&mut app, caravan, utils::point("11.25", "10.5"), 20);
+
+    utils::cast_on(&mut app, mage_id, "send_home", footman_id);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(
+        utils::position_of(app.world(), footman),
+        utils::point("10.5", "9.5")
+    );
+}
+
+#[test]
+fn recall_lands_party_around_footprint_of_caster_between_cells() {
+    // The recaller rests with its middle at (11.25, 10.5): footprint
+    // (11, 10), standing across (10, 10) too. A footman recalled from (20, 5)
+    // is set down on the ring of that footprint nearest where it stood,
+    // (12, 9), its middle (12.5, 9.5).
+    let mut app = continuous_app();
+    register_recaller(&mut app);
+    let (recaller, recaller_id) = utils::create_owned(&mut app, "recaller", 10, 10, 0);
+    utils::walk_onto(&mut app, recaller, utils::point("11.25", "10.5"), 20);
+    let (footman, _) = utils::create_owned(&mut app, "footman", 20, 5, 0);
+
+    utils::cast_at(&mut app, recaller_id, "recall", 20, 5);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert_eq!(
+        utils::position_of(app.world(), footman),
+        utils::point("12.5", "9.5")
     );
 }
 
@@ -814,7 +922,7 @@ fn homeward_comes_out_of_hall_footprint_not_its_corner() {
     utils::cast_self(&mut app, mage_id, "homeward");
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(2, 2));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(2, 2));
 }
 
 #[test]
@@ -831,8 +939,8 @@ fn homeward_party_lands_caster_first_then_each_nearest_where_it_stood() {
     // Beside the hall at (14..16, 5..7) nearer the mage: the mage first, on
     // the side it came from, then the footman on the next cell nearest where
     // it stood.
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(13, 5));
-    assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(13, 6));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(13, 5));
+    assert_eq!(utils::anchor_of(app.world(), footman), CellPos::new(13, 6));
 }
 
 #[test]
@@ -851,8 +959,8 @@ fn homeward_party_goes_together_to_hall_nearest_its_caster() {
 
     // Both beside the first hall: the mage on the side it came from, the
     // footman on the next cell nearest where it stood.
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(4, 5));
-    assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(4, 6));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(4, 5));
+    assert_eq!(utils::anchor_of(app.world(), footman), CellPos::new(4, 6));
 }
 
 #[test]
@@ -869,7 +977,7 @@ fn sent_home_unit_goes_to_hall_nearest_aim() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // Beside the hall at (25..27, 5..7), on the side it came from.
-    assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(24, 5));
+    assert_eq!(utils::anchor_of(app.world(), footman), CellPos::new(24, 5));
 }
 
 #[test]
@@ -885,7 +993,7 @@ fn sent_home_unit_comes_out_of_hall_footprint_not_its_corner() {
     utils::cast_on(&mut app, mage_id, "send_home", footman_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), footman), CellPos::new(2, 2));
+    assert_eq!(utils::anchor_of(app.world(), footman), CellPos::new(2, 2));
 }
 
 #[test]
@@ -898,7 +1006,7 @@ fn homeward_with_no_hall_is_refused_unpaid() {
     utils::cast_self(&mut app, mage_id, "homeward");
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), mage), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), mage), CellPos::new(5, 5));
     assert_eq!(utils::energy_as_u32(&app, mage), 200, "nothing was paid");
 }
 
@@ -926,7 +1034,7 @@ fn relocated_job_carries_its_seated_workers_onto_its_new_berths() {
         let to = utils::position_of(app.world(), grub);
         assert_eq!(
             to,
-            from + utils::pos(10, 10),
+            from + utils::point("10", "10"),
             "each sits on its berth as the hatch now stands, the same tick"
         );
         assert!(
@@ -956,7 +1064,7 @@ fn relocated_job_carries_dying_seated_worker_along() {
     // Ten cells right and ten down, with the hatch.
     assert_eq!(
         utils::position_of(app.world(), grub),
-        before + utils::pos(10, 10)
+        before + utils::point("10", "10")
     );
     assert!(entity_def::attached(app.world(), grub));
 }
@@ -980,11 +1088,11 @@ fn gathering_takes_hatch_carrying_its_seated_grubs_but_never_grubs_alone() {
     // The 3×3 hatch lands on the recaller's ring at (26..29, 24..27), sixteen
     // cells right and fourteen down, its grub put on its berth there in the
     // landing tick rather than moved on its own.
-    assert_eq!(utils::cell_of(app.world(), hatch), CellPos::new(26, 24));
+    assert_eq!(utils::anchor_of(app.world(), hatch), CellPos::new(26, 24));
     assert!(entity_def::attached(app.world(), grub));
     assert_eq!(
         utils::position_of(app.world(), grub),
-        before + utils::pos(16, 14)
+        before + utils::point("16", "14")
     );
 }
 
@@ -1091,8 +1199,8 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                     utils::GROUND,
                 )
                 .with_movement(
-                    FixedU64::from_num(0.25),
-                    FixedU64::from_num(0.25),
+                    utils::fixed("0.25"),
+                    utils::fixed("0.25"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -1125,7 +1233,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                     PassengerConduct::Shelter,
                 ),
         );
-        let cell = || Away::Cell {
+        let cell = || Away::Ground {
             reach: Reach::Wherever,
         };
         let own = || Whom {
@@ -1368,7 +1476,7 @@ fn register_recaller(app: &mut App) {
                 effect: EntityCastEffect::Relocate {
                     journey: Box::new(Journey::FromAim {
                         party: AimParty::Around {
-                            at: Away::Cell {
+                            at: Away::Ground {
                                 reach: Reach::Wherever,
                             },
                             gathering: Gathering {
@@ -1405,4 +1513,18 @@ fn relocations(app: &App) -> Vec<SimulationEvent> {
         .filter(|event| matches!(event, SimulationEvent::EntityRelocated { .. }))
         .cloned()
         .collect()
+}
+
+/// [`app`] on a continuous-model map, with a `caravan`: a walker the side
+/// counts as a hall.
+fn continuous_app() -> App {
+    let mut app = app();
+    app.world_mut().resource_mut::<ContentRegistry>().register(
+        utils::walker("caravan", utils::GROUND_DOMAIN)
+            .with_pool(Pool::health(20))
+            .with_tags(["hall"]),
+    );
+    let projection = app.world().resource::<Map>().projection();
+    utils::install_map(&mut app, projection, MovementModel::Continuous);
+    app
 }

@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use ferrets_math::{FixedI64, fixed_vec2::FixedVec2};
 use ferrets_nav_grid::layer_mask::LayerMask;
 
-use crate::body::{self, Body};
+use crate::body::Body;
 
 /// The farthest one pass may displace a body, in cells per axis — high
 /// enough that contact is rigid against full-speed movement, bounded so
@@ -54,7 +54,7 @@ fn press_stiffening() -> FixedI64 {
 /// and mill a settled pile forever. A dead-on overlap breaks the symmetry
 /// along the x axis by pair order.
 ///
-/// Separated bodies whose centers share a cell drift apart the same way:
+/// Separated bodies anchored at the same cell drift apart the same way:
 /// circles pack tighter than one per cell (two can rest a full diameter
 /// apart inside one cell diagonally), but a cell claims as one boolean —
 /// ten units on nine cells is uncountable occupancy. The creep continues
@@ -67,20 +67,15 @@ pub fn separations(bodies: &[Body]) -> Vec<FixedVec2> {
             if bodies[first].layers & bodies[second].layers == LayerMask::EMPTY {
                 continue;
             }
-            // Geometry runs between the circles' centers, which sit half a
-            // footprint size past each anchor — the same point the terrain
-            // checks use. Between bodies of equal size the anchor offset and
-            // the center offset coincide, but a wide body's center is deeper in, and
-            // measuring anchors would miss real overlap on one side of it
-            // while phantom-pushing on the other.
-            let first_center = body::center(bodies[first].position, bodies[first].size);
-            let second_center = body::center(bodies[second].position, bodies[second].size);
-            let dx = second_center.x.to_num::<FixedI64>() - first_center.x.to_num::<FixedI64>();
-            let dy = second_center.y.to_num::<FixedI64>() - first_center.y.to_num::<FixedI64>();
-            let distance = first_center.distance(second_center).to_num::<FixedI64>();
+            let first_position = bodies[first].location.middle();
+            let second_position = bodies[second].location.middle();
+            let dx = second_position.x.to_num::<FixedI64>() - first_position.x.to_num::<FixedI64>();
+            let dy = second_position.y.to_num::<FixedI64>() - first_position.y.to_num::<FixedI64>();
+            let distance = first_position
+                .distance(second_position)
+                .to_num::<FixedI64>();
             let reach = (bodies[first].radius + bodies[second].radius).to_num::<FixedI64>();
-            let share_cell =
-                body::anchor(bodies[first].position) == body::anchor(bodies[second].position);
+            let share_cell = bodies[first].location.anchor() == bodies[second].location.anchor();
             if distance >= reach && !share_cell {
                 continue;
             }

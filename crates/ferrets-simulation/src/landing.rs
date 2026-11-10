@@ -13,7 +13,6 @@ use ferrets_content::{
     registry::ContentRegistry,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_nav_grid::{layer_id::LayerId, mover_shape::MoverShape, nav_grid::NavGrid};
 
 use crate::{
@@ -28,7 +27,6 @@ use crate::{
     overbuild::{self, Cover},
     regions::{self, Relation},
     session::{GameSession, ai_vision::AiVision, player_id::PlayerId, player_slot::PlayerSlot},
-    spawn,
     visibility::{CellVisibility, VisibilityGrid},
 };
 
@@ -477,34 +475,31 @@ fn search(
     let projection = map.projection();
     let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
     let reachability = Reachability::of(map, lander.def, shape, lander.from);
-    let takes = |cell: CellPos, footprint: CellRect| {
-        let placed = LocationComponent::new(FixedUVec2::from(cell), spawn::DEFAULT_FACING);
-        match ground {
-            Ground::Open { lifted, holders } => {
-                ground::can_place_clear_of(world, &placed, location_def, class, lifted, holders)
-            }
-            Ground::Over {
-                over,
-                lifted,
-                ignored,
-            } => match overbuild::source_under(world, over, footprint) {
-                Some(source) => {
-                    let (mut lifted_over, mut ignored_over) =
-                        overbuild::set_aside(world, Cover::Source(source));
-                    lifted_over.extend_from_slice(lifted);
-                    ignored_over.extend_from_slice(ignored);
-                    ground::can_place(
-                        world,
-                        &placed,
-                        location_def,
-                        class,
-                        &lifted_over,
-                        &ignored_over,
-                    )
-                }
-                None => false,
-            },
+    let takes = |cell: CellPos, footprint: CellRect| match ground {
+        Ground::Open { lifted, holders } => {
+            ground::can_place_clear_of(world, cell, location_def, class, lifted, holders)
         }
+        Ground::Over {
+            over,
+            lifted,
+            ignored,
+        } => match overbuild::source_under(world, over, footprint) {
+            Some(source) => {
+                let (mut lifted_over, mut ignored_over) =
+                    overbuild::set_aside(world, Cover::Source(source));
+                lifted_over.extend_from_slice(lifted);
+                ignored_over.extend_from_slice(ignored);
+                ground::can_place(
+                    world,
+                    cell,
+                    location_def,
+                    class,
+                    &lifted_over,
+                    &ignored_over,
+                )
+            }
+            None => false,
+        },
     };
     let lands = |cell: CellPos, first: Levels| {
         let footprint = CellRect::new(cell, size);

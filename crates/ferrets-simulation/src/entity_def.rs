@@ -1,7 +1,9 @@
 //! Resolution from a spawned entity to what the simulation knows about it.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, location::Location,
+};
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
 
@@ -30,7 +32,7 @@ use crate::{
     entity_index::EntityIndex,
     fields,
     map::Map,
-    movement_model::{self, MovementModel},
+    movement_model::MovementModel,
     occupancy::{GridMark, OccupancyClass},
     order::Order,
     regions,
@@ -507,49 +509,47 @@ pub fn quantity_count(world: &World, entity: Entity, quantity: Quantity) -> u32 
 }
 
 /// What `entity`, standing on the grid, marks there (see [`grid_mark_of`]):
-/// on the cell model, a body mid-crossing marks the cell its crossing claimed.
+/// on the cell model, a body mid-crossing marks the anchor its crossing
+/// claimed.
 ///
 /// Panics for an entity with no location.
 pub fn grid_mark(world: &World, entity: Entity) -> Option<GridMark> {
     let def = of(world, entity);
-    let mut location = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .expect("a body standing on the grid has a location")
-        .clone();
+    let standing = location(world, entity);
+    let mut anchor = standing.anchor();
     match world.resource::<Map>().movement_model() {
         MovementModel::Cell => {
-            if movement_model::is_mid_crossing(location.position)
+            if standing.is_mid_crossing()
                 && let Some(claimed) = world
                     .entity(entity)
                     .get::<MoveComponent>()
                     .and_then(|movement| movement.path.last().copied())
             {
-                location.position = FixedUVec2::from(claimed);
+                anchor = claimed;
             }
         }
         MovementModel::Continuous => {}
     }
     grid_mark_of(
         simulation_id(world, entity),
-        &location,
+        anchor,
         def.location
             .expect("a body standing on the grid has a location"),
         OccupancyClass::of(def),
     )
 }
 
-/// What `holder`'s body standing at `location` in `def` marks on the grid, on
+/// What `holder`'s body anchored at `anchor` in `def` marks on the grid, on
 /// the plane `class` selects — or `None` for one whose solidity marks no cells.
 pub fn grid_mark_of(
     holder: SimulationId,
-    location: &LocationComponent,
+    anchor: CellPos,
     def: LocationDef,
     class: OccupancyClass,
 ) -> Option<GridMark> {
     def.solidity().claims_cells().then(|| GridMark {
         holder,
-        footprint: CellRect::new(body::anchor(location.position), def.size()),
+        footprint: CellRect::new(anchor, def.size()),
         layers: def.occupies(),
         class,
     })
@@ -567,7 +567,7 @@ pub fn mover_shape(registry: &ContentRegistry, location_def: &LocationDef) -> Mo
     )
 }
 
-/// Returns where `entity` stands.
+/// Where `entity` stands: its body's middle.
 ///
 /// Panics if `entity` is not a simulation entity, or is off the map: a hidden
 /// entity stands nowhere, and [`whereabouts`] is the read for one that may be.
@@ -586,8 +586,8 @@ pub fn walking(world: &World, entity: Entity) -> bool {
 
 /// Where `entity` is: its position while it stands on the map; off it, the
 /// whereabouts of what it is [`inside`]; waiting beside a container gone from
-/// the world, the footprint its return last searched; otherwise where it went
-/// in.
+/// the world, the middle of its place anchored at the footprint its return last
+/// searched, held on the map; otherwise where it went in.
 ///
 /// An entity carries a location or the hidden marker, never both and never
 /// neither; what it is inside may itself be inside a job.
@@ -601,21 +601,28 @@ pub fn whereabouts(world: &World, entity: Entity) -> FixedUVec2 {
     match inside(world, entity) {
         Some(container) => whereabouts(world, container),
         None => match waiting_beside(world, entity) {
-            Some((Beside::Container(_), last)) => FixedUVec2::from(last.origin),
+            Some((Beside::Container(_), last)) => world
+                .resource::<Map>()
+                .location_at_clamped(last.origin, size(world, entity))
+                .middle(),
             Some((Beside::WentIn | Beside::Footprint(_) | Beside::Berth { .. }, _)) | None => {
-                went_in(world, entity)
+                went_in(world, entity).position
             }
         },
     }
 }
 
-/// [`footprint`] read at `entity`'s [`whereabouts`], with the size its type
-/// declares.
+/// The footprint of `entity`'s body at its [`whereabouts`], held on the map
+/// where the whereabouts are a container's middle a body of `entity`'s size
+/// would reach past an edge from.
 ///
 /// Panics if `entity` is not a simulation entity, or its type declares no
 /// location.
-pub fn whereabouts_footprint(world: &World, entity: Entity) -> (FixedUVec2, CellSize) {
-    (whereabouts(world, entity), location_size(world, entity))
+pub fn whereabouts_rect(world: &World, entity: Entity) -> CellRect {
+    world
+        .resource::<Map>()
+        .location_clamped(whereabouts(world, entity), size(world, entity))
+        .footprint()
 }
 
 /// What `entity` is off the map inside: the transporter it rides, the job it
@@ -706,8 +713,18 @@ pub fn beside_rect(world: &World, entity: Entity, beside: Beside) -> CellRect {
 /// Panics if `entity` is not a simulation entity, is not hidden, or its type
 /// declares no location.
 pub fn went_in_rect(world: &World, entity: Entity) -> CellRect {
-    OccupancyClass::of(of(world, entity))
-        .footprint_rect(went_in(world, entity), location_size(world, entity))
+    CellRect::new(went_in_anchor(world, entity), size(world, entity))
+}
+
+/// The anchor a hidden `entity` went in at, held on the map for its size.
+///
+/// Panics if `entity` is not a simulation entity, is not hidden, or its type
+/// declares no location.
+pub fn went_in_anchor(world: &World, entity: Entity) -> CellPos {
+    world
+        .resource::<Map>()
+        .location_clamped(went_in(world, entity).position, size(world, entity))
+        .anchor()
 }
 
 /// The body radius of a mover, from its radius stat, held to half its
@@ -718,7 +735,7 @@ pub fn went_in_rect(world: &World, entity: Entity) -> CellRect {
 /// — building a continuous-model map validates that every mover defines
 /// one, and only the continuous model reads it.
 pub fn radius(world: &World, entity: Entity) -> FixedU64 {
-    let size = location_size(world, entity);
+    let size = size(world, entity);
     let bound = FixedU64::from_num(size.width.min(size.height)) / 2;
     world
         .entity(entity)
@@ -805,57 +822,69 @@ pub fn effective_ticks(world: &World, entity: Entity, stat: EntityStatId) -> u32
 ///
 /// Panics if `entity` is not a simulation entity, or its type declares no
 /// location.
-pub fn location_size(world: &World, entity: Entity) -> CellSize {
+pub fn size(world: &World, entity: Entity) -> CellSize {
     of(world, entity)
         .location
-        .expect("only entities with LocationDef have a footprint")
+        .expect("only entities with LocationDef have a size")
         .size()
 }
 
-/// Returns where `entity` stands and how much room it takes.
+/// Where `entity`'s body stands: its position, judged with its size to lie
+/// wholly on the map.
 ///
-/// The two belong together — a footprint is neither without the other — and they
-/// come from different places: the position is per-entity state, the size is its
-/// type's. Anything measuring against an entity wants both, so it asks once.
-///
-/// Panics if `entity` is not a simulation entity, or its type declares no location.
-pub fn footprint(world: &World, entity: Entity) -> (FixedUVec2, CellSize) {
-    footprint_of(world, of(world, entity), entity)
+/// Panics if `entity` is not a simulation entity, is off the map, its type
+/// declares no location, or its body reaches past the map's edge.
+pub fn location(world: &World, entity: Entity) -> Location {
+    world
+        .resource::<Map>()
+        .location(position(world, entity), size(world, entity))
 }
 
-/// [`footprint`] for an `entity` whose type `def` the caller already holds.
+/// The cells `entity` would be counted on standing where it stands now in the
+/// form `def`: the footprint of the place `def` settles at from `entity`'s
+/// middle, toward its own anchor ([`settled`]).
 ///
-/// Panics if `entity` is not a simulation entity, or `def` declares no location.
-pub fn footprint_of(world: &World, def: &EntityTypeDef, entity: Entity) -> (FixedUVec2, CellSize) {
+/// Panics if `entity` is not a simulation entity, is off the map, or `def`
+/// declares no location.
+pub fn footprint_as(world: &World, entity: Entity, def: &EntityTypeDef) -> CellRect {
+    let standing = location(world, entity);
+    settled(world, def, standing.middle(), standing.anchor()).footprint()
+}
+
+/// Where a body of `def` settles from `middle`, held on the map for its size:
+/// on the lattice — its place snapped onto the cells it is counted on there, a
+/// half between two cells taking the one nearer `toward` — when it stands
+/// still or the cell model keeps every body on it; the place itself
+/// otherwise.
+///
+/// Panics if `def` declares no location.
+pub fn settled(
+    world: &World,
+    def: &EntityTypeDef,
+    middle: FixedUVec2,
+    toward: CellPos,
+) -> Location {
     let size = def
         .location
-        .expect("validated content defines a location")
+        .expect("a body that settles stands somewhere")
         .size();
-    (position(world, entity), size)
-}
-
-/// The footprint `entity` stands on as a rect of whole cells. A standing
-/// form's is anchored at the cell its position rounds to ([`body::anchor`]),
-/// the cells its footprint is stamped on; a mover's at the cell its position
-/// floors into, the one footprint a walk can plan toward.
-///
-/// Panics if `entity` is not a simulation entity, or its type declares no location.
-pub fn footprint_rect(world: &World, entity: Entity) -> CellRect {
-    footprint_rect_of(world, of(world, entity), entity)
-}
-
-/// [`footprint_rect`] for an `entity` whose type `def` the caller already
-/// holds.
-///
-/// Panics if `entity` is not a simulation entity, or `def` declares no location.
-pub fn footprint_rect_of(world: &World, def: &EntityTypeDef, entity: Entity) -> CellRect {
-    let (position, size) = footprint_of(world, def, entity);
-    OccupancyClass::of(def).footprint_rect(position, size)
+    let map = world.resource::<Map>();
+    let held = map.location_clamped(middle, size);
+    match (OccupancyClass::of(def), map.movement_model()) {
+        // A standing footprint holds the cells it is anchored at, so a body
+        // left between them would be drawn — and would reach — off its own
+        // cells; a cell-model mover left there would read as mid-crossing.
+        (OccupancyClass::Static, _) | (OccupancyClass::Claim, MovementModel::Cell) => {
+            held.snapped_toward(toward)
+        }
+        (OccupancyClass::Claim, MovementModel::Continuous) => held,
+    }
 }
 
 /// The layer `entity`'s domain puts its body in.
 ///
-/// Panics if `entity` is not a simulation entity, or its type declares no location.
+/// Panics if `entity` is not a simulation entity, or its type declares no
+/// location.
 pub fn layer(world: &World, entity: Entity) -> LayerId {
     let location = of(world, entity)
         .location
@@ -866,8 +895,8 @@ pub fn layer(world: &World, entity: Entity) -> LayerId {
         .layer()
 }
 
-/// The level `entity` stands at: the highest of its layer under the cells it
-/// occupies (see [`occupied_rect`]).
+/// The level `entity` stands at: the highest of its layer under its
+/// footprint where it stands.
 ///
 /// Panics if `entity` is not a simulation entity, its type declares no
 /// location, or a cell it occupies lies off the map — an anchor keeps a
@@ -876,19 +905,20 @@ pub fn level(world: &World, entity: Entity) -> u32 {
     regions::highest_level(
         world.resource::<Map>().nav_grid(),
         layer(world, entity),
-        occupied_rect(world, entity),
+        location(world, entity).footprint(),
     )
     .expect("an anchor keeps a footprint on the map")
 }
 
-/// The terrains under the cells `entity` occupies (see [`occupied_rect`]).
+/// The terrains under `entity`'s footprint where it stands.
 ///
 /// Panics if `entity` is not a simulation entity, its type declares no
 /// location, it is hidden (off the map), or a cell it occupies lies off the
 /// map — an anchor keeps a footprint on the map.
 pub fn terrains_under(world: &World, entity: Entity) -> TerrainMask {
     let grid = world.resource::<Map>().nav_grid();
-    occupied_rect(world, entity)
+    location(world, entity)
+        .footprint()
         .cells()
         .map(|cell| {
             grid.terrain(cell)
@@ -897,45 +927,28 @@ pub fn terrains_under(world: &World, entity: Entity) -> TerrainMask {
         .fold(TerrainMask::EMPTY, |under, terrain| under | terrain)
 }
 
-/// The cells `entity`'s footprint occupies: anchored at the cell its position
-/// rounds to ([`body::anchor`]), where a standing form is stamped and a
-/// mover's claim lies.
-///
-/// Panics if `entity` is not a simulation entity, or its type declares no location.
-pub fn occupied_rect(world: &World, entity: Entity) -> CellRect {
-    occupied_rect_of(world, of(world, entity), entity)
-}
-
-/// [`occupied_rect`] for an `entity` whose type `def` the caller already
-/// holds.
-///
-/// Panics if `entity` is not a simulation entity, or `def` declares no location.
-pub fn occupied_rect_of(world: &World, def: &EntityTypeDef, entity: Entity) -> CellRect {
-    let (position, size) = footprint_of(world, def, entity);
-    CellRect::new(body::anchor(position), size)
-}
-
 /// The cells `entity` stands on, per [`body::standing_rect`] — what a reach
 /// measure takes for either side, the one reaching and the one reached.
 ///
-/// Panics if `entity` is not a simulation entity, or its type declares no location.
+/// Panics if `entity` is not a simulation entity, or its type declares no
+/// location.
 pub fn standing_rect(world: &World, entity: Entity) -> CellRect {
-    let (position, size) = footprint(world, entity);
-    body::standing_rect(position, size)
+    body::standing_rect(location(world, entity))
 }
 
 /// The cells `entity`'s body lies over where it stands, by its true shape:
-/// under the cell model the cells its footprint at its position covers (see
+/// under the cell model the cells its bounds cover (see
 /// [`body::covered_rect`]), under the continuous model the cells its circle's
 /// bounding box spans (see [`body::circle_rect`]).
 ///
 /// Panics if `entity` is not a simulation entity, or its type declares no
 /// location, or under the continuous model carries no radius stat.
 pub fn covered_rect(world: &World, entity: Entity) -> CellRect {
-    let (position, size) = footprint(world, entity);
     match world.resource::<Map>().movement_model() {
-        MovementModel::Cell => body::covered_rect(position, size),
-        MovementModel::Continuous => body::circle_rect(position, size, radius(world, entity)),
+        MovementModel::Cell => body::covered_rect(location(world, entity)),
+        MovementModel::Continuous => {
+            body::circle_rect(position(world, entity), radius(world, entity))
+        }
     }
 }
 
@@ -955,16 +968,32 @@ pub fn measured_rect(world: &World, entity: Entity, occupancy: OccupancyClass) -
     }
 }
 
-/// The center of the footprint `entity` stands on, in world units with
-/// sub-cell precision.
+/// Moves `entity`'s body to `location`.
 ///
-/// Panics if `entity` is not a simulation entity, or its type declares no location.
-pub fn footprint_center(world: &World, entity: Entity) -> FixedUVec2 {
-    let (position, size) = footprint(world, entity);
-    FixedUVec2::new(
-        position.x + FixedU64::from_num(size.width) / 2,
-        position.y + FixedU64::from_num(size.height) / 2,
-    )
+/// Panics if `entity` is not a simulation entity, is off the map, or
+/// `location` is the place of a body of another size than `entity`'s.
+pub(crate) fn set_location(world: &mut World, entity: Entity, location: Location) {
+    assert_eq!(
+        location.size(),
+        size(world, entity),
+        "a body moves to a place of its own size"
+    );
+    world
+        .get_mut::<LocationComponent>(entity)
+        .expect("a body moved on the map stands on it")
+        .position = location.middle();
+}
+
+/// Moves `entity`'s body onto the cells anchored at `anchor`.
+///
+/// Panics if `entity` is not a simulation entity, is off the map, its type
+/// declares no location, or its footprint there would reach past the map's
+/// edge.
+pub(crate) fn set_anchor(world: &mut World, entity: Entity, anchor: CellPos) {
+    let location = world
+        .resource::<Map>()
+        .location_at(anchor, size(world, entity));
+    set_location(world, entity, location);
 }
 
 /// Every layer the weapons `entity` carries reach between them — the weapon its
@@ -1079,14 +1108,13 @@ fn longest(
         .unwrap_or(0)
 }
 
-/// Where a hidden `entity` went in. Panics for one on the map.
-fn went_in(world: &World, entity: Entity) -> FixedUVec2 {
-    world
+/// Where a hidden `entity` went off the map. Panics for one on the map.
+fn went_in(world: &World, entity: Entity) -> &LocationComponent {
+    &world
         .entity(entity)
         .get::<HiddenComponent>()
         .expect("an entity with no location is hidden")
         .went_in
-        .position
 }
 
 /// What a waiting `entity`'s return searches beside and the footprint it last
@@ -1103,6 +1131,6 @@ fn own_rect(world: &World, entity: Entity) -> CellRect {
     if hidden(world, entity) {
         went_in_rect(world, entity)
     } else {
-        footprint_rect(world, entity)
+        location(world, entity).footprint()
     }
 }

@@ -13,7 +13,6 @@ use ferrets_content::{
     splash::{SplashDef, SplashShape},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
-use ferrets_math::FixedU64;
 use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
@@ -34,10 +33,10 @@ mod utils;
 #[test]
 fn shot_lands_after_its_flight_time() {
     let mut app = app();
-    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 5), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::cell(5, 5), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 5), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 5), Some(1))
             .expect("target spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -62,6 +61,74 @@ fn shot_lands_after_its_flight_time() {
     assert_eq!(utils::health_as_u32(&app, target), 80);
 }
 
+#[test]
+fn wide_shooter_fires_same_flight_either_way() {
+    // The mortar covers (10..11, 10..11) with its middle at (11, 11). A dummy
+    // at (5, 10) has its middle at (5.5, 10.5), one at (16, 10) at
+    // (16.5, 10.5): 11 − 5.5 = 16.5 − 11 = 5.5 cells either way, eleven
+    // ticks at half a cell a tick.
+    for dummy_at in [utils::cell(5, 10), utils::cell(16, 10)] {
+        let mut app = app();
+        let (_, mortar) =
+            utils::create_entity(app.world_mut(), "mortar", utils::cell(10, 10), Some(0))
+                .expect("mortar spawns");
+        let (_, dummy) = utils::create_entity(app.world_mut(), "dummy", dummy_at, Some(1))
+            .expect("dummy spawns");
+
+        utils::attack(&mut app, mortar, dummy);
+        assert_eq!(flight_of(&mut app), 11, "from {dummy_at:?}");
+    }
+}
+
+#[test]
+fn ground_shot_flies_to_cell_middle() {
+    // From the sieger at (5, 14), middle (5.5, 14.5), a shell sent to the
+    // ground at (11, 14) lands on its middle (11.5, 14.5): 6 cells, twelve
+    // ticks at half a cell a tick.
+    let mut app = app();
+    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::cell(5, 14), Some(0))
+        .expect("sieger spawns");
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SelectById {
+            id: sieger,
+            mode: SelectMode::Replace,
+        },
+    );
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Cell(utils::cell(11, 14)),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, 6);
+    let shots = app.world().resource::<PendingImpacts>();
+    let [shot] = shots.in_flight() else {
+        panic!("one shell is in the air");
+    };
+    assert_eq!(shot.impact, utils::point("11.5", "14.5"));
+    assert_eq!(shot.lands_on_tick - shot.emitted_on_tick, 12);
+}
+
+#[test]
+fn shot_at_wide_target_flies_to_cell_it_lands_on() {
+    // The bunker covers (10..11, 5..6). From the gunner at (15, 5), middle
+    // (15.5, 5.5), the shell is aimed at (11, 5), middle (11.5, 5.5): 4 cells,
+    // eight ticks at half a cell a tick.
+    let mut app = app();
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::cell(15, 5), Some(0))
+        .expect("gunner spawns");
+    let (_, bunker) = utils::create_entity(app.world_mut(), "bunker", utils::cell(10, 5), Some(1))
+        .expect("bunker spawns");
+
+    utils::attack(&mut app, gunner, bunker);
+    assert_eq!(flight_of(&mut app), 8);
+    let shots = app.world().resource::<PendingImpacts>();
+    assert_eq!(shots.in_flight()[0].impact, utils::point("11.5", "5.5"));
+}
+
 //
 // ─── Blast falloff ──────────────────────────────────────────────────────────
 //
@@ -69,15 +136,15 @@ fn shot_lands_after_its_flight_time() {
 #[test]
 fn blast_damages_bystanders_by_band() {
     let mut app = app();
-    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 20), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::cell(5, 20), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 20), Some(1))
             .expect("target spawns");
     // One cell from the impact (half damage) and two cells away (quarter damage).
-    let (near, _) = utils::create_entity(app.world_mut(), "dummy", utils::pos(10, 20), Some(1))
+    let (near, _) = utils::create_entity(app.world_mut(), "dummy", utils::cell(10, 20), Some(1))
         .expect("near bystander spawns");
-    let (far, _) = utils::create_entity(app.world_mut(), "dummy", utils::pos(11, 20), Some(1))
+    let (far, _) = utils::create_entity(app.world_mut(), "dummy", utils::cell(11, 20), Some(1))
         .expect("far bystander spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -95,15 +162,15 @@ fn blast_damages_bystanders_by_band() {
 #[test]
 fn blast_spares_body_targetable_off_its_layers() {
     let mut app = app();
-    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 20), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::cell(5, 20), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 20), Some(1))
             .expect("target spawns");
     // Standing on the ground one cell from the impact, but attacked only in the
     // air: the ground blast's half band passes it by.
     let (skimmer, _) =
-        utils::create_entity(app.world_mut(), "skimmer", utils::pos(10, 20), Some(1))
+        utils::create_entity(app.world_mut(), "skimmer", utils::cell(10, 20), Some(1))
             .expect("skimmer spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -117,17 +184,18 @@ fn blast_spares_body_targetable_off_its_layers() {
 #[test]
 fn air_blast_spares_ground_body_towering_into_air() {
     let mut app = app();
-    let (_, flak) = utils::create_entity(app.world_mut(), "flak", utils::pos(5, 20), Some(0))
+    let (_, flak) = utils::create_entity(app.world_mut(), "flak", utils::cell(5, 20), Some(0))
         .expect("flak spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 20), Some(1))
             .expect("target spawns");
     // One cell either side of the impact, both bursting in the air's half
     // band: the skimmer declares itself attacked in the air, the pylon only
     // towers into it and is attacked on the ground it stands on.
-    let (skimmer, _) = utils::create_entity(app.world_mut(), "skimmer", utils::pos(8, 20), Some(1))
-        .expect("skimmer spawns");
-    let (pylon, _) = utils::create_entity(app.world_mut(), "pylon", utils::pos(10, 20), Some(1))
+    let (skimmer, _) =
+        utils::create_entity(app.world_mut(), "skimmer", utils::cell(8, 20), Some(1))
+            .expect("skimmer spawns");
+    let (pylon, _) = utils::create_entity(app.world_mut(), "pylon", utils::cell(10, 20), Some(1))
         .expect("pylon spawns");
 
     utils::attack(&mut app, flak, target_id);
@@ -143,10 +211,10 @@ fn air_blast_spares_ground_body_towering_into_air() {
 #[test]
 fn shot_whose_target_died_in_flight_hits_nobody_directly() {
     let mut app = app();
-    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 20), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::cell(5, 20), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 20), Some(1))
             .expect("target spawns");
     utils::attack(&mut app, gunner, target_id);
     utils::run_ticks(&mut app, 5);
@@ -159,7 +227,7 @@ fn shot_whose_target_died_in_flight_hits_nobody_directly() {
     // cell when the shell lands.
     spawn::destroy_entity(app.world_mut(), target);
     utils::run_ticks(&mut app, 1);
-    let (stand_in, _) = utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 20), Some(1))
+    let (stand_in, _) = utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 20), Some(1))
         .expect("stand-in spawns");
     utils::run_ticks(&mut app, 8);
 
@@ -171,13 +239,13 @@ fn shot_whose_target_died_in_flight_hits_nobody_directly() {
 #[test]
 fn blast_spares_own_side_without_friendly_fire() {
     let mut app = app();
-    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 26), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::cell(5, 26), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 26), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 26), Some(1))
             .expect("target spawns");
     // An own-side unit standing inside the blast.
-    let (ally, _) = utils::create_entity(app.world_mut(), "dummy", utils::pos(10, 26), Some(0))
+    let (ally, _) = utils::create_entity(app.world_mut(), "dummy", utils::cell(10, 26), Some(0))
         .expect("ally spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -200,12 +268,12 @@ fn blast_scales_bonus_and_subtracts_armor_in_full() {
     // bonus along with the base — otherwise the blast edge deals its full bonus —
     // and armor must then come off in full, because it mitigates each hit it takes.
     let mut app = app();
-    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 30), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::cell(5, 30), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 30), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 30), Some(1))
             .expect("target spawns");
-    let (tank, _) = utils::create_entity(app.world_mut(), "tank", utils::pos(10, 30), Some(1))
+    let (tank, _) = utils::create_entity(app.world_mut(), "tank", utils::cell(10, 30), Some(1))
         .expect("armored bystander spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -223,14 +291,14 @@ fn blast_scales_bonus_and_subtracts_armor_in_full() {
 
 #[test]
 fn shot_at_footprint_is_aimed_at_its_nearest_cell() {
-    // The keep's position names its north-west corner, (5, 5). A shell from
-    // the south-east is aimed at the cell of the footprint nearest the gun,
-    // its south-east corner (7, 7) — the edge the range was measured to — and
-    // lands there, not across the keep on the corner the position names.
+    // The keep is anchored at its north-west cell, (5, 5). A shell from the
+    // south-east is aimed at the cell of the footprint nearest the gun, its
+    // south-east corner (7, 7) — the edge the range was measured to — and
+    // lands there, not across the keep on the cell it is anchored at.
     let mut app = app();
-    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::pos(11, 11), Some(0))
+    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::cell(11, 11), Some(0))
         .expect("sieger spawns");
-    let (keep, keep_id) = utils::create_entity(app.world_mut(), "keep", utils::pos(5, 5), Some(1))
+    let (keep, keep_id) = utils::create_entity(app.world_mut(), "keep", utils::cell(5, 5), Some(1))
         .expect("keep spawns");
 
     utils::attack(&mut app, sieger, keep_id);
@@ -249,19 +317,20 @@ fn shot_at_footprint_is_aimed_at_its_nearest_cell() {
 
 #[test]
 fn shot_at_body_is_aimed_at_nearest_cell_it_stands_on() {
-    // Under the continuous model a runner of the other side rests at
-    // (9.5, 20), across (9, 20) and (10, 20). A shell from (14, 20) is aimed
-    // at (10, 20), the nearer cell it stands on — the cell the range was
-    // measured to — not at (9, 20), the cell its position floors into.
+    // Under the continuous model a runner of the other side rests with its
+    // middle at (10, 20.5), across (9, 20) and (10, 20). A shell from (14, 20)
+    // is aimed at the middle of (10, 20), the nearer cell it stands on — the
+    // cell the range was measured to — not at (9, 20), the cell its low edge
+    // floors into.
     let mut app = app();
     let projection = app.world().resource::<Map>().projection();
     utils::install_map(&mut app, projection, MovementModel::Continuous);
-    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::pos(14, 20), Some(0))
+    let (_, gunner) = utils::create_entity(app.world_mut(), "gunner", utils::cell(14, 20), Some(0))
         .expect("gunner spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "runner", utils::pos(9, 20), Some(1))
+        utils::create_entity(app.world_mut(), "runner", utils::cell(9, 20), Some(1))
             .expect("target spawns");
-    utils::walk_onto(&mut app, target, utils::part_way("9.5", "20"), 10);
+    utils::walk_onto(&mut app, target, utils::point("10", "20.5"), 10);
 
     utils::attack(&mut app, gunner, target_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -277,10 +346,10 @@ fn cell_aimed_shot_misses_target_that_moves_away() {
     // The shell is sent to the cell the target stood on. The target walks off before
     // it lands, so nothing is there to take the hit.
     let mut app = app();
-    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::pos(5, 4), Some(0))
+    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::cell(5, 4), Some(0))
         .expect("sieger spawns");
     let (runner, runner_id) =
-        utils::create_entity(app.world_mut(), "runner", utils::pos(11, 4), Some(1))
+        utils::create_entity(app.world_mut(), "runner", utils::cell(11, 4), Some(1))
             .expect("runner spawns");
 
     utils::attack(&mut app, sieger, runner_id);
@@ -301,10 +370,10 @@ fn cell_aimed_shot_hits_whoever_stands_on_cell() {
     // Same shot against a target that does not move: the cell is still occupied when
     // the shell arrives, so the occupant takes the full hit even with no blast.
     let mut app = app();
-    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::pos(5, 8), Some(0))
+    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::cell(5, 8), Some(0))
         .expect("sieger spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(11, 8), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(11, 8), Some(1))
             .expect("target spawns");
 
     utils::attack(&mut app, sieger, target_id);
@@ -318,7 +387,7 @@ fn cell_aiming_weapon_can_be_ordered_onto_bare_ground() {
     // Nothing is standing on the cell, so the shell simply lands. What matters is
     // that the order is accepted and the shot is released at all.
     let mut app = app();
-    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::pos(5, 14), Some(0))
+    let (_, sieger) = utils::create_entity(app.world_mut(), "sieger", utils::cell(5, 14), Some(0))
         .expect("sieger spawns");
 
     utils::push_command(
@@ -331,7 +400,7 @@ fn cell_aiming_weapon_can_be_ordered_onto_bare_ground() {
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: AttackTarget::Position(utils::pos(11, 14)),
+            target: AttackTarget::Cell(utils::cell(11, 14)),
             flush: true,
         },
     );
@@ -350,7 +419,7 @@ fn target_following_weapon_refuses_ground_order() {
     // bare cell to mean and the order is dropped rather than silently reinterpreted.
     let mut app = app();
     let (gunner_entity, gunner) =
-        utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 18), Some(0))
+        utils::create_entity(app.world_mut(), "gunner", utils::cell(5, 18), Some(0))
             .expect("gunner spawns");
 
     utils::push_command(
@@ -363,7 +432,7 @@ fn target_following_weapon_refuses_ground_order() {
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: AttackTarget::Position(utils::pos(11, 18)),
+            target: AttackTarget::Cell(utils::cell(11, 18)),
             flush: true,
         },
     );
@@ -388,10 +457,10 @@ fn target_following_weapon_refuses_ground_order() {
 fn shot_lands_after_its_attacker_dies() {
     let mut app = app();
     let (gunner_entity, gunner) =
-        utils::create_entity(app.world_mut(), "gunner", utils::pos(5, 12), Some(0))
+        utils::create_entity(app.world_mut(), "gunner", utils::cell(5, 12), Some(0))
             .expect("gunner spawns");
     let (target, target_id) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(9, 12), Some(1))
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 12), Some(1))
             .expect("target spawns");
 
     utils::attack(&mut app, gunner, target_id);
@@ -417,7 +486,8 @@ fn shot_lands_after_its_attacker_dies() {
 /// Two players and a roster with a `gunner` firing slow bursting shells, a
 /// `flak` gun whose shell bursts in the air, a stationary 100-hp `dummy` to
 /// catch them, a `skimmer` on the ground that is attacked only in the air, and
-/// a `pylon` on the ground towering into the air.
+/// a `pylon` on the ground towering into the air, and a two-cell-wide
+/// `mortar` and `bunker`.
 fn app() -> App {
     let mut app = utils::make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
@@ -444,7 +514,7 @@ fn app() -> App {
         registry.register_tag("armored");
         let shell = registry.register_projectile(
             "shell",
-            ProjectileDef::new(FixedU64::from_num(0.5), Aim::Entity),
+            ProjectileDef::new(utils::fixed("0.5"), Aim::Entity),
         );
         registry.register(
             EntityTypeDef::new("gunner")
@@ -463,7 +533,7 @@ fn app() -> App {
                         Delivery::Projectile(shell),
                         Some(SplashDef::new(
                             SplashShape::Circular,
-                            vec![(1, FixedU64::from_num(0.5)), (2, FixedU64::from_num(0.25))],
+                            vec![(1, utils::fixed("0.5")), (2, utils::fixed("0.25"))],
                             utils::GROUND,
                             false,
                         )),
@@ -475,6 +545,42 @@ fn app() -> App {
                     4,
                     2,
                 ),
+        );
+        // A two-cell-wide gun and target, for flights from and to a middle
+        // between cells.
+        registry.register(
+            EntityTypeDef::new("mortar")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_sight_range(12)
+                .with_pool(Pool::health(40))
+                .with_attack(
+                    AttackDef::new(Weapon::new(
+                        utils::GROUND,
+                        Delivery::Projectile(shell),
+                        None,
+                        Slain::Remains,
+                    )),
+                    20,
+                    8,
+                    8,
+                    30,
+                    2,
+                ),
+        );
+        registry.register(
+            EntityTypeDef::new("bunker")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(100)),
         );
         // A wide, stout target, for where a shot at a footprint is aimed.
         registry.register(
@@ -489,7 +595,7 @@ fn app() -> App {
         );
         let lob = registry.register_projectile(
             "lob",
-            ProjectileDef::new(FixedU64::from_num(0.5), Aim::Position),
+            ProjectileDef::new(utils::fixed("0.5"), Aim::Position),
         );
         registry.register(
             EntityTypeDef::new("sieger")
@@ -558,7 +664,7 @@ fn app() -> App {
                         Delivery::Projectile(shell),
                         Some(SplashDef::new(
                             SplashShape::Circular,
-                            vec![(1, FixedU64::from_num(0.5))],
+                            vec![(1, utils::fixed("0.5"))],
                             utils::AIR,
                             false,
                         )),
@@ -597,4 +703,15 @@ fn app() -> App {
     app.world_mut().resource::<ContentRegistry>().validate();
     utils::start_game(&mut app);
     app
+}
+
+/// The ticks the one shot in the air takes from release to landing, once the
+/// attack command has arrived and the first swing has fired.
+fn flight_of(app: &mut App) -> u32 {
+    utils::run_ticks(app, utils::APPLY + 1);
+    let shots = app.world().resource::<PendingImpacts>();
+    let [shot] = shots.in_flight() else {
+        panic!("one shell is in the air");
+    };
+    shot.lands_on_tick - shot.emitted_on_tick
 }

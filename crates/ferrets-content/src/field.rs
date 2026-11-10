@@ -70,7 +70,11 @@ impl FieldWatch {
 /// One kind of field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldDef {
-    /// The terrains its cells may lie on.
+    /// The terrains its cells may lie on. A cell of another terrain is never
+    /// covered, a source's own footprint included, so a body standing partly
+    /// on one is never wholly inside the field. Cover spreads from a
+    /// footprint through such cells only: one cut off by other terrain stays
+    /// uncovered, even within reach.
     terrains: Terrains,
     /// The layers it spreads on: whose bodies its effects and placement rules
     /// are for.
@@ -331,7 +335,8 @@ pub struct FieldEffect {
     /// Whose coverage counts.
     of: Affiliation,
     /// How much of the bearer's footprint must be covered for it to stand
-    /// inside.
+    /// inside; a footprint cell on terrain the field rejects is never
+    /// covered.
     coverage: Coverage,
     /// What the field does to the bearer inside it.
     inside: Vec<EntityEffect>,

@@ -4,7 +4,6 @@
 mod utils;
 
 use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
-use ferrets_math::FixedU64;
 use ferrets_simulation::{command::PlayerCommand, movement_model::MovementModel};
 
 #[test]
@@ -25,13 +24,21 @@ fn orthogonal_diagonal_walk_takes_its_priced_time() {
     );
 
     // Where the isometric walk would already have arrived, the orthogonal
-    // one is still on its way…
+    // one is still on its way: 13 ticks × 0.5 = 6.5 along the diagonal,
+    // 6.5 / √2 ≈ 4.6 cells on each axis, its low corner at 2 + 4.6 = 6.6,
+    // anchored at the 7 that rounds to…
     utils::run_ticks(&mut app, utils::APPLY + 13);
-    assert_eq!(utils::cell_of(app.world_mut(), soldier), CellPos::new(6, 6));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), soldier),
+        CellPos::new(7, 7)
+    );
 
     // …and lands within the √2 budget.
     utils::run_ticks(&mut app, 10);
-    assert_eq!(utils::cell_of(app.world_mut(), soldier), CellPos::new(8, 8));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), soldier),
+        CellPos::new(8, 8)
+    );
 }
 
 #[test]
@@ -54,21 +61,14 @@ fn orthogonal_bodies_separate_as_circles() {
     utils::run_ticks(&mut app, 300);
 
     // Resting circles keep a full Euclidean body apart — not merely a
-    // Chebyshev one, which would allow diagonal centers √2 closer.
+    // Chebyshev one, which would allow diagonal middles √2 closer.
     let world = app.world_mut();
     let a = utils::position_of(world, first.0);
     let b = utils::position_of(world, second.0);
-    let dx = (a.x.abs_diff(b.x).to_bits() as u128).pow(2);
-    let dy = (a.y.abs_diff(b.y).to_bits() as u128).pow(2);
-    let minimum = (FixedU64::from_num(0.99).to_bits() as u128).pow(2);
-    assert!(
-        dx + dy >= minimum,
-        "circle bodies must rest a Euclidean body apart: {a:?} vs {b:?}"
-    );
     // The exact equilibrium — identical to the isometric one, because
     // bodies are circles under every projection: both walks touch the
     // contested spot the same tick and finish there, and the pushing pass
     // parts the coincident pair half a body each way.
-    assert_eq!(a, utils::position_bits(0x4_8000_0000, 0x5_0000_0000));
-    assert_eq!(b, utils::position_bits(0x5_8000_0000, 0x5_0000_0000));
+    assert_eq!(a, utils::point("5", "5.5"));
+    assert_eq!(b, utils::point("6", "5.5"));
 }

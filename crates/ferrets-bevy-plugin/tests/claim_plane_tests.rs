@@ -5,14 +5,8 @@ mod utils;
 use bevy::prelude::App;
 use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
 use ferrets_simulation::{
-    command::PlayerCommand,
-    components::location::LocationComponent,
-    entity_def,
-    map::Map,
-    movement_model::{self, MovementModel},
-    occupancy::GridMark,
-    simulation_id::SimulationId,
-    spawn,
+    command::PlayerCommand, components::location::LocationComponent, entity_def, map::Map,
+    movement_model::MovementModel, occupancy::GridMark, simulation_id::SimulationId, spawn,
 };
 
 //
@@ -87,9 +81,10 @@ fn dying_body_keeps_its_claim_until_freed() {
     let mut app = utils::continuous_orders_app();
     let (_, survivor_id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
     let (dying, dying_id) = utils::create_owned(&mut app, "soldier", 4, 2, 0);
-    // Pressed onto the first soldier's cell — 2.4 anchors to 2 — and killed
-    // there: a dying body pushes nothing, so the survivor stays put.
-    movement_model::move_body(app.world_mut(), dying, utils::part_way("2.4", "2"));
+    // Pressed onto the first soldier's cell — its middle at 2.9, its low edge
+    // 2.4 anchoring to 2 — and killed there: a dying body pushes nothing, so
+    // the survivor stays put.
+    utils::move_body(&mut app, dying, utils::point("2.9", "2.5"));
     assert_eq!(holders_at(&app, 2, 2), [survivor_id.0, dying_id.0]);
 
     // The Die order starts on the first tick and runs the soldier's two
@@ -122,7 +117,7 @@ fn moving_cell_model_body_with_its_claim_panics() {
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Cell);
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
 
-    movement_model::move_body(app.world_mut(), soldier, utils::pos(3, 2));
+    utils::move_body(&mut app, soldier, utils::pos(3, 2));
 }
 
 #[test]
@@ -145,7 +140,7 @@ fn moving_seated_body_with_its_claim_panics() {
     utils::run_ticks(&mut app, 15);
     assert!(entity_def::attached(app.world(), nurse));
 
-    movement_model::move_body(app.world_mut(), nurse, utils::pos(8, 5));
+    utils::move_body(&mut app, nurse, utils::pos(8, 5));
 }
 
 //

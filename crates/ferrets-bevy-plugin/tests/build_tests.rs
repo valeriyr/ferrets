@@ -25,7 +25,7 @@ use ferrets_content::{
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
-use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
+use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
     beside::Lean,
@@ -47,7 +47,7 @@ use ferrets_simulation::{
     },
     ground,
     map::Map,
-    movement_model::{self, MovementModel},
+    movement_model::MovementModel,
     occupancy::OccupancyClass,
     order::{AttackTarget, BuildTask, Order},
     resources::PlayerResources,
@@ -71,7 +71,7 @@ fn build_constructs_building() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -94,7 +94,7 @@ fn build_constructs_building() {
     let world = app.world_mut();
     assert_eq!(rising(world), 0);
 
-    let worker_cell = utils::cell_of(world, worker);
+    let worker_cell = utils::anchor_of(world, worker);
     let site = CellRect::new(CellPos::new(10, 10), CellSize::new(2, 2));
     assert!(
         world
@@ -111,7 +111,7 @@ fn build_constructs_building() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "barracks".into(),
-            position: utils::pos(20, 20),
+            anchor: utils::cell(20, 20),
             flush: true,
         },
     );
@@ -131,7 +131,7 @@ fn builder_death_inside_site_keeps_price_spent() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -163,7 +163,7 @@ fn force_cancel_brings_hidden_builder_back_and_keeps_price_spent() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -193,14 +193,14 @@ fn unaffordable_placement_finishes_order_without_site() {
     // Already in reach of the site, so there is nothing to walk before the cost
     // check — and no gold is ever granted.
     let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
-    let stood_at = utils::cell_of(app.world_mut(), mason);
+    let stood_at = utils::anchor_of(app.world_mut(), mason);
 
     utils::push_command(
         &mut app,
         PlayerCommand::BuildEntity {
             builder: mason_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -213,7 +213,7 @@ fn unaffordable_placement_finishes_order_without_site() {
     );
     assert_eq!(utils::gold(app.world_mut()), 0, "and nothing was charged");
     assert_eq!(
-        utils::cell_of(app.world_mut(), mason),
+        utils::anchor_of(app.world_mut(), mason),
         stood_at,
         "the mason is left exactly where it stood"
     );
@@ -234,7 +234,7 @@ fn site_destroyed_mid_construction_frees_builder() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -271,7 +271,7 @@ fn builder_working_in_open_stays_on_map() {
         PlayerCommand::BuildEntity {
             builder: mason_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -308,7 +308,7 @@ fn builder_walks_up_to_site_rather_than_into_it() {
         PlayerCommand::BuildEntity {
             builder: mason_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -319,7 +319,7 @@ fn builder_walks_up_to_site_rather_than_into_it() {
         1,
         "the site went up, so nothing was standing in it"
     );
-    let stopped = utils::cell_of(app.world_mut(), mason);
+    let stopped = utils::anchor_of(app.world_mut(), mason);
     assert_eq!(
         stopped.x, 12,
         "the mason stopped against the east face, at {stopped:?}"
@@ -333,14 +333,14 @@ fn long_reach_builder_raises_site_without_closing_in() {
     // of it, which its build_range of 3 already covers.
     let (surveyor, surveyor_id) = utils::create_owned(&mut app, "surveyor", 14, 10, 0);
     utils::grant_gold(&mut app, 80);
-    let stood_at = utils::cell_of(app.world_mut(), surveyor);
+    let stood_at = utils::anchor_of(app.world_mut(), surveyor);
 
     utils::push_command(
         &mut app,
         PlayerCommand::BuildEntity {
             builder: surveyor_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -352,7 +352,7 @@ fn long_reach_builder_raises_site_without_closing_in() {
         "the site went up from three cells out"
     );
     assert_eq!(
-        utils::cell_of(app.world_mut(), surveyor),
+        utils::anchor_of(app.world_mut(), surveyor),
         stood_at,
         "a longer reach means no step toward the footprint at all"
     );
@@ -373,7 +373,7 @@ fn builder_standing_on_site_steps_off_it_and_raises_it() {
         PlayerCommand::BuildEntity {
             builder: mason_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -382,7 +382,10 @@ fn builder_standing_on_site_steps_off_it_and_raises_it() {
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     // 80 granted − the depot's 50.
     assert_eq!(utils::gold(app.world_mut()), 30);
-    assert_eq!(utils::cell_of(app.world_mut(), mason), CellPos::new(10, 9));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), mason),
+        CellPos::new(10, 9)
+    );
     assert!(!entity_def::hidden(app.world(), mason));
 }
 
@@ -408,10 +411,13 @@ fn idle_ally_on_site_walks_off_and_site_goes_up() {
     // 80 granted − the depot's 50.
     assert_eq!(utils::gold(app.world_mut()), 30);
     assert_eq!(
-        utils::cell_of(app.world_mut(), soldier),
+        utils::anchor_of(app.world_mut(), soldier),
         CellPos::new(12, 11)
     );
-    assert_eq!(utils::cell_of(app.world_mut(), mason), CellPos::new(9, 10));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), mason),
+        CellPos::new(9, 10)
+    );
 }
 
 #[test]
@@ -454,9 +460,12 @@ fn idle_allies_on_site_walk_off_to_cells_of_their_own() {
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
-    assert_eq!(utils::cell_of(app.world_mut(), first), CellPos::new(12, 11));
     assert_eq!(
-        utils::cell_of(app.world_mut(), second),
+        utils::anchor_of(app.world_mut(), first),
+        CellPos::new(12, 11)
+    );
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), second),
         CellPos::new(12, 12)
     );
 }
@@ -481,7 +490,7 @@ fn stunned_ally_on_site_keeps_it_from_going_up() {
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
     assert_eq!(utils::gold(app.world_mut()), 80);
     assert_eq!(
-        utils::cell_of(app.world_mut(), soldier),
+        utils::anchor_of(app.world_mut(), soldier),
         CellPos::new(11, 11)
     );
 }
@@ -509,7 +518,7 @@ fn teammates_idle_soldier_on_site_walks_off_and_site_goes_up() {
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert_eq!(
-        utils::cell_of(app.world_mut(), soldier),
+        utils::anchor_of(app.world_mut(), soldier),
         CellPos::new(12, 11)
     );
 }
@@ -532,7 +541,7 @@ fn enemy_on_site_keeps_it_from_going_up() {
     assert_eq!(utils::gold(app.world_mut()), 80);
     assert!(utils::order_queue_is_empty(app.world_mut(), mason));
     assert_eq!(
-        utils::cell_of(app.world_mut(), soldier),
+        utils::anchor_of(app.world_mut(), soldier),
         CellPos::new(11, 11)
     );
 }
@@ -565,7 +574,7 @@ fn busy_ally_on_site_keeps_it_from_going_up() {
     assert!(utils::order_queue_is_empty(app.world_mut(), mason));
     assert_eq!(utils::gold(app.world_mut()), 80);
     assert_eq!(
-        utils::cell_of(app.world_mut(), soldier),
+        utils::anchor_of(app.world_mut(), soldier),
         CellPos::new(11, 11)
     );
 }
@@ -623,7 +632,10 @@ fn site_has_one_founder() {
     assert_eq!(crew_of_rising(app.world_mut()), vec![first_id]);
     // 80 granted − one depot's 50.
     assert_eq!(utils::gold(app.world_mut()), 30);
-    assert_eq!(utils::cell_of(app.world_mut(), second), CellPos::new(9, 11));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), second),
+        CellPos::new(9, 11)
+    );
 }
 
 #[test]
@@ -637,7 +649,10 @@ fn builder_standing_on_site_it_cannot_pay_for_gives_up_where_it_stands() {
     utils::run_ticks(&mut app, 12);
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
-    assert_eq!(utils::cell_of(app.world_mut(), mason), CellPos::new(10, 10));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), mason),
+        CellPos::new(10, 10)
+    );
     assert!(utils::order_queue_is_empty(app.world_mut(), mason));
 }
 
@@ -655,34 +670,27 @@ fn builder_leaving_site_to_itself_steps_off_it_and_raises_it() {
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert_eq!(
-        utils::cell_of(app.world_mut(), architect),
+        utils::anchor_of(app.world_mut(), architect),
         CellPos::new(10, 9)
     );
 }
 
 #[test]
 fn builder_lying_across_site_edge_steps_wholly_off_it() {
-    // Under the continuous model the mason rests at (9.5, 10), across (9, 10)
-    // and (10, 10), the depot's first cell: it walks onto a cell wholly off
-    // the depot's (10..11, 10..11) instead of taking the half it already
-    // stands on as arrived, and raises the site.
+    // Under the continuous model the mason rests with its middle at
+    // (10, 10.5), across (9, 10) and (10, 10), the depot's first cell: it
+    // walks onto a cell wholly off the depot's (10..11, 10..11) instead of
+    // taking the half it already stands on as arrived, and raises the site.
     let mut app = utils::continuous_orders_app();
     let (mason, mason_id) = utils::create_owned(&mut app, "mason", 9, 10, 0);
-    movement_model::move_body(
-        app.world_mut(),
-        mason,
-        FixedUVec2::new(utils::fixed("9.5"), utils::fixed("10")),
-    );
+    utils::move_body(&mut app, mason, utils::point("10", "10.5"));
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, mason_id);
     utils::run_ticks(&mut app, 20);
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
-    assert_eq!(
-        entity_def::position(app.world(), mason),
-        FixedUVec2::from(CellPos::new(9, 10))
-    );
+    assert_eq!(entity_def::position(app.world(), mason), utils::pos(9, 10));
 }
 
 #[test]
@@ -697,14 +705,17 @@ fn builder_whose_site_ground_takes_with_it_there_raises_it_where_it_stands() {
         PlayerCommand::BuildEntity {
             builder: layer_id,
             type_name: "rug".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert_eq!(utils::count_of_type(app.world_mut(), "rug"), 1);
-    assert_eq!(utils::cell_of(app.world_mut(), layer), CellPos::new(10, 10));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), layer),
+        CellPos::new(10, 10)
+    );
 }
 
 #[test]
@@ -721,7 +732,10 @@ fn builder_steps_off_its_site_wherever_it_walks_whatever_its_placement_rules() {
     utils::run_ticks(&mut app, 12);
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
-    assert_eq!(utils::cell_of(app.world_mut(), mason), CellPos::new(10, 9));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), mason),
+        CellPos::new(10, 9)
+    );
 }
 
 #[test]
@@ -766,7 +780,7 @@ fn seated_builder_called_off_by_move_leaves_its_berth_and_walks() {
     assert!(!entity_def::attached(app.world(), roofer));
     assert_eq!(
         utils::position_of(app.world(), roofer),
-        utils::part_way("10.5", "9")
+        utils::point("11", "9.5")
     );
 }
 
@@ -786,16 +800,16 @@ fn attached_builder_raises_site_it_stands_on_under_continuous_model() {
 
 #[test]
 fn site_is_refused_over_body_lying_past_its_claim() {
-    // Under the continuous model an enemy soldier rests at x 9.3: it claims
-    // (9, 10), the cell its position rounds to, and its half-cell circle,
-    // centered at 9.8, lies from 9.3 to 10.3, over (10, 10) too. A depot on
+    // Under the continuous model an enemy soldier rests with its middle at
+    // x 9.8: it claims (9, 10), the cell it is anchored at, and its half-cell
+    // circle lies from 9.3 to 10.3, over (10, 10) too. A depot on
     // (10..11, 10..11) would go up over it, so the mason, coming from the
     // east, gives the order up on arrival with nothing paid; one on
     // (11..12, 10..11) clears it and goes up.
     let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |_, _| {});
     let (mason, mason_id) = utils::create_owned(&mut app, "mason", 15, 10, 0);
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 10, 1);
-    utils::walk_onto(&mut app, soldier, utils::part_way("9.3", "10"), 10);
+    utils::walk_onto(&mut app, soldier, utils::point("9.8", "10.5"), 10);
     utils::grant_gold(&mut app, 80);
     assert_eq!(
         app.world()
@@ -816,7 +830,7 @@ fn site_is_refused_over_body_lying_past_its_claim() {
         PlayerCommand::BuildEntity {
             builder: mason_id,
             type_name: "depot".into(),
-            position: utils::pos(11, 10),
+            anchor: utils::cell(11, 10),
             flush: true,
         },
     );
@@ -826,31 +840,32 @@ fn site_is_refused_over_body_lying_past_its_claim() {
     assert_eq!(utils::gold(app.world_mut()), 30);
     assert_eq!(
         utils::position_of(app.world(), soldier),
-        utils::part_way("9.3", "10")
+        utils::point("9.8", "10.5")
     );
 }
 
 #[test]
 fn ally_lying_onto_site_steps_back_onto_cell_it_holds() {
-    // Under the continuous model an own soldier rests at (10, 9.35): it holds
-    // (10, 9), and its body reaches 0.35 onto the depot's (10..11, 10..11).
-    // Another rests at (9.1, 8.1), its circle's box taking in (10, 9) though
-    // its claim, (9, 8), does not. Asked off, the first is set down by the
-    // claims, not the bodies, of the movers around: back onto (10, 9), a step
-    // of 0.35 on the eleventh tick, and the depot goes up on the twelfth.
+    // Under the continuous model an own soldier rests with its middle at
+    // (10.5, 9.85): it holds (10, 9), and its body reaches 0.35 onto the
+    // depot's (10..11, 10..11). Another rests at (9.6, 8.6), its circle's box
+    // taking in (10, 9) though its claim, (9, 8), does not. Asked off, the
+    // first is set down by the claims, not the bodies, of the movers around:
+    // back onto (10, 9), a step of 0.35 on the eleventh tick, and the depot
+    // goes up on the twelfth.
     let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |_, _| {});
     let (_, mason_id) = utils::create_owned(&mut app, "mason", 15, 10, 0);
     let (lying, _) = utils::create_owned(&mut app, "soldier", 10, 9, 0);
     let (grazing, _) = utils::create_owned(&mut app, "soldier", 8, 8, 0);
-    utils::walk_onto(&mut app, lying, utils::part_way("10", "9.35"), 10);
-    utils::walk_onto(&mut app, grazing, utils::part_way("9.1", "8.1"), 10);
+    utils::walk_onto(&mut app, lying, utils::point("10.5", "9.85"), 10);
+    utils::walk_onto(&mut app, grazing, utils::point("9.6", "8.6"), 10);
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, mason_id);
     utils::run_ticks(&mut app, 10);
     assert_eq!(
         utils::position_of(app.world(), lying),
-        utils::part_way("10", "9.35")
+        utils::point("10.5", "9.85")
     );
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::position_of(app.world(), lying), utils::pos(10, 9));
@@ -859,7 +874,7 @@ fn ally_lying_onto_site_steps_back_onto_cell_it_holds() {
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert_eq!(
         utils::position_of(app.world(), grazing),
-        utils::part_way("9.1", "8.1")
+        utils::point("9.6", "8.6")
     );
 }
 
@@ -868,7 +883,7 @@ fn site_of_mover_form_asks_off_only_bodies_its_claims_meet() {
     // Under the continuous model a rolling depot — the depot with a walk of
     // its own, so a body on the claim plane — is founded on
     // (10..11, 10..11). One own soldier rests on (11, 11), its claim on the
-    // site; another at (10, 9.35) holds (10, 9), its body reaching 0.35 onto
+    // site; another at (10.5, 9.85) holds (10, 9), its body reaching 0.35 onto
     // the site. A placement on the claim plane measures bodies by their
     // claims: the first is asked off on the eleventh tick, the second never,
     // and the site goes up on the twelfth.
@@ -902,7 +917,7 @@ fn site_of_mover_form_asks_off_only_bodies_its_claims_meet() {
     let (_, builder_id) = utils::create_owned(&mut app, "wheelwright", 15, 10, 0);
     let (inside, _) = utils::create_owned(&mut app, "soldier", 11, 11, 0);
     let (lying, _) = utils::create_owned(&mut app, "soldier", 10, 8, 0);
-    utils::walk_onto(&mut app, lying, utils::part_way("10", "9.35"), 10);
+    utils::walk_onto(&mut app, lying, utils::point("10.5", "9.85"), 10);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -910,7 +925,7 @@ fn site_of_mover_form_asks_off_only_bodies_its_claims_meet() {
         PlayerCommand::BuildEntity {
             builder: builder_id,
             type_name: "rolling_depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -921,20 +936,20 @@ fn site_of_mover_form_asks_off_only_bodies_its_claims_meet() {
     assert_eq!(utils::count_of_type(app.world_mut(), "rolling_depot"), 1);
     assert_eq!(
         utils::position_of(app.world(), lying),
-        utils::part_way("10", "9.35")
+        utils::point("10.5", "9.85")
     );
 }
 
 #[test]
 fn builder_lying_past_its_claim_onto_site_steps_off_it() {
-    // Under the continuous model the mason rests at (9.4, 10): it claims
-    // (9, 10), and its half-cell circle, centered at 9.9, lies from 9.4 to
-    // 10.4, over the depot's (10..11, 10..11). Measured by its body it stands
-    // in its own site's way: it steps 0.4 back onto (9, 10) on the fourth
-    // tick, and the site goes up on the fifth.
+    // Under the continuous model the mason rests with its middle at (9.9,
+    // 10.5): it claims (9, 10), and its half-cell circle lies from 9.4 to 10.4,
+    // over the depot's (10..11, 10..11). Measured by its body it stands in its
+    // own site's way: it steps 0.4 back onto (9, 10) on the fourth tick, and
+    // the site goes up on the fifth.
     let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |_, _| {});
     let (mason, mason_id) = utils::create_owned(&mut app, "mason", 8, 10, 0);
-    utils::walk_onto(&mut app, mason, utils::part_way("9.4", "10"), 10);
+    utils::walk_onto(&mut app, mason, utils::point("9.9", "10.5"), 10);
     utils::grant_gold(&mut app, 80);
 
     order_depot(&mut app, mason_id);
@@ -954,7 +969,7 @@ fn builder_that_never_walks_standing_on_site_gives_up() {
     let (mason, mason_id) = utils::create_owned(&mut app, "rooted_mason", 10, 10, 0);
     utils::grant_gold(&mut app, 80);
     let order = Order::Build {
-        task: BuildTask::found("depot", utils::pos(10, 10)),
+        task: BuildTask::found("depot", utils::cell(10, 10)),
     };
     assert_eq!(
         orders::can_start(app.world(), mason, &order),
@@ -982,7 +997,7 @@ fn builder_that_never_walks_is_not_blamed_for_site_another_body_holds() {
     utils::create_owned(&mut app, "soldier", 11, 11, 0);
     utils::grant_gold(&mut app, 80);
     let order = Order::Build {
-        task: BuildTask::found("depot", utils::pos(10, 10)),
+        task: BuildTask::found("depot", utils::cell(10, 10)),
     };
     assert_eq!(orders::can_start(app.world(), mason, &order), Ok(()));
 
@@ -1008,14 +1023,17 @@ fn wide_builder_standing_on_site_steps_off_it_and_raises_it() {
         PlayerCommand::BuildEntity {
             builder: giant_id,
             type_name: "depot".into(),
-            position: utils::pos(11, 10),
+            anchor: utils::cell(11, 10),
             flush: true,
         },
     );
     utils::run_ticks(&mut app, 20);
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
-    assert_eq!(utils::cell_of(app.world_mut(), giant), CellPos::new(9, 10));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), giant),
+        CellPos::new(9, 10)
+    );
 }
 
 #[test]
@@ -1032,7 +1050,7 @@ fn builder_that_works_hidden_raises_site_it_stands_on() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -1059,7 +1077,7 @@ fn boxed_in_builder_finishes_site_and_waits_to_reappear() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -1088,7 +1106,7 @@ fn queued_order_waits_while_boxed_in_builder_has_no_cell_to_return_to() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -1115,7 +1133,7 @@ fn queued_order_waits_while_boxed_in_builder_has_no_cell_to_return_to() {
 
     utils::set_all_cells_statically_occupied(app.world_mut(), false);
     utils::run_ticks(&mut app, 30);
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(14, 10));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(14, 10));
 }
 
 #[test]
@@ -1162,7 +1180,7 @@ fn boxed_in_attached_builder_goes_off_map_and_waits() {
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::hidden(app.world(), roofer));
     assert!(!entity_def::pending_reveal(app.world(), roofer));
-    assert_eq!(utils::cell_of(app.world(), roofer), CellPos::new(9, 9));
+    assert_eq!(utils::anchor_of(app.world(), roofer), CellPos::new(9, 9));
 }
 
 #[test]
@@ -1175,7 +1193,7 @@ fn destroyed_while_waiting_for_cell_dies_off_map() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -1196,10 +1214,10 @@ fn destroyed_while_waiting_for_cell_dies_off_map() {
 }
 
 #[test]
-fn builder_faces_site_rather_than_corner_its_position_names() {
+fn builder_faces_nearest_part_of_site() {
     let mut app = utils::orders_app();
-    // Level with the depot's lower row and just east of it, so the building lies
-    // due west. Its position names the north-west cell, which does not.
+    // Level with the depot's lower row and just east of it, so the building's
+    // nearest part lies due west. Its middle, (11, 11), does not.
     let (mason, mason_id) = utils::create_owned(&mut app, "mason", 12, 11, 0);
     utils::grant_gold(&mut app, 80);
 
@@ -1208,7 +1226,7 @@ fn builder_faces_site_rather_than_corner_its_position_names() {
         PlayerCommand::BuildEntity {
             builder: mason_id,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -1394,7 +1412,7 @@ fn joiner_whose_site_rises_before_it_arrives_ends_its_order() {
 
     assert!(utils::order_queue_is_empty(app.world_mut(), second));
     assert_eq!(
-        utils::cell_of(app.world_mut(), second),
+        utils::anchor_of(app.world_mut(), second),
         CellPos::new(12, 11)
     );
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
@@ -1437,7 +1455,7 @@ fn worker_coming_out_of_finished_site_has_idle_allies_make_way() {
     assert!(entity_def::hidden(app.world(), worker));
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::hidden(app.world(), worker));
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(19, 10));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(19, 10));
 }
 
 #[test]
@@ -1615,7 +1633,10 @@ fn hidden_worker_leaves_site_changing_hands_halted() {
 
     assert!(!entity_def::hidden(app.world(), worker));
     assert!(utils::order_queue_is_empty(app.world_mut(), worker));
-    assert_eq!(utils::cell_of(app.world_mut(), worker), CellPos::new(9, 9));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), worker),
+        CellPos::new(9, 9)
+    );
     assert_eq!(entity_def::owner(app.world(), worker), Some(0));
     assert_eq!(
         rising_attendance(app.world_mut()),
@@ -1712,7 +1733,7 @@ fn captors_cancel_sets_consumed_builder_down_as_its_own() {
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 0);
     assert!(!entity_def::hidden(app.world(), larva));
     // Back on (9, 9), where it went in.
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(9, 9));
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(9, 9));
     assert_eq!(entity_def::owner(app.world(), larva), Some(1));
 }
 
@@ -1760,7 +1781,7 @@ fn consumed_builder_captured_with_its_site_keeps_only_its_build() {
     );
     assert!(utils::order_queue_is_empty(app.world_mut(), larva));
     // Back on (9, 9), where it went in, not on its way to (20, 20).
-    assert_eq!(utils::cell_of(app.world(), larva), CellPos::new(9, 9));
+    assert_eq!(utils::anchor_of(app.world(), larva), CellPos::new(9, 9));
 }
 
 #[test]
@@ -1826,7 +1847,7 @@ fn consumed_holder_captured_with_its_site_sets_down_passengers_captor_bars() {
     assert!(!entity_def::hidden(app.world(), rider));
     // Beside (9, 9), where the larva went in, within its unload range of one:
     // (10, 9).
-    assert_eq!(utils::cell_of(app.world(), rider), CellPos::new(10, 9));
+    assert_eq!(utils::anchor_of(app.world(), rider), CellPos::new(10, 9));
     assert_eq!(entity_def::owner(app.world(), rider), Some(0));
 }
 
@@ -1953,7 +1974,7 @@ fn attached_builder_stands_on_site_holding_no_cells() {
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert!(entity_def::attached(app.world(), roofer));
     assert!(!entity_def::hidden(app.world(), roofer));
-    assert_eq!(utils::cell_of(app.world(), roofer), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), roofer), CellPos::new(10, 10));
     assert!(
         app.world()
             .resource::<EntityIndex>()
@@ -1971,7 +1992,7 @@ fn attached_builder_stands_on_site_holding_no_cells() {
     assert!(!entity_def::attached(app.world(), roofer));
     let depot = depot(app.world_mut());
     utils::assert_adjacent_to_footprint(app.world_mut(), roofer, depot);
-    let cell = utils::cell_of(app.world(), roofer);
+    let cell = utils::anchor_of(app.world(), roofer);
     let grid = app.world().resource::<Map>().nav_grid();
     assert!(
         grid.is_claimed(utils::GROUND, cell),
@@ -1993,7 +2014,7 @@ fn attached_builder_standing_on_site_raises_it_without_stepping_off() {
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert!(entity_def::attached(app.world(), roofer));
-    assert_eq!(utils::cell_of(app.world(), roofer), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), roofer), CellPos::new(10, 10));
 }
 
 #[test]
@@ -2010,7 +2031,7 @@ fn passable_attached_builder_raises_site_it_stands_on() {
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert!(entity_def::attached(app.world(), wisp));
-    assert_eq!(utils::cell_of(app.world(), wisp), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), wisp), CellPos::new(10, 10));
 }
 
 #[test]
@@ -2049,8 +2070,8 @@ fn attached_builders_take_distinct_berths_of_site() {
     assert_eq!(crew_of_rising(app.world_mut()), vec![first_id, second_id]);
     // Each in the rim berth nearest to where it arrived: the north-west cell
     // for the first, the south-east one for the second.
-    assert_eq!(utils::cell_of(app.world(), first), CellPos::new(10, 10));
-    assert_eq!(utils::cell_of(app.world(), second), CellPos::new(11, 11));
+    assert_eq!(utils::anchor_of(app.world(), first), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), second), CellPos::new(11, 11));
 }
 
 #[test]
@@ -2414,7 +2435,7 @@ fn static_footprint_is_not_raised_over_what_stands_underfoot() {
 #[test]
 fn static_footprint_is_not_raised_over_underfoot_walker_lying_past_its_cell() {
     // Under the continuous model a scuttler, an underfoot walker that claims
-    // no cell, rests at x 9.3: its half-cell circle, centered at 9.8, lies
+    // no cell, rests with its middle at x 9.8: its half-cell circle lies
     // from 9.3 to 10.3, over (9, 10) and (10, 10). A depot on
     // (10..11, 10..11) would go up over it; one on (11..12, 10..11) clears it.
     let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |registry, dry| {
@@ -2426,7 +2447,7 @@ fn static_footprint_is_not_raised_over_underfoot_walker_lying_past_its_cell() {
         ));
     });
     let (scuttler, _) = utils::create_owned(&mut app, "scuttler", 9, 10, 0);
-    utils::walk_onto(&mut app, scuttler, utils::part_way("9.3", "10"), 10);
+    utils::walk_onto(&mut app, scuttler, utils::point("9.8", "10.5"), 10);
     let world = app.world();
     let depot = world
         .resource::<ContentRegistry>()
@@ -2436,7 +2457,7 @@ fn static_footprint_is_not_raised_over_underfoot_walker_lying_past_its_cell() {
     let raised_at = |x| {
         ground::can_place(
             world,
-            &LocationComponent::new(utils::pos(x, 10), Facing::SOUTH),
+            utils::cell(x, 10),
             depot,
             OccupancyClass::Static,
             &[],
@@ -2472,7 +2493,7 @@ fn static_footprint_measures_wide_mover_by_its_circle() {
     let raised_at = |x, y| {
         ground::can_place(
             world,
-            &LocationComponent::new(utils::pos(x, y), Facing::SOUTH),
+            utils::cell(x, y),
             depot,
             OccupancyClass::Static,
             &[],
@@ -2572,7 +2593,7 @@ fn building_is_refused_on_terrain_its_domain_does_not_take() {
             PlayerCommand::BuildEntity {
                 builder: wright_id,
                 type_name: "dock".into(),
-                position: utils::pos(x, y),
+                anchor: utils::cell(x, y),
                 flush: true,
             },
         );
@@ -2589,6 +2610,68 @@ fn building_is_refused_on_terrain_its_domain_does_not_take() {
     build_at(&mut app, 12, 10);
     assert_eq!(utils::count_of_type(app.world_mut(), "dock"), 1);
     assert_eq!(utils::gold(app.world_mut()), 30);
+}
+
+#[test]
+fn build_off_map_or_wider_than_map_is_refused() {
+    // The map is 32 cells across: a hut anchored at (40, 10) lies off it, and a
+    // 40×40 colossus hall has no place on it anywhere. The bricklayer takes no
+    // order for either and the 50 gold stays put.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[], |registry, _| {
+        registry.register(
+            EntityTypeDef::new("hut")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_price([("gold", 10)])
+                .with_rise(4, Vec::new()),
+        );
+        registry.register(
+            EntityTypeDef::new("colossus_hall")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(40, 40),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_price([("gold", 50)])
+                .with_rise(4, Vec::new()),
+        );
+        let mut bricklayer = registry
+            .entity("sylph")
+            .expect("the orders content declares a sylph")
+            .clone()
+            .with_builder(["hut", "colossus_hall"], BuilderAttendance::Unattended);
+        bricklayer.name = "bricklayer".to_string();
+        registry.register(bricklayer);
+    });
+    let (bricklayer, bricklayer_id) = utils::create_owned(&mut app, "bricklayer", 5, 5, 0);
+    utils::grant_gold(&mut app, 50);
+
+    for (type_name, anchor) in [
+        ("hut", CellPos::new(40, 10)),
+        ("colossus_hall", CellPos::new(0, 0)),
+    ] {
+        utils::push_command(
+            &mut app,
+            PlayerCommand::BuildEntity {
+                builder: bricklayer_id,
+                type_name: type_name.into(),
+                anchor,
+                flush: true,
+            },
+        );
+        utils::run_ticks(&mut app, 10);
+
+        assert!(
+            utils::order_queue_is_empty(app.world(), bricklayer),
+            "{type_name}"
+        );
+        assert_eq!(utils::gold(app.world()), 50, "{type_name}");
+    }
 }
 
 //
@@ -2608,11 +2691,11 @@ fn builder_that_never_walks_works_site_in_range_from_where_it_stands() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let depot = utils::single_owned_of_type(app.world_mut(), "depot", 0);
     assert!(entity_def::rising(app.world(), depot));
-    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(4, 10));
+    assert_eq!(utils::anchor_of(app.world(), tower), CellPos::new(4, 10));
     utils::run_ticks(&mut app, 6);
 
     assert!(!entity_def::rising(app.world(), depot));
-    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(4, 10));
+    assert_eq!(utils::anchor_of(app.world(), tower), CellPos::new(4, 10));
     assert!(entity_def::stands_on_grid(app.world(), tower));
 }
 
@@ -2625,7 +2708,7 @@ fn builder_that_never_walks_is_refused_site_beyond_its_range() {
     let (mason, mason_id) = utils::create_owned(&mut app, "rooted_mason", 4, 10, 0);
     utils::grant_gold(&mut app, 80);
     let order = Order::Build {
-        task: BuildTask::found("depot", utils::pos(24, 10)),
+        task: BuildTask::found("depot", utils::cell(24, 10)),
     };
     assert_eq!(
         orders::can_start(app.world(), mason, &order),
@@ -2653,7 +2736,7 @@ fn unattended_builder_that_never_walks_founds_site_in_range_and_is_done() {
 
     assert_eq!(utils::count_of_type(app.world_mut(), "depot"), 1);
     assert!(utils::order_queue_is_empty(app.world_mut(), tower));
-    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(4, 10));
+    assert_eq!(utils::anchor_of(app.world(), tower), CellPos::new(4, 10));
 }
 
 #[test]
@@ -2679,7 +2762,7 @@ fn hidden_builder_that_never_walks_comes_out_beside_site_in_range() {
     let depot = utils::single_owned_of_type(app.world_mut(), "depot", 0);
     assert!(!entity_def::rising(app.world(), depot));
     assert!(!entity_def::hidden(app.world(), tower));
-    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(23, 10));
+    assert_eq!(utils::anchor_of(app.world(), tower), CellPos::new(23, 10));
 }
 
 #[test]
@@ -2705,7 +2788,7 @@ fn attached_builder_that_never_walks_takes_berth_of_site_in_range() {
     let depot = utils::single_owned_of_type(app.world_mut(), "depot", 0);
     assert!(!entity_def::rising(app.world(), depot));
     assert!(!entity_def::attached(app.world(), tower));
-    assert_eq!(utils::cell_of(app.world(), tower), CellPos::new(24, 9));
+    assert_eq!(utils::anchor_of(app.world(), tower), CellPos::new(24, 9));
 }
 
 #[test]
@@ -2733,7 +2816,7 @@ fn consumed_builder_that_never_walks_is_spent_on_site_in_range() {
 /// Creates an entity of `type_name` at `(x, y)` for player 0, or `None` when
 /// the ground refuses it.
 fn place(app: &mut App, type_name: &str, x: u32, y: u32) -> Option<Entity> {
-    utils::create_entity(app.world_mut(), type_name, utils::pos(x, y), Some(0))
+    utils::create_entity(app.world_mut(), type_name, utils::cell(x, y), Some(0))
         .map(|(entity, _)| entity)
 }
 
@@ -2874,7 +2957,7 @@ fn order_far_depot(app: &mut App, builder: SimulationId) {
         PlayerCommand::BuildEntity {
             builder,
             type_name: "depot".into(),
-            position: utils::pos(24, 10),
+            anchor: utils::cell(24, 10),
             flush: true,
         },
     );
@@ -2887,7 +2970,7 @@ fn order_depot(app: &mut App, builder: SimulationId) {
         PlayerCommand::BuildEntity {
             builder,
             type_name: "depot".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );

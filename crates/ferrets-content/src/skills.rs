@@ -133,8 +133,8 @@ pub enum SkillCaster {
 pub enum EntityCastTarget<'a> {
     /// The casting entity itself; the use command carries no target.
     Caster,
-    /// A cell of the map; the use command carries a position.
-    Position {
+    /// The ground: a cell of the map, which the use command carries.
+    Ground {
         /// How close the caster must come to the cell.
         reach: Reach,
     },
@@ -195,14 +195,14 @@ impl Recipient {
 /// The spot a cast acts around.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Spot {
-    /// The cell the caster's position falls in.
+    /// Around the caster's own footprint.
     Caster,
-    /// An aimed cell.
-    Cell {
+    /// The ground: an aimed cell.
+    Ground {
         /// How close the caster must come to it.
         reach: Reach,
     },
-    /// The cell an aimed standing entity's position falls in.
+    /// Around an aimed standing entity's footprint.
     Standing {
         /// Whose and what it must be.
         whom: Whom,
@@ -216,7 +216,7 @@ impl Spot {
     pub fn target(&self) -> EntityCastTarget<'_> {
         match self {
             Spot::Caster => EntityCastTarget::Caster,
-            Spot::Cell { reach } => EntityCastTarget::Position { reach: *reach },
+            Spot::Ground { reach } => EntityCastTarget::Ground { reach: *reach },
             Spot::Standing { whom, reach } => EntityCastTarget::Standing {
                 whom,
                 reach: *reach,
@@ -237,8 +237,9 @@ pub enum SummonArrival {
 /// Which cell a summoned body is set down on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummonPlacement {
-    /// Anchored on the aimed cell — for a type raised over a resource source,
-    /// on the source under it — or the cast is refused.
+    /// Anchored on the aimed cell, or centered on the aimed body — for a type
+    /// raised over a resource source, on the source under it — or the cast is
+    /// refused.
     Exact,
     /// The nearest cell around the aim that takes it.
     Nearby,
@@ -249,8 +250,8 @@ pub enum SummonPlacement {
 pub enum SummonAt {
     /// Around the caster's own footprint.
     Caster,
-    /// Around an aimed cell.
-    Cell {
+    /// Around an aimed cell of the ground.
+    Ground {
         /// How close the caster must come to it.
         reach: Reach,
     },
@@ -275,7 +276,7 @@ impl SummonAt {
     pub fn target(&self) -> EntityCastTarget<'_> {
         match self {
             SummonAt::Caster => EntityCastTarget::Caster,
-            SummonAt::Cell { reach } => EntityCastTarget::Position { reach: *reach },
+            SummonAt::Ground { reach } => EntityCastTarget::Ground { reach: *reach },
             SummonAt::Standing { whom, reach } => EntityCastTarget::Standing {
                 whom,
                 reach: *reach,
@@ -291,8 +292,8 @@ impl SummonAt {
 /// An aim away from the caster.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Away {
-    /// An aimed cell.
-    Cell {
+    /// The ground: an aimed cell.
+    Ground {
         /// How close the caster must come to it.
         reach: Reach,
     },
@@ -309,7 +310,7 @@ impl Away {
     /// What a cast at this aim is aimed at.
     pub fn target(&self) -> EntityCastTarget<'_> {
         match self {
-            Away::Cell { reach } => EntityCastTarget::Position { reach: *reach },
+            Away::Ground { reach } => EntityCastTarget::Ground { reach: *reach },
             Away::Standing { whom, reach } => EntityCastTarget::Standing {
                 whom,
                 reach: *reach,
@@ -349,17 +350,18 @@ pub enum EntityCastEffect {
         /// Who is healed.
         on: Recipient,
     },
-    /// Puts a patch of map in the casting player's sight for a while,
-    /// whatever stands there.
+    /// Puts the map within reach of a spot in the casting player's sight for
+    /// a while, whatever stands there.
     Watch {
-        /// The spot the patch lies around.
+        /// The spot the sight reaches out from, taken when the cast lands:
+        /// around an entity, where it stood then.
         at: Spot,
         /// How far from the spot the sight reaches, in cells.
         radius: Quantity,
         /// Ticks it lasts.
         duration: Quantity,
         /// What it does for the casting player against the concealed
-        /// entities standing on the patch.
+        /// entities standing within its reach.
         detection: Detection,
     },
     /// Sets units down for the casting player where they are summoned.

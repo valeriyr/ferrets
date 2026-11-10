@@ -2,8 +2,9 @@
 
 mod utils;
 
-use ferrets_geometry::{cell_size::CellSize, projection::Projection};
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_pathfinder::astar;
 
@@ -16,11 +17,11 @@ fn straight_line_on_open_grid() {
     // S . . G . . . . . .   y=0   S = start (0,0), G = goal (3,0)
     let grid = utils::grid(10, 10);
 
-    let path = find_iso(&grid, utils::world(0, 0), utils::world(3, 0), 0).unwrap();
+    let path = find_iso(&grid, utils::nav(0, 0), utils::nav(3, 0), 0).unwrap();
 
     assert_eq!(
         path,
-        vec![utils::world(1, 0), utils::world(2, 0), utils::world(3, 0)]
+        vec![utils::nav(1, 0), utils::nav(2, 0), utils::nav(3, 0)]
     );
 }
 
@@ -36,7 +37,7 @@ fn diagonal_blocked_when_both_adjacent_cardinals_are_walls() {
     grid.set_occupied(utils::GROUND, utils::nav(0, 1), true);
     grid.set_occupied(utils::GROUND, utils::nav(1, 2), true);
 
-    let path = find_iso(&grid, utils::world(1, 1), utils::world(0, 2), 0);
+    let path = find_iso(&grid, utils::nav(1, 1), utils::nav(0, 2), 0);
 
     assert!(path.is_none());
 }
@@ -51,7 +52,7 @@ fn returns_none_for_blocked_goal() {
     let mut grid = utils::grid(5, 5);
     grid.set_occupied(utils::GROUND, utils::nav(4, 4), true);
 
-    let path = find_iso(&grid, utils::world(0, 0), utils::world(4, 4), 0);
+    let path = find_iso(&grid, utils::nav(0, 0), utils::nav(4, 4), 0);
 
     assert!(path.is_none());
 }
@@ -65,7 +66,7 @@ fn empty_path_when_already_at_goal() {
     // . . . . .   y=4
     let grid = utils::grid(5, 5);
 
-    let path = find_iso(&grid, utils::world(2, 2), utils::world(2, 2), 0).unwrap();
+    let path = find_iso(&grid, utils::nav(2, 2), utils::nav(2, 2), 0).unwrap();
 
     assert!(path.is_empty());
 }
@@ -77,7 +78,7 @@ fn empty_path_when_already_at_occupied_goal() {
     let mut grid = utils::grid(5, 5);
     grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
 
-    let path = find_iso(&grid, utils::world(2, 2), utils::world(2, 2), 0).unwrap();
+    let path = find_iso(&grid, utils::nav(2, 2), utils::nav(2, 2), 0).unwrap();
 
     assert!(path.is_empty());
 }
@@ -91,7 +92,7 @@ fn isometric_empty_path_when_already_within_stop_distance() {
     // . . . S . G . . . .   y=0   stop_distance=3, Chebyshev = max(2,0) = 2 ≤ 3 → already in range
     let grid = utils::grid(10, 10);
 
-    let path = find_iso(&grid, utils::world(3, 0), utils::world(5, 0), 3).unwrap();
+    let path = find_iso(&grid, utils::nav(3, 0), utils::nav(5, 0), 3).unwrap();
 
     assert!(path.is_empty());
 }
@@ -105,18 +106,18 @@ fn isometric_path_ends_within_stop_distance() {
     // isometric distance to goal = 2.
     let grid = utils::grid(10, 10);
 
-    let path = find_iso(&grid, utils::world(0, 0), utils::world(9, 0), 2).unwrap();
+    let path = find_iso(&grid, utils::nav(0, 0), utils::nav(9, 0), 2).unwrap();
 
     assert_eq!(
         path,
         vec![
-            utils::world(1, 0),
-            utils::world(2, 0),
-            utils::world(3, 0),
-            utils::world(4, 0),
-            utils::world(5, 0),
-            utils::world(6, 0),
-            utils::world(7, 0),
+            utils::nav(1, 0),
+            utils::nav(2, 0),
+            utils::nav(3, 0),
+            utils::nav(4, 0),
+            utils::nav(5, 0),
+            utils::nav(6, 0),
+            utils::nav(7, 0),
         ]
     );
 }
@@ -132,12 +133,12 @@ fn isometric_stop_distance_allows_blocked_goal() {
     let mut grid = utils::grid(5, 5);
     grid.set_occupied(utils::GROUND, utils::nav(4, 4), true);
 
-    let path = find_iso(&grid, utils::world(0, 0), utils::world(4, 4), 1).unwrap();
+    let path = find_iso(&grid, utils::nav(0, 0), utils::nav(4, 4), 1).unwrap();
     // Nearest stop position is (3,3) at isometric distance 1 from the blocked goal.
     // Optimal: three diagonals (cost 30 = 3 × 10).
     assert_eq!(
         path,
-        vec![utils::world(1, 1), utils::world(2, 2), utils::world(3, 3)]
+        vec![utils::nav(1, 1), utils::nav(2, 2), utils::nav(3, 3)]
     );
 }
 
@@ -149,7 +150,7 @@ fn orthogonal_stop_within_euclidean_range() {
     // . . . . G . . . . .   y=3   S = start (0,0), G = goal (4,3); √(4²+3²) = 5 ≤ stop_distance=5
     let grid = utils::grid(10, 10);
 
-    let path = find_ortho(&grid, utils::world(0, 0), utils::world(4, 3), 5).unwrap();
+    let path = find_ortho(&grid, utils::nav(0, 0), utils::nav(4, 3), 5).unwrap();
 
     assert!(path.is_empty());
 }
@@ -162,7 +163,7 @@ fn orthogonal_stop_within_euclidean_range() {
 // so the goal test and the estimate both measure to the nearest cell of the
 // whole rectangle.
 //
-// The building these walk up to is `GOAL_ORIGIN`/`GOAL_SIZE`: 2 x 2 at (4,4).
+// The building these walk up to is `GOAL`: 2 x 2 at (4,4).
 //
 
 #[test]
@@ -192,13 +193,13 @@ fn isometric_reaches_footprint_from_every_side() {
         ((4, 9), vec![(4, 8), (4, 7), (4, 6)]),
         ((8, 8), vec![(7, 7), (6, 6)]),
     ] {
-        let path = find_iso_rect(&grid, utils::world(start.0, start.1), 1).unwrap();
+        let path = find_iso_rect(&grid, utils::nav(start.0, start.1), 1).unwrap();
 
         assert_eq!(
             path,
             expected
                 .iter()
-                .map(|&(x, y)| utils::world(x, y))
+                .map(|&(x, y)| utils::nav(x, y))
                 .collect::<Vec<_>>(),
             "walking in from {start:?}"
         );
@@ -218,20 +219,20 @@ fn isometric_footprint_goal_costs_less_than_its_corner() {
     let mut grid = utils::grid(10, 10);
     occupy_goal(&mut grid);
 
-    let to_footprint = find_iso_rect(&grid, utils::world(9, 4), 1).unwrap();
-    let to_corner = find_iso(&grid, utils::world(9, 4), utils::world(4, 4), 1).unwrap();
+    let to_footprint = find_iso_rect(&grid, utils::nav(9, 4), 1).unwrap();
+    let to_corner = find_iso(&grid, utils::nav(9, 4), utils::nav(4, 4), 1).unwrap();
 
     assert_eq!(
         to_footprint,
-        vec![utils::world(8, 4), utils::world(7, 4), utils::world(6, 4)]
+        vec![utils::nav(8, 4), utils::nav(7, 4), utils::nav(6, 4)]
     );
     assert_eq!(
         to_corner,
         vec![
-            utils::world(8, 4),
-            utils::world(7, 4),
-            utils::world(6, 3),
-            utils::world(5, 3),
+            utils::nav(8, 4),
+            utils::nav(7, 4),
+            utils::nav(6, 3),
+            utils::nav(5, 3),
         ],
         "the extra step is the drift north to get beside the corner"
     );
@@ -255,9 +256,8 @@ fn isometric_stops_beside_facing_side_of_wide_footprint() {
 
     let path = find_iso_footprint(
         &grid,
-        utils::world(5, 9),
-        utils::world(3, 4),
-        CellSize::new(4, 1),
+        utils::nav(5, 9),
+        CellRect::new(utils::nav(3, 4), CellSize::new(4, 1)),
         1,
     )
     .unwrap();
@@ -265,10 +265,10 @@ fn isometric_stops_beside_facing_side_of_wide_footprint() {
     assert_eq!(
         path,
         vec![
-            utils::world(5, 8),
-            utils::world(5, 7),
-            utils::world(5, 6),
-            utils::world(5, 5),
+            utils::nav(5, 8),
+            utils::nav(5, 7),
+            utils::nav(5, 6),
+            utils::nav(5, 5),
         ]
     );
 }
@@ -284,11 +284,11 @@ fn orthogonal_reaches_footprint_from_side() {
     let mut grid = utils::grid(10, 10);
     occupy_goal(&mut grid);
 
-    let path = find_ortho_rect(&grid, utils::world(9, 4), 1).unwrap();
+    let path = find_ortho_rect(&grid, utils::nav(9, 4), 1).unwrap();
 
     assert_eq!(
         path,
-        vec![utils::world(8, 4), utils::world(7, 4), utils::world(6, 4)]
+        vec![utils::nav(8, 4), utils::nav(7, 4), utils::nav(6, 4)]
     );
 }
 
@@ -301,7 +301,7 @@ fn isometric_empty_path_when_already_beside_footprint() {
     let mut grid = utils::grid(10, 10);
     occupy_goal(&mut grid);
 
-    let path = find_iso_rect(&grid, utils::world(6, 4), 1).unwrap();
+    let path = find_iso_rect(&grid, utils::nav(6, 4), 1).unwrap();
 
     assert!(path.is_empty(), "expected to be in range already: {path:?}");
 }
@@ -315,9 +315,9 @@ fn isometric_no_stop_distance_stands_in_footprint() {
     // than crossing to the (4,4) that names it.
     let grid = utils::grid(10, 10);
 
-    let path = find_iso_rect(&grid, utils::world(7, 4), 0).unwrap();
+    let path = find_iso_rect(&grid, utils::nav(7, 4), 0).unwrap();
 
-    assert_eq!(path, vec![utils::world(6, 4), utils::world(5, 4)]);
+    assert_eq!(path, vec![utils::nav(6, 4), utils::nav(5, 4)]);
 }
 
 #[test]
@@ -327,8 +327,8 @@ fn fully_blocked_footprint_cannot_be_stood_in() {
     let mut grid = utils::grid(10, 10);
     occupy_goal(&mut grid);
 
-    assert!(find_iso_rect(&grid, utils::world(9, 4), 0).is_none());
-    assert!(find_ortho_rect(&grid, utils::world(9, 4), 0).is_none());
+    assert!(find_iso_rect(&grid, utils::nav(9, 4), 0).is_none());
+    assert!(find_ortho_rect(&grid, utils::nav(9, 4), 0).is_none());
 }
 
 #[test]
@@ -339,9 +339,9 @@ fn partly_blocked_footprint_still_admits_walking_in() {
     let mut grid = utils::grid(10, 10);
     grid.set_occupied(utils::GROUND, utils::nav(4, 4), true);
 
-    let path = find_iso_rect(&grid, utils::world(7, 4), 0).unwrap();
+    let path = find_iso_rect(&grid, utils::nav(7, 4), 0).unwrap();
 
-    assert_eq!(path, vec![utils::world(6, 4), utils::world(5, 4)]);
+    assert_eq!(path, vec![utils::nav(6, 4), utils::nav(5, 4)]);
 }
 
 #[test]
@@ -350,7 +350,7 @@ fn empty_path_when_standing_in_footprint_off_its_origin() {
     // standing anywhere in it already satisfies a stop distance of zero.
     let grid = utils::grid(10, 10);
 
-    let path = find_iso_rect(&grid, utils::world(5, 5), 0).unwrap();
+    let path = find_iso_rect(&grid, utils::nav(5, 5), 0).unwrap();
 
     assert!(path.is_empty(), "expected to stand in it already: {path:?}");
 }
@@ -382,19 +382,19 @@ fn isometric_routes_round_wall_to_footprint() {
         grid.set_occupied(utils::GROUND, utils::nav(2, y), true);
     }
 
-    let path = find_iso_rect(&grid, utils::world(0, 4), 1).unwrap();
+    let path = find_iso_rect(&grid, utils::nav(0, 4), 1).unwrap();
 
     assert_eq!(
         path,
         vec![
-            utils::world(1, 5),
-            utils::world(1, 6),
-            utils::world(1, 7),
-            utils::world(1, 8),
-            utils::world(2, 8),
-            utils::world(3, 8),
-            utils::world(3, 7),
-            utils::world(3, 6),
+            utils::nav(1, 5),
+            utils::nav(1, 6),
+            utils::nav(1, 7),
+            utils::nav(1, 8),
+            utils::nav(2, 8),
+            utils::nav(3, 8),
+            utils::nav(3, 7),
+            utils::nav(3, 6),
         ]
     );
 }
@@ -426,32 +426,30 @@ fn wide_shape_refuses_gap_narrow_shape_passes() {
     let narrow_path = astar::find_path(
         &grid,
         Projection::Isometric,
-        utils::world(0, 3),
+        utils::nav(0, 3),
         utils::profile(utils::on_ground()),
-        utils::world(6, 3),
-        CellSize::ONE,
+        CellRect::cell(utils::nav(6, 3)),
         0,
     )
     .expect("a single-cell mover fits the gap");
     assert_eq!(
         narrow_path,
         vec![
-            utils::world(1, 3),
-            utils::world(2, 3),
-            utils::world(3, 3),
-            utils::world(4, 3),
-            utils::world(5, 3),
-            utils::world(6, 3),
+            utils::nav(1, 3),
+            utils::nav(2, 3),
+            utils::nav(3, 3),
+            utils::nav(4, 3),
+            utils::nav(5, 3),
+            utils::nav(6, 3),
         ]
     );
     assert!(
         astar::find_path(
             &grid,
             Projection::Isometric,
-            utils::world(0, 3),
+            utils::nav(0, 3),
             utils::profile(utils::square_on_ground(2)),
-            utils::world(6, 3),
-            CellSize::ONE,
+            CellRect::cell(utils::nav(6, 3)),
             0,
         )
         .is_none(),
@@ -475,10 +473,9 @@ fn wide_path_cells_are_anchors_where_whole_footprint_fits() {
     let path = astar::find_path(
         &grid,
         Projection::Isometric,
-        utils::world(0, 1),
+        utils::nav(0, 1),
         utils::profile(shape),
-        utils::world(6, 1),
-        CellSize::ONE,
+        CellRect::cell(utils::nav(6, 1)),
         0,
     )
     .expect("the corridor is exactly as wide as the body");
@@ -489,12 +486,12 @@ fn wide_path_cells_are_anchors_where_whole_footprint_fits() {
     assert_eq!(
         path,
         vec![
-            utils::world(1, 1),
-            utils::world(2, 1),
-            utils::world(3, 1),
-            utils::world(4, 1),
-            utils::world(5, 1),
-            utils::world(6, 1),
+            utils::nav(1, 1),
+            utils::nav(2, 1),
+            utils::nav(3, 1),
+            utils::nav(4, 1),
+            utils::nav(5, 1),
+            utils::nav(6, 1),
         ]
     );
 }
@@ -517,32 +514,30 @@ fn wide_shape_cannot_anchor_footprint_past_map_edge() {
     let path = astar::find_path(
         &grid,
         Projection::Isometric,
-        utils::world(0, 0),
+        utils::nav(0, 0),
         utils::profile(shape),
-        utils::world(6, 6),
-        CellSize::ONE,
+        CellRect::cell(utils::nav(6, 6)),
         0,
     )
     .expect("the last anchor a 2x2 footprint fits at is (6, 6)");
     assert_eq!(
         path,
         vec![
-            utils::world(1, 1),
-            utils::world(2, 2),
-            utils::world(3, 3),
-            utils::world(4, 4),
-            utils::world(5, 5),
-            utils::world(6, 6),
+            utils::nav(1, 1),
+            utils::nav(2, 2),
+            utils::nav(3, 3),
+            utils::nav(4, 4),
+            utils::nav(5, 5),
+            utils::nav(6, 6),
         ]
     );
     assert!(
         astar::find_path(
             &grid,
             Projection::Isometric,
-            utils::world(0, 0),
+            utils::nav(0, 0),
             utils::profile(shape),
-            utils::world(7, 7),
-            CellSize::ONE,
+            CellRect::cell(utils::nav(7, 7)),
             0,
         )
         .is_none(),
@@ -560,10 +555,9 @@ fn wide_ranged_goal_accepted_by_nearest_edge() {
     let path = astar::find_path(
         &grid,
         Projection::Isometric,
-        utils::world(0, 5),
+        utils::nav(0, 5),
         utils::profile(utils::square_on_ground(2)),
-        utils::world(10, 5),
-        CellSize::ONE,
+        CellRect::cell(utils::nav(10, 5)),
         2,
     )
     .unwrap();
@@ -571,13 +565,13 @@ fn wide_ranged_goal_accepted_by_nearest_edge() {
     assert_eq!(
         path,
         vec![
-            utils::world(1, 5),
-            utils::world(2, 5),
-            utils::world(3, 5),
-            utils::world(4, 5),
-            utils::world(5, 5),
-            utils::world(6, 5),
-            utils::world(7, 5),
+            utils::nav(1, 5),
+            utils::nav(2, 5),
+            utils::nav(3, 5),
+            utils::nav(4, 5),
+            utils::nav(5, 5),
+            utils::nav(6, 5),
+            utils::nav(7, 5),
         ]
     );
 }
@@ -602,14 +596,14 @@ fn routes_around_wall() {
     grid.set_occupied(utils::GROUND, utils::nav(2, 2), true);
 
     let expected = vec![
-        utils::world(1, 0),
-        utils::world(2, 0),
-        utils::world(3, 0),
-        utils::world(4, 1),
+        utils::nav(1, 0),
+        utils::nav(2, 0),
+        utils::nav(3, 0),
+        utils::nav(4, 1),
     ];
 
-    let iso_path = find_iso(&grid, utils::world(0, 1), utils::world(4, 1), 0).unwrap();
-    let ortho_path = find_ortho(&grid, utils::world(0, 1), utils::world(4, 1), 0).unwrap();
+    let iso_path = find_iso(&grid, utils::nav(0, 1), utils::nav(4, 1), 0).unwrap();
+    let ortho_path = find_ortho(&grid, utils::nav(0, 1), utils::nav(4, 1), 0).unwrap();
 
     assert_eq!(iso_path, expected);
     assert_eq!(ortho_path, expected);
@@ -626,12 +620,12 @@ fn orthogonal_in_range_uses_euclidean() {
     // Euclidean: √(16+9) = 5 > 4   → Orthogonal not in range (path needed)
     let grid = utils::grid(10, 10);
 
-    let iso_path = find_iso(&grid, utils::world(0, 3), utils::world(4, 0), 4).unwrap();
-    let ortho_path = find_ortho(&grid, utils::world(0, 3), utils::world(4, 0), 4).unwrap();
+    let iso_path = find_iso(&grid, utils::nav(0, 3), utils::nav(4, 0), 4).unwrap();
+    let ortho_path = find_ortho(&grid, utils::nav(0, 3), utils::nav(4, 0), 4).unwrap();
 
     assert!(iso_path.is_empty());
     // (1,2) is the first step: Euclidean²=(1-4)²+(2-0)²=13≤16, so Orthogonal stops there.
-    assert_eq!(ortho_path, vec![utils::world(1, 2)]);
+    assert_eq!(ortho_path, vec![utils::nav(1, 2)]);
 }
 
 #[test]
@@ -646,11 +640,11 @@ fn projections_stop_at_different_positions() {
     // Orthogonal (Euclidean ≤ 4): (1,4) is NOT in range — √(16+16)≈5.7>4 — must move closer to (2,2).
     let grid = utils::grid(10, 10);
 
-    let iso_path = find_iso(&grid, utils::world(0, 4), utils::world(5, 0), 4).unwrap();
-    let ortho_path = find_ortho(&grid, utils::world(0, 4), utils::world(5, 0), 4).unwrap();
+    let iso_path = find_iso(&grid, utils::nav(0, 4), utils::nav(5, 0), 4).unwrap();
+    let ortho_path = find_ortho(&grid, utils::nav(0, 4), utils::nav(5, 0), 4).unwrap();
 
-    assert_eq!(iso_path, vec![utils::world(1, 4)]);
-    assert_eq!(ortho_path, vec![utils::world(1, 3), utils::world(2, 2)]);
+    assert_eq!(iso_path, vec![utils::nav(1, 4)]);
+    assert_eq!(ortho_path, vec![utils::nav(1, 3), utils::nav(2, 2)]);
 }
 
 #[test]
@@ -665,11 +659,11 @@ fn projections_measure_footprint_range_their_own_way() {
     let mut grid = utils::grid(10, 10);
     occupy_goal(&mut grid);
 
-    let iso_path = find_iso_rect(&grid, utils::world(6, 6), 1).unwrap();
-    let ortho_path = find_ortho_rect(&grid, utils::world(6, 6), 1).unwrap();
+    let iso_path = find_iso_rect(&grid, utils::nav(6, 6), 1).unwrap();
+    let ortho_path = find_ortho_rect(&grid, utils::nav(6, 6), 1).unwrap();
 
     assert!(iso_path.is_empty());
-    assert_eq!(ortho_path, vec![utils::world(6, 5)]);
+    assert_eq!(ortho_path, vec![utils::nav(6, 5)]);
 }
 
 //
@@ -687,34 +681,33 @@ fn layer_mask_filters_obstacles() {
     let air_path = astar::find_path(
         &grid,
         Projection::Isometric,
-        utils::world(0, 0),
+        utils::nav(0, 0),
         utils::profile(utils::in_air()),
-        utils::world(4, 0),
-        CellSize::ONE,
+        CellRect::cell(utils::nav(4, 0)),
         0,
     )
     .unwrap();
 
-    let ground_path = find_iso(&grid, utils::world(0, 0), utils::world(4, 0), 0).unwrap();
+    let ground_path = find_iso(&grid, utils::nav(0, 0), utils::nav(4, 0), 0).unwrap();
 
     // AIR: straight line through (2,0).
     assert_eq!(
         air_path,
         vec![
-            utils::world(1, 0),
-            utils::world(2, 0),
-            utils::world(3, 0),
-            utils::world(4, 0)
+            utils::nav(1, 0),
+            utils::nav(2, 0),
+            utils::nav(3, 0),
+            utils::nav(4, 0)
         ]
     );
     // GROUND: detours over the top, stepping through y=1.
     assert_eq!(
         ground_path,
         vec![
-            utils::world(1, 1),
-            utils::world(2, 1),
-            utils::world(3, 1),
-            utils::world(4, 0)
+            utils::nav(1, 1),
+            utils::nav(2, 1),
+            utils::nav(3, 1),
+            utils::nav(4, 0)
         ]
     );
 }
@@ -730,10 +723,9 @@ fn walker_climbs_plateau_by_ramp_and_cliff_walker_straight_up() {
         astar::find_path(
             &grid,
             Projection::Isometric,
-            utils::world(2, 0),
+            utils::nav(2, 0),
             utils::profile(shape),
-            utils::world(5, 0),
-            CellSize::ONE,
+            CellRect::cell(utils::nav(5, 0)),
             0,
         )
         .expect("the plateau is reachable")
@@ -743,12 +735,12 @@ fn walker_climbs_plateau_by_ramp_and_cliff_walker_straight_up() {
     // plateau.
     assert_eq!(
         path(utils::walker()),
-        vec![utils::world(3, 1), utils::world(4, 1), utils::world(5, 0)]
+        vec![utils::nav(3, 1), utils::nav(4, 1), utils::nav(5, 0)]
     );
     // Straight along row 0, up the cliff between (3, 0) and (4, 0).
     assert_eq!(
         path(utils::strider()),
-        vec![utils::world(3, 0), utils::world(4, 0), utils::world(5, 0)]
+        vec![utils::nav(3, 0), utils::nav(4, 0), utils::nav(5, 0)]
     );
 }
 
@@ -761,14 +753,13 @@ fn walker_steps_to_edge_it_can_touch_target_across() {
     let path = astar::find_path(
         &grid,
         Projection::Isometric,
-        utils::world(3, 0),
+        utils::nav(3, 0),
         utils::profile(utils::walker()),
-        utils::world(4, 0),
-        CellSize::ONE,
+        CellRect::cell(utils::nav(4, 0)),
         1,
     );
 
-    assert_eq!(path, Some(vec![utils::world(3, 1), utils::world(4, 1)]));
+    assert_eq!(path, Some(vec![utils::nav(3, 1), utils::nav(4, 1)]));
 }
 
 //
@@ -785,7 +776,7 @@ fn claim_wall_blocks_path() {
     let mut grid = utils::grid(3, 1);
     grid.add_claim(utils::GROUND, utils::nav(1, 0), 1);
 
-    let path = find_iso(&grid, utils::world(0, 0), utils::world(2, 0), 0);
+    let path = find_iso(&grid, utils::nav(0, 0), utils::nav(2, 0), 0);
 
     assert!(path.is_none());
 }
@@ -796,9 +787,9 @@ fn seeker_routes_through_its_own_claim() {
     let mut grid = utils::grid(3, 1);
     grid.add_claim(utils::GROUND, utils::nav(1, 0), utils::SEEKER);
 
-    let path = find_iso(&grid, utils::world(0, 0), utils::world(2, 0), 0);
+    let path = find_iso(&grid, utils::nav(0, 0), utils::nav(2, 0), 0);
 
-    assert_eq!(path, Some(vec![utils::world(1, 0), utils::world(2, 0)]));
+    assert_eq!(path, Some(vec![utils::nav(1, 0), utils::nav(2, 0)]));
 }
 
 #[test]
@@ -808,12 +799,12 @@ fn goal_held_only_by_seeker_is_reached() {
     let mut grid = utils::grid(3, 1);
     grid.add_claim(utils::GROUND, utils::nav(2, 0), utils::SEEKER);
 
-    let path = find_iso(&grid, utils::world(0, 0), utils::world(2, 0), 0);
-    assert_eq!(path, Some(vec![utils::world(1, 0), utils::world(2, 0)]));
+    let path = find_iso(&grid, utils::nav(0, 0), utils::nav(2, 0), 0);
+    assert_eq!(path, Some(vec![utils::nav(1, 0), utils::nav(2, 0)]));
 
     grid.remove_claim(utils::GROUND, utils::nav(2, 0), utils::SEEKER);
     grid.add_claim(utils::GROUND, utils::nav(2, 0), utils::SEEKER + 1);
-    assert!(find_iso(&grid, utils::world(0, 0), utils::world(2, 0), 0).is_none());
+    assert!(find_iso(&grid, utils::nav(0, 0), utils::nav(2, 0), 0).is_none());
 }
 
 #[test]
@@ -829,7 +820,7 @@ fn diagonal_blocked_between_claimed_cells() {
     grid.add_claim(utils::GROUND, utils::nav(0, 1), 1);
     grid.add_claim(utils::GROUND, utils::nav(1, 2), 1);
 
-    let path = find_iso(&grid, utils::world(1, 1), utils::world(0, 2), 0);
+    let path = find_iso(&grid, utils::nav(1, 1), utils::nav(0, 2), 0);
 
     assert!(path.is_none());
 }
@@ -850,11 +841,11 @@ fn equal_cost_ties_break_toward_straight_cardinal_run() {
     //                               included.
     let grid = utils::grid(10, 10);
 
-    let path = find_iso(&grid, utils::world(2, 2), utils::world(5, 2), 0).unwrap();
+    let path = find_iso(&grid, utils::nav(2, 2), utils::nav(5, 2), 0).unwrap();
 
     assert_eq!(
         path,
-        vec![utils::world(3, 2), utils::world(4, 2), utils::world(5, 2)]
+        vec![utils::nav(3, 2), utils::nav(4, 2), utils::nav(5, 2)]
     );
 }
 
@@ -864,16 +855,16 @@ fn orthogonal_takes_octile_mix() {
     // in four steps; six cardinal-only steps would cost more.
     let grid = utils::grid(10, 10);
 
-    let path = find_ortho(&grid, utils::world(2, 2), utils::world(6, 4), 0).unwrap();
+    let path = find_ortho(&grid, utils::nav(2, 2), utils::nav(6, 4), 0).unwrap();
 
     assert_eq!(path.len(), 4);
     assert_eq!(
         path,
         vec![
-            utils::world(3, 3),
-            utils::world(4, 4),
-            utils::world(5, 4),
-            utils::world(6, 4)
+            utils::nav(3, 3),
+            utils::nav(4, 4),
+            utils::nav(5, 4),
+            utils::nav(6, 4)
         ]
     );
 }
@@ -884,11 +875,11 @@ fn path_hugs_map_edge_without_stepping_out() {
     // skipped, not wrapped.
     let grid = utils::grid(10, 10);
 
-    let path = find_iso(&grid, utils::world(0, 3), utils::world(0, 0), 0).unwrap();
+    let path = find_iso(&grid, utils::nav(0, 3), utils::nav(0, 0), 0).unwrap();
 
     assert_eq!(
         path,
-        vec![utils::world(0, 2), utils::world(0, 1), utils::world(0, 0)]
+        vec![utils::nav(0, 2), utils::nav(0, 1), utils::nav(0, 0)]
     );
 }
 
@@ -914,7 +905,7 @@ fn returns_none_when_enclosed_exact_goal() {
     // stop_distance=0: goal (0,0) is outside the ring and unreachable — start is enclosed.
     let grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 2);
 
-    let path = find_iso(&grid, utils::world(3, 3), utils::world(0, 0), 0);
+    let path = find_iso(&grid, utils::nav(3, 3), utils::nav(0, 0), 0);
 
     assert!(path.is_none());
 }
@@ -924,7 +915,7 @@ fn returns_none_when_enclosed_stop_distance_1() {
     // Nearest reachable interior cell (2,2) is at isometric distance 2 — outside stop range of 1.
     let grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 2);
 
-    let path = find_iso(&grid, utils::world(3, 3), utils::world(0, 0), 1);
+    let path = find_iso(&grid, utils::nav(3, 3), utils::nav(0, 0), 1);
 
     assert!(path.is_none());
 }
@@ -937,10 +928,10 @@ fn projections_differ_at_stop_distance_2() {
     // Orthogonal (Euclidean  √8  ≈2.83 > 2):  falls short → None
     let grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 2);
 
-    let iso_path = find_iso(&grid, utils::world(3, 3), utils::world(0, 0), 2);
-    let ortho_path = find_ortho(&grid, utils::world(3, 3), utils::world(0, 0), 2);
+    let iso_path = find_iso(&grid, utils::nav(3, 3), utils::nav(0, 0), 2);
+    let ortho_path = find_ortho(&grid, utils::nav(3, 3), utils::nav(0, 0), 2);
 
-    assert_eq!(iso_path.unwrap(), vec![utils::world(2, 2)]);
+    assert_eq!(iso_path.unwrap(), vec![utils::nav(2, 2)]);
     assert!(ortho_path.is_none());
 }
 
@@ -949,9 +940,9 @@ fn orthogonal_stops_inside_ring_when_within_stop_distance() {
     // stop_distance=3: (2,2) is the unique interior cell within orthogonal distance 3 of goal (0,0).
     let grid = utils::hollow_ring_grid(7, utils::nav(3, 3), 2);
 
-    let path = find_ortho(&grid, utils::world(3, 3), utils::world(0, 0), 3).unwrap();
+    let path = find_ortho(&grid, utils::nav(3, 3), utils::nav(0, 0), 3).unwrap();
 
-    assert_eq!(path, vec![utils::world(2, 2)]);
+    assert_eq!(path, vec![utils::nav(2, 2)]);
 }
 
 //
@@ -959,88 +950,62 @@ fn orthogonal_stops_inside_ring_when_within_stop_distance() {
 //
 
 /// The 2×2 building the footprint-goal tests walk up to, at (4,4)–(5,5).
-const GOAL_ORIGIN: (u32, u32) = (4, 4);
-const GOAL_SIZE: CellSize = CellSize::new(2, 2);
+const GOAL: CellRect = CellRect::new(CellPos::new(4, 4), CellSize::new(2, 2));
 
 /// Occupies every cell of the footprint the goal tests walk up to.
 fn occupy_goal(grid: &mut NavGrid) {
-    for y in GOAL_ORIGIN.1..GOAL_ORIGIN.1 + GOAL_SIZE.height {
-        for x in GOAL_ORIGIN.0..GOAL_ORIGIN.0 + GOAL_SIZE.width {
-            grid.set_occupied(utils::GROUND, utils::nav(x, y), true);
-        }
+    for cell in GOAL.cells() {
+        grid.set_occupied(utils::GROUND, cell, true);
     }
 }
 
-fn find_iso_rect(grid: &NavGrid, start: FixedUVec2, distance: u32) -> Option<Vec<FixedUVec2>> {
-    find_iso_footprint(
-        grid,
-        start,
-        utils::world(GOAL_ORIGIN.0, GOAL_ORIGIN.1),
-        GOAL_SIZE,
-        distance,
-    )
+fn find_iso_rect(grid: &NavGrid, start: CellPos, distance: u32) -> Option<Vec<CellPos>> {
+    find_iso_footprint(grid, start, GOAL, distance)
 }
 
 fn find_iso_footprint(
     grid: &NavGrid,
-    start: FixedUVec2,
-    goal: FixedUVec2,
-    goal_size: CellSize,
+    start: CellPos,
+    goal: CellRect,
     distance: u32,
-) -> Option<Vec<FixedUVec2>> {
+) -> Option<Vec<CellPos>> {
     astar::find_path(
         grid,
         Projection::Isometric,
         start,
         utils::profile(utils::on_ground()),
         goal,
-        goal_size,
         distance,
     )
 }
 
-fn find_ortho_rect(grid: &NavGrid, start: FixedUVec2, distance: u32) -> Option<Vec<FixedUVec2>> {
+fn find_ortho_rect(grid: &NavGrid, start: CellPos, distance: u32) -> Option<Vec<CellPos>> {
     astar::find_path(
         grid,
         Projection::Orthogonal,
         start,
         utils::profile(utils::on_ground()),
-        utils::world(GOAL_ORIGIN.0, GOAL_ORIGIN.1),
-        GOAL_SIZE,
+        GOAL,
         distance,
     )
 }
 
-fn find_iso(
-    grid: &NavGrid,
-    start: FixedUVec2,
-    goal: FixedUVec2,
-    distance: u32,
-) -> Option<Vec<FixedUVec2>> {
-    astar::find_path(
-        grid,
-        Projection::Isometric,
-        start,
-        utils::profile(utils::on_ground()),
-        goal,
-        CellSize::ONE,
-        distance,
-    )
+fn find_iso(grid: &NavGrid, start: CellPos, goal: CellPos, distance: u32) -> Option<Vec<CellPos>> {
+    find_iso_footprint(grid, start, CellRect::cell(goal), distance)
 }
 
 fn find_ortho(
     grid: &NavGrid,
-    start: FixedUVec2,
-    goal: FixedUVec2,
+    start: CellPos,
+    goal: CellPos,
     distance: u32,
-) -> Option<Vec<FixedUVec2>> {
+) -> Option<Vec<CellPos>> {
     astar::find_path(
         grid,
         Projection::Orthogonal,
         start,
         utils::profile(utils::on_ground()),
-        goal,
-        CellSize::ONE,
+        CellRect::cell(goal),
         distance,
     )
 }

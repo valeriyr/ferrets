@@ -4,7 +4,6 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
@@ -21,7 +20,6 @@ use crate::{
     map::Map,
     movement_model::{self, Settling},
     occupancy::{GridMark, OccupancyClass},
-    order::Order,
     session::{GameSession, player_id::PlayerId},
     spawn,
 };
@@ -214,7 +212,7 @@ pub(crate) fn shove_off(
         }) else {
             return Shoved::Held;
         };
-        given.push(CellRect::new(cell, entity_def::location_size(world, mover)));
+        given.push(CellRect::new(cell, entity_def::size(world, mover)));
         moves.push((mover, cell));
     }
     // A walker caught mid-step settles first; once set down, its walk plans
@@ -441,23 +439,17 @@ fn send_off(
         clear_of_need && !given.iter().any(|taken| taken.intersects(footprint))
     };
     let cell = landing::walk_goal(world, lander, &lifted, clear)?;
+    let walk = orders::move_onto_cell(world, occupant, cell);
     let mut queue = world
         .entity_mut(occupant)
         .take::<OrderQueueComponent>()
         .expect("an idle body keeps its order queue");
-    queue.push_front(Order::Move {
-        target: FixedUVec2::from(cell),
-        size: CellSize::ONE,
-        range: 0,
-    });
+    queue.push_front(walk);
     // The walk is prepared here: the tick's own prepare phase may have passed.
     let operation = entity_def::operation(world, occupant);
     orders::prepare_front(occupant, operation, &mut queue, world);
     world.entity_mut(occupant).insert(queue);
-    Some(CellRect::new(
-        cell,
-        entity_def::location_size(world, occupant),
-    ))
+    Some(CellRect::new(cell, entity_def::size(world, occupant)))
 }
 
 /// Whether `body` is `side`'s own or allied.

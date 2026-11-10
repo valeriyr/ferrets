@@ -1064,7 +1064,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 400,
         cost = { energy = "40" },
-        effect = { field = { at = "position", field = "fog_cloud", radius = 4, action = "cover" } },
+        effect = { field = { at = "ground", field = "fog_cloud", radius = 4, action = "cover" } },
     })
     -- Orc support: a shaman that mends one allied unit at a time from its energy
     -- pool. The heal takes a target, so casting is button-then-click.
@@ -1290,7 +1290,7 @@ pub const CONTENT: &str = r#"
     define_skill("spew_creep", {
         caster = "entity",
         cooldown = 200,
-        effect = { field = { at = "position", field = "creep", radius = 2, action = "cover" } },
+        effect = { field = { at = "ground", field = "creep", radius = 2, action = "cover" } },
     })
     define_entity("drone", {
         race = "swarm",
@@ -1410,7 +1410,7 @@ pub const CONTENT: &str = r#"
         -- however far from the warren, as a burrower digs in wherever it
         -- stands.
         effect = { summon = {
-            at = { kind = "position" },
+            at = { kind = "ground" },
             entity = "burrow",
             count = 1,
             placement = "exact",
@@ -1601,7 +1601,7 @@ pub const CONTENT: &str = r#"
     define_skill("purge_creep", {
         caster = "entity",
         cooldown = 200,
-        effect = { field = { at = "position", field = "creep", radius = 3, action = "clear" } },
+        effect = { field = { at = "ground", field = "creep", radius = 3, action = "clear" } },
     })
     define_entity("probe", {
         race = "conclave",
@@ -1757,7 +1757,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 140,
         effect = { relocate = {
-            journey = { from_caster = { party = "caster", to = { aim = { kind = "position", range = 8 } } } },
+            journey = { from_caster = { party = "caster", to = { aim = { kind = "ground", range = 8 } } } },
             landing = "sighted",
         } },
     })
@@ -1881,7 +1881,7 @@ pub const CONTENT: &str = r#"
         effect = { relocate = {
             journey = { from_aim = {
                 party = { around = {
-                    at = "position", radius = 2, side = "own",
+                    at = "ground", radius = 2, side = "own",
                     kinds = { tags = { "biological", "mechanical" } },
                     sight = "seen", count = "all", shortfall = "leave",
                 } },
@@ -1901,7 +1901,7 @@ pub const CONTENT: &str = r#"
         effect = { relocate = {
             journey = { from_aim = {
                 party = { around = {
-                    at = { kind = "position", range = 9 }, radius = 2, side = "enemy",
+                    at = { kind = "ground", range = 9 }, radius = 2, side = "enemy",
                     kinds = { tags = { "biological", "mechanical" } },
                     sight = "seen", count = { at_most = 4 }, shortfall = "leave",
                 } },
@@ -2125,7 +2125,7 @@ pub const CONTENT: &str = r#"
         cooldown = 100,
         cast = "transient",
         effect = { relocate = {
-            journey = { from_caster = { party = "caster", to = { aim = { kind = "position", range = 4 } } } },
+            journey = { from_caster = { party = "caster", to = { aim = { kind = "ground", range = 4 } } } },
             landing = "sighted",
         } },
     })
@@ -2255,7 +2255,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 200,
         cost = { energy = "50" },
-        effect = { watch = { at = "position", radius = 6, duration = 180, detection = GROUND | AIR } },
+        effect = { watch = { at = "ground", radius = 6, duration = 180, detection = GROUND | AIR } },
     })
 
     -- The wraith's cloak: a buff that conceals and nothing else, switched on
@@ -2625,7 +2625,7 @@ pub const CONTENT: &str = r#"
     define_skill("smoke_grenade", {
         caster = "entity",
         cooldown = 400,
-        effect = { field = { at = "position", field = "smoke", radius = 3, action = "cover" } },
+        effect = { field = { at = "ground", field = "smoke", radius = 3, action = "cover" } },
     })
     define_entity("marine", {
         race = "terran",

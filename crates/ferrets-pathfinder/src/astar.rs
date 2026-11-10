@@ -6,7 +6,6 @@ use ferrets_geometry::{
     cell_size::CellSize,
     projection::{self, Projection, Step},
 };
-use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_nav_grid::nav_grid::NavGrid;
 
 use crate::mover_profile::MoverProfile;
@@ -23,41 +22,37 @@ const DIRECTIONS: [(i32, i32); 8] = [
     (1, 1),
 ];
 
-/// Finds the shortest path for `profile`'s shape from `start` toward the
-/// footprint covering `goal_size` cells from `goal`, around what its blockers
-/// say blocks it.
+/// Finds the shortest path for `profile`'s shape from the `start` anchor
+/// toward `goal`, around what its blockers say blocks it.
 ///
-/// The path is a sequence of **anchor** cells: each is a position the shape's
+/// The path is a sequence of **anchor** cells: each is a cell the shape's
 /// whole footprint fits at, so a wide mover never routes through a gap it
 /// cannot pass.
 ///
-/// `stop_distance` controls how close the path must get to the footprint — `0`
+/// `stop_distance` controls how close the path must get to `goal` — `0`
 /// requires standing on one of its cells. The distance metric depends on the
-/// projection: Chebyshev cells for `Isometric`, Euclidean cells for `Orthogonal`.
+/// projection: Chebyshev cells for `Isometric`, Euclidean cells for
+/// `Orthogonal`.
 ///
-/// Returns the sequence of positions to visit (excluding `start`), or `None` if no path exists.
+/// Returns the anchors to visit (excluding `start`), or `None` if no path
+/// exists.
 pub fn find_path(
     grid: &NavGrid,
     projection: Projection,
-    start: FixedUVec2,
+    start: CellPos,
     profile: MoverProfile,
-    goal: FixedUVec2,
-    goal_size: CellSize,
+    goal: CellRect,
     stop_distance: u32,
-) -> Option<Vec<FixedUVec2>> {
+) -> Option<Vec<CellPos>> {
     let shape = profile.shape;
 
-    let start = CellPos::from(start);
-    let goal = CellPos::from(goal);
-
-    let goal_rect = CellRect::new(goal, goal_size);
-    if grid.accepts(projection, start, shape, goal_rect, stop_distance) {
+    if grid.accepts(projection, start, shape, goal, stop_distance) {
         return Some(vec![]);
     }
 
     // Stopping at no distance at all means standing somewhere on the destination
     // footprint, which cannot happen with every cell of it occupied.
-    if stop_distance == 0 && goal_rect.cells().all(|cell| !profile.cell_fits(grid, cell)) {
+    if stop_distance == 0 && goal.cells().all(|cell| !profile.cell_fits(grid, cell)) {
         return None;
     }
 
@@ -67,11 +62,11 @@ pub fn find_path(
             passable_neighbors(grid, pos, profile)
                 .map(|(neighbor, step)| (neighbor, projection.step_cost(step)))
         },
-        |&pos| heuristic(projection, pos, goal_rect, shape.size, stop_distance),
-        |&pos| grid.accepts(projection, pos, shape, goal_rect, stop_distance),
+        |&pos| heuristic(projection, pos, goal, shape.size, stop_distance),
+        |&pos| grid.accepts(projection, pos, shape, goal, stop_distance),
     );
 
-    result.map(|(path, _cost)| path.into_iter().skip(1).map(|p| p.into()).collect())
+    result.map(|(path, _cost)| path.into_iter().skip(1).collect())
 }
 
 /// The passable neighbors of `pos` for `profile`, in fixed direction order,

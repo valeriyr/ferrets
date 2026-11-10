@@ -5,12 +5,13 @@ use ferrets_content::{
     pool::{Pool, PoolInitial},
     pool_def::PoolId,
 };
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_geometry::cell_pos::CellPos;
+use ferrets_math::FixedU64;
 use ferrets_simulation::{
     components::rise::{RiseAttendance, RiseOrigin},
     entity_def,
     simulation_id::SimulationId,
-    spawn::{self, Arrival, FieldReach},
+    spawn::{self, Arrival, At, FieldReach},
 };
 
 mod utils;
@@ -26,7 +27,7 @@ fn rising_arrival_of_type_that_never_rises_panics() {
     spawn::create_entity(
         &mut world,
         "unit",
-        cell(5, 5),
+        at_cell(5, 5),
         None,
         FieldReach::Initial,
         Arrival::Rising {
@@ -89,9 +90,9 @@ fn placement_starting_health_empty_panics() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
-/// The origin corner of cell `(x, y)`.
-fn cell(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
+/// Spawning anchored at the cell `(x, y)`.
+fn at_cell(x: u32, y: u32) -> At {
+    At::Cell(CellPos::new(x, y))
 }
 
 /// Places an owned `unit` at cell `(5, 5)` with `starts`.
@@ -99,5 +100,12 @@ fn place_unit(
     world: &mut World,
     starts: &[(PoolId, PoolInitial)],
 ) -> Option<(Entity, SimulationId)> {
-    spawn::spawn_placed(world, "unit", cell(5, 5), Some(0), FieldReach::Full, starts)
+    spawn::spawn_placed(
+        world,
+        "unit",
+        at_cell(5, 5),
+        Some(0),
+        FieldReach::Full,
+        starts,
+    )
 }

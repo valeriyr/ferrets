@@ -1,6 +1,6 @@
 //! Internal resolved orders — what entity systems actually execute each tick.
 
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::fixed_uvec2::FixedUVec2;
 use serde::{Deserialize, Serialize};
 
@@ -9,24 +9,24 @@ use ferrets_content::{research::ResearchId, skills::SkillId};
 
 /// What an attack is aimed at.
 ///
-/// A weapon whose projectile follows its target is aimed at an entity; one that sends
-/// its shot to a cell is aimed at a position, and hits whatever is standing there when
-/// it arrives.
+/// A weapon whose projectile follows its target is aimed at an entity; one that
+/// sends its shot to a cell is aimed at that cell, and hits whatever is
+/// standing there when it arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AttackTarget {
     /// The entity with the given id.
     Entity(SimulationId),
-    /// A cell, in simulation coordinates.
-    Position(FixedUVec2),
+    /// A cell.
+    Cell(CellPos),
 }
 
 impl AttackTarget {
-    /// The aimed entity, or `None` for a position.
+    /// The aimed entity, or `None` for a cell.
     #[inline]
     pub fn entity(self) -> Option<SimulationId> {
         match self {
             AttackTarget::Entity(id) => Some(id),
-            AttackTarget::Position(_) => None,
+            AttackTarget::Cell(_) => None,
         }
     }
 }
@@ -36,22 +36,22 @@ impl AttackTarget {
 #[derive(Debug, Clone, Copy)]
 pub struct Leash {
     /// The position the engagement started from.
-    pub anchor: FixedUVec2,
-    /// How far from the anchor the target may stray, in grid cells, before the
-    /// fight is broken off.
+    pub position: FixedUVec2,
+    /// How far from that position the target may stray, in grid cells, before
+    /// the fight is broken off.
     pub radius: u32,
 }
 
 /// What a builder is set to do on a site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildTask {
-    /// Raise a new site of `type_name` at `position`: the builder is its
-    /// founder.
+    /// Raise a new site of `type_name` anchored at `anchor`: the builder is
+    /// its founder.
     Found {
         /// The type the site is raised as.
         type_name: String,
-        /// Where the site's footprint is anchored.
-        position: FixedUVec2,
+        /// The cell the site's footprint is anchored at.
+        anchor: CellPos,
     },
     /// Join the crew of the site already under way with the given id.
     Join {
@@ -61,11 +61,11 @@ pub enum BuildTask {
 }
 
 impl BuildTask {
-    /// Raise a new site of `type_name` at `position`.
-    pub fn found(type_name: &str, position: FixedUVec2) -> Self {
+    /// Raise a new site of `type_name` anchored at `anchor`.
+    pub fn found(type_name: &str, anchor: CellPos) -> Self {
         BuildTask::Found {
             type_name: type_name.to_string(),
-            position,
+            anchor,
         }
     }
 
@@ -78,11 +78,11 @@ impl BuildTask {
 /// An order an entity is executing or waiting to execute.
 #[derive(Debug, Clone)]
 pub enum Order {
-    /// Move to within `range` grid cells of the footprint at `target` with the given
-    /// `size`, in simulation coordinates. `range` of `0` requires reaching the
-    /// footprint itself. A bare cell is a footprint of [`CellSize::ONE`]; naming the
-    /// whole of a larger destination is what lets a unit stop at the near side of a
-    /// building rather than walking round to the corner its position names.
+    /// Move to `target`. With `range` `0` and `size` [`CellSize::ONE`], a point
+    /// move: the walker's middle to `target`, held on the map for its size.
+    /// Otherwise to within `range` grid cells of the `size` footprint anchored
+    /// at the cell `target` lies in: a walk to a building ends at its nearest
+    /// cells.
     Move {
         target: FixedUVec2,
         size: CellSize,
@@ -138,7 +138,7 @@ pub enum Order {
     /// Let every body held out, one at a time. With a destination, walk into
     /// unload range of it first and send each freed body marching there;
     /// without one, freed bodies go to the rally point, if set.
-    Unload { at: Option<FixedUVec2> },
+    Unload { at: Option<CellPos> },
     /// Cast `skill` at `target`: walk into the skill's reach of what it is
     /// aimed at, then work at it until it lands. A skill that declares no
     /// reach has nothing to walk toward and is worked where the caster
@@ -274,7 +274,7 @@ impl Order {
     /// If this order is an unload order, returns its destination — the outer
     /// `Option` says whether this is an unload order at all, the inner one
     /// whether it names a destination. Otherwise, returns `None`.
-    pub fn unload_at(&self) -> Option<Option<FixedUVec2>> {
+    pub fn unload_at(&self) -> Option<Option<CellPos>> {
         match self {
             Order::Unload { at } => Some(*at),
             _ => None,

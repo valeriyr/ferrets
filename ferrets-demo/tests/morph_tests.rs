@@ -34,7 +34,7 @@ fn taking_off_swaps_occupied_layer() {
     let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -68,7 +68,7 @@ fn landing_is_refused_when_ground_is_taken() {
     let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the airborne gryphon spawns");
@@ -79,7 +79,7 @@ fn landing_is_refused_when_ground_is_taken() {
     utils::create_entity(
         app.world_mut(),
         "farm",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the farm is raised under it");
@@ -110,7 +110,7 @@ fn changing_form_is_refused_when_riders_would_not_fit() {
     let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -122,7 +122,7 @@ fn changing_form_is_refused_when_riders_would_not_fit() {
         let (_, rider) = utils::create_entity(
             app.world_mut(),
             "archer",
-            utils::at_cell(CLEAR.0 + offset, CLEAR.1),
+            utils::cell(CLEAR.0 + offset, CLEAR.1),
             Some(0),
         )
         .expect("a rider spawns");
@@ -153,7 +153,7 @@ fn changing_into_anything_but_declared_form_is_refused() {
     let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -176,7 +176,7 @@ fn health_carries_its_proportion_not_its_amount() {
     let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -208,7 +208,7 @@ fn order_queue_survives_form_change() {
     let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -226,7 +226,7 @@ fn order_queue_survives_form_change() {
     utils::push_command(
         &mut app,
         PlayerCommand::Move {
-            target: utils::at_cell(CLEAR.0 + 8, CLEAR.1),
+            target: utils::pos(CLEAR.0 + 8, CLEAR.1),
             flush: false,
         },
     );
@@ -256,7 +256,7 @@ fn ordered_change_takes_forms_morph_time() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -294,7 +294,7 @@ fn changed_gryphon_flies_over_what_stopped_it_on_foot() {
     // On the near bank of the river, ordered across it. On foot the fordless
     // stretch is a wall; aloft it is nothing.
     let (gryphon, _) =
-        utils::create_entity(app.world_mut(), "gryphon", utils::at_cell(44, 12), Some(0))
+        utils::create_entity(app.world_mut(), "gryphon", utils::cell(44, 12), Some(0))
             .expect("the gryphon spawns by the river");
     let goal = (52, 12);
 
@@ -317,7 +317,7 @@ fn changed_gryphon_flies_over_what_stopped_it_on_foot() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::at_cell(goal.0, goal.1),
+                target: utils::pos(goal.0, goal.1),
                 size: ferrets_geometry::cell_size::CellSize::ONE,
                 range: 0,
             },
@@ -326,8 +326,8 @@ fn changed_gryphon_flies_over_what_stopped_it_on_foot() {
     utils::run_ticks(&mut app, 400);
 
     assert_eq!(
-        utils::cell_of(utils::position_of(app.world_mut(), gryphon)),
-        goal,
+        utils::anchor_of(app.world(), gryphon),
+        CellPos::new(goal.0, goal.1),
         "the airborne gryphon did not cross the river"
     );
 }
@@ -347,14 +347,14 @@ fn rider_fires_from_moving_holder() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
     let (rider, _) = utils::create_entity(
         app.world_mut(),
         "archer",
-        utils::at_cell(CLEAR.0 + 4, CLEAR.1),
+        utils::cell(CLEAR.0 + 4, CLEAR.1),
         Some(0),
     )
     .expect("the rider spawns");
@@ -367,7 +367,7 @@ fn rider_fires_from_moving_holder() {
     let (_, victim_id) = utils::create_entity(
         app.world_mut(),
         "grunt",
-        utils::at_cell(CLEAR.0 + 3, CLEAR.1 + 1),
+        utils::cell(CLEAR.0 + 3, CLEAR.1 + 1),
         Some(1),
     )
     .expect("the victim spawns");
@@ -380,7 +380,7 @@ fn rider_fires_from_moving_holder() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::at_cell(CLEAR.0 + 6, CLEAR.1 + 2),
+                target: utils::pos(CLEAR.0 + 6, CLEAR.1 + 2),
                 size: ferrets_geometry::cell_size::CellSize::ONE,
                 range: 0,
             },
@@ -423,7 +423,7 @@ fn run_and_checksum() -> Vec<u64> {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -435,7 +435,7 @@ fn run_and_checksum() -> Vec<u64> {
         utils::create_entity(
             app.world_mut(),
             type_name,
-            utils::at_cell(cell.0, cell.1),
+            utils::cell(cell.0, cell.1),
             Some(1),
         )
         .unwrap_or_else(|| panic!("{type_name} spawns"));
@@ -457,7 +457,7 @@ fn run_and_checksum() -> Vec<u64> {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::at_cell(30, 26),
+                target: utils::pos(30, 26),
                 size: ferrets_geometry::cell_size::CellSize::ONE,
                 range: 0,
             },
@@ -490,7 +490,7 @@ fn death_flushes_change_under_way() {
     let (gryphon, id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -528,7 +528,7 @@ fn quickened_change_lands_same_tick() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -574,7 +574,7 @@ fn morph_command_gates_on_declared_transitions() {
     let (peasant, peasant_id) = utils::create_entity(
         app.world_mut(),
         "peasant",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the peasant spawns");
@@ -607,14 +607,14 @@ fn morph_command_changes_everyone_that_can() {
     let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
     let (peasant, peasant_id) = utils::create_entity(
         app.world_mut(),
         "peasant",
-        utils::at_cell(CLEAR.0 + 4, CLEAR.1),
+        utils::cell(CLEAR.0 + 4, CLEAR.1),
         Some(0),
     )
     .expect("the peasant spawns");
@@ -658,7 +658,7 @@ fn take_off_draws_its_energy_cost() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -687,7 +687,7 @@ fn unpayable_cost_refuses_change() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -723,7 +723,7 @@ fn landing_reserves_its_ground_for_whole_window() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the airborne gryphon spawns");
@@ -738,7 +738,7 @@ fn landing_reserves_its_ground_for_whole_window() {
         utils::create_entity(
             app.world_mut(),
             "farm",
-            utils::at_cell(CLEAR.0, CLEAR.1),
+            utils::cell(CLEAR.0, CLEAR.1),
             Some(0),
         )
         .is_none(),
@@ -763,7 +763,7 @@ fn reservation_holds_under_cell_model() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the airborne gryphon spawns");
@@ -774,7 +774,7 @@ fn reservation_holds_under_cell_model() {
         utils::create_entity(
             app.world_mut(),
             "farm",
-            utils::at_cell(CLEAR.0, CLEAR.1),
+            utils::cell(CLEAR.0, CLEAR.1),
             Some(0),
         )
         .is_none(),
@@ -795,14 +795,14 @@ fn landing_order_is_refused_when_ground_is_taken_at_start() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the airborne gryphon spawns");
     utils::create_entity(
         app.world_mut(),
         "farm",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the farm is raised under it");
@@ -830,7 +830,7 @@ fn contested_take_off_fizzles_and_keeps_payment() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -842,7 +842,7 @@ fn contested_take_off_fizzles_and_keeps_payment() {
     utils::create_entity(
         app.world_mut(),
         "zeppelin",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the zeppelin parks in its sky");
@@ -870,7 +870,7 @@ fn upgrade_pays_up_front_and_lands() {
     let (tower, _) = utils::create_entity(
         app.world_mut(),
         "watch_tower",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(1),
     )
     .expect("the tower spawns");
@@ -897,7 +897,7 @@ fn canceled_upgrade_returns_its_money() {
     let (tower, _) = utils::create_entity(
         app.world_mut(),
         "watch_tower",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(1),
     )
     .expect("the tower spawns");
@@ -942,7 +942,7 @@ fn committed_change_shrugs_off_cancel() {
     let (gryphon, _) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -969,7 +969,7 @@ fn melee_breaks_off_when_its_target_takes_flight() {
     let (gryphon, gryphon_id) = utils::create_entity(
         app.world_mut(),
         "gryphon",
-        utils::at_cell(CLEAR.0, CLEAR.1),
+        utils::cell(CLEAR.0, CLEAR.1),
         Some(0),
     )
     .expect("the gryphon spawns");
@@ -981,7 +981,7 @@ fn melee_breaks_off_when_its_target_takes_flight() {
     let (grunt, _) = utils::create_entity(
         app.world_mut(),
         "grunt",
-        utils::at_cell(CLEAR.0 + 2, CLEAR.1),
+        utils::cell(CLEAR.0 + 2, CLEAR.1),
         Some(1),
     )
     .expect("the grunt spawns");

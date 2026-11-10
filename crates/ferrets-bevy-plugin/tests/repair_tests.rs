@@ -192,7 +192,7 @@ fn repair_range_lets_mender_work_without_closing_in() {
     let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
     let (medic, medic_id) = utils::create_owned(&mut app, "medic", 8, 10, 0);
     utils::wound(&mut app, depot, "20");
-    let stood_at = utils::cell_of(app.world_mut(), medic);
+    let stood_at = utils::anchor_of(app.world_mut(), medic);
 
     repair(&mut app, medic_id, depot_id);
     utils::run_ticks(&mut app, utils::APPLY + 10);
@@ -203,7 +203,7 @@ fn repair_range_lets_mender_work_without_closing_in() {
         "the work lands from where it stood"
     );
     assert_eq!(
-        utils::cell_of(app.world_mut(), medic),
+        utils::anchor_of(app.world_mut(), medic),
         stood_at,
         "a longer reach means no step toward the patient at all"
     );
@@ -702,7 +702,7 @@ fn patient_destroyed_mid_repair_finishes_order_and_frees_worker() {
     );
     // Beside where it went in, that cell being the first the search finds free.
     assert_eq!(
-        utils::cell_of(app.world(), worker),
+        utils::anchor_of(app.world(), worker),
         CellPos::from(went_in_at)
     );
     assert!(
@@ -756,9 +756,9 @@ fn mender_in_open_follows_patient_that_walks_away() {
 #[test]
 fn mender_stops_at_near_side_of_target() {
     let mut app = app();
-    // The depot spans (10, 10) to (11, 11) and the worker comes at it from the east.
-    // Closing on the position alone would send it round to the north-west corner,
-    // since that is the cell the position names.
+    // The depot spans (10, 10) to (11, 11) and the worker comes at it from the
+    // east. Closing on its anchor alone would send it round to the north-west
+    // cell, the one the depot is anchored at.
     let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 18, 11, 0);
     utils::wound(&mut app, depot, "40");
@@ -767,7 +767,7 @@ fn mender_stops_at_near_side_of_target() {
     repair(&mut app, worker_id, depot_id);
     utils::run_ticks(&mut app, 40);
 
-    let stopped = utils::cell_of(app.world_mut(), worker);
+    let stopped = utils::anchor_of(app.world_mut(), worker);
     assert_eq!(
         stopped.x, 12,
         "it stopped against the east face it walked up to, at {stopped:?}"
@@ -780,10 +780,10 @@ fn mender_stops_at_near_side_of_target() {
 }
 
 #[test]
-fn mender_faces_patient_rather_than_corner_its_position_names() {
+fn mender_faces_nearest_part_of_patient() {
     let mut app = app();
-    // Level with the depot's lower row and just east of it, so the patient lies
-    // due west. Its position names the north-west cell, which does not.
+    // Level with the depot's lower row and just east of it, so the patient's
+    // nearest part lies due west. Its middle, (11, 11), does not.
     let (depot, depot_id) = utils::create_owned(&mut app, "depot", 10, 10, 0);
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 12, 11, 0);
     utils::wound(&mut app, depot, "20");
@@ -903,7 +903,7 @@ fn app() -> App {
         registry.register_resource("gold");
 
         registry.register(building("depot", None));
-        registry.register(building("hall", Some(FixedU64::from_num(0.5))));
+        registry.register(building("hall", Some(utils::fixed("0.5"))));
         // Tagged and damageable, but nothing produces it, so nothing paces a repair.
         registry.register(
             EntityTypeDef::new("monolith")
@@ -1032,7 +1032,7 @@ fn app() -> App {
                         crew: CrewLimit::ONE,
                     },
                     false,
-                    RepairCost::Energy(FixedU64::from_num(0.5)),
+                    RepairCost::Energy(utils::fixed("0.5")),
                     None,
                 ),
         );
@@ -1108,9 +1108,7 @@ fn repairer(
     // The factor only means something to a pro-rata bill, and declaring it without
     // one is rejected at registration.
     let def = match cost {
-        RepairCost::ProRata => {
-            def.with_stat(EntityStatId::REPAIR_COST_FACTOR, FixedU64::from_num(0.5))
-        }
+        RepairCost::ProRata => def.with_stat(EntityStatId::REPAIR_COST_FACTOR, utils::fixed("0.5")),
         _ => def,
     };
     def.with_repairer(

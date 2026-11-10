@@ -72,7 +72,7 @@ pub fn recompute_visibility(world: &mut World) {
         .into_iter()
         .map(|(entity, player, sight, sees_up)| {
             let sight = sight.min(map_span);
-            let standing = entity_def::occupied_rect(world, entity);
+            let standing = entity_def::location(world, entity).footprint();
             let registry = world.resource::<ContentRegistry>();
             let layer = entity_def::layer(world, entity);
             let level = entity_def::level(world, entity);

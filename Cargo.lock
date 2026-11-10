@@ -2415,6 +2415,7 @@ version = "0.1.0"
 dependencies = [
  "bcs",
  "crossbeam-channel",
+ "ferrets-geometry",
  "ferrets-math",
  "ferrets-simulation",
  "serde",
@@ -2427,7 +2428,6 @@ name = "ferrets-pathfinder"
 version = "0.1.0"
 dependencies = [
  "ferrets-geometry",
- "ferrets-math",
  "ferrets-nav-grid",
  "pathfinding",
 ]

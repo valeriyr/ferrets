@@ -1,10 +1,8 @@
 //! How bodies mark the navigation grid.
 
 use ferrets_content::entity_type_def::EntityTypeDef;
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_geometry::cell_rect::CellRect;
 use ferrets_nav_grid::layer_mask::LayerMask;
-use ferrets_physics::body;
 
 use crate::simulation_id::SimulationId;
 
@@ -39,22 +37,6 @@ impl OccupancyClass {
             OccupancyClass::Claim
         } else {
             OccupancyClass::Static
-        }
-    }
-
-    /// The footprint of `size` a body at `position` holds on this plane,
-    /// anchored at the cell the plane anchors a body at.
-    pub fn footprint_rect(self, position: FixedUVec2, size: CellSize) -> CellRect {
-        CellRect::new(self.anchor(position), size)
-    }
-
-    /// The cell a footprint on this plane is anchored at for a body at
-    /// `position`: a standing form's stamped anchor, or the cell a mover's
-    /// claim lies on.
-    fn anchor(self, position: FixedUVec2) -> CellPos {
-        match self {
-            OccupancyClass::Static => body::anchor(position),
-            OccupancyClass::Claim => CellPos::from(position),
         }
     }
 }

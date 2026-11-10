@@ -136,7 +136,7 @@ fn holds(
             let grid = world.resource::<Map>().nav_grid();
             world.entity(actor).contains::<LocationComponent>()
                 && *layers & entity_def::layer(world, actor) != LayerMask::EMPTY
-                && coverage.covers(entity_def::occupied_rect(world, actor), |cell| {
+                && coverage.covers(entity_def::location(world, actor).footprint(), |cell| {
                     terrains.admits(
                         grid.terrain(cell)
                             .expect("a footprint on the map lies on its cells"),

@@ -5,12 +5,10 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{field::FieldPlacement, price::Price, registry::ContentRegistry};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
-use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::orders::{self, Refusal};
 use crate::{
     components::{
-        location::LocationComponent,
         rise::{RiseAttendance, RiseOrigin, RisingComponent},
         warp::WarpComponent,
     },
@@ -23,7 +21,7 @@ use crate::{
     requirements,
     resources::{self, PlayerResources},
     session::{GameSession, player_id::PlayerId},
-    spawn::{self, FieldReach},
+    spawn::{self, At, FieldReach},
     supply, tunnels,
 };
 
@@ -73,18 +71,18 @@ pub struct WarpPlan {
 }
 
 /// Whether `player`'s `warper` may warp in a unit of `type_name` anchored at
-/// `at` now, judged without touching the world: the warper and the unit as
-/// [`judge_warper`] says, and the unit's footprint at `at` ground that takes
-/// it — for a type raised over a source, over a source of that type standing
-/// exactly on it, judged as though the source were off the grid — known as
-/// the warper's landing asks, inside the warper's field rules and the unit's
-/// own.
+/// `anchor` now, judged without touching the world: the warper and the unit as
+/// [`judge_warper`] says, and the unit's footprint at `anchor` ground that
+/// takes it — for a type raised over a source, over a source of that type
+/// standing exactly on it, judged as though the source were off the grid —
+/// known as the warper's landing asks, inside the warper's field rules and the
+/// unit's own.
 pub fn judge(
     world: &World,
     player: PlayerId,
     warper: Entity,
     type_name: &str,
-    at: FixedUVec2,
+    anchor: CellPos,
 ) -> Result<WarpPlan, WarpRefusal> {
     judge_warper(world, player, warper, type_name)?;
     let warper_def = entity_def::warper_def(world, warper).expect("judged an entity that warps");
@@ -92,7 +90,6 @@ pub fn judge(
         .resource::<ContentRegistry>()
         .entity(type_name)
         .expect("a warper warps in only registered types");
-    let anchor = CellPos::from(at);
     let location_def = unit.location.expect("a warped unit stands somewhere");
     let footprint = CellRect::new(anchor, location_def.size());
     let cover = match unit.overbuilds.as_deref() {
@@ -102,10 +99,9 @@ pub fn judge(
         None => Cover::Nothing,
     };
     let (lifted, ignored) = overbuild::set_aside(world, cover);
-    let placed = LocationComponent::new(FixedUVec2::from(anchor), spawn::DEFAULT_FACING);
     if !ground::can_place(
         world,
-        &placed,
+        anchor,
         location_def,
         OccupancyClass::of(unit),
         &lifted,
@@ -198,7 +194,7 @@ pub fn begin(world: &mut World, player: PlayerId, plan: WarpPlan) {
     let (unit, _) = spawn::spawn_warped(
         world,
         &plan.type_name,
-        FixedUVec2::from(plan.anchor),
+        At::Cell(plan.anchor),
         player,
         FieldReach::Initial,
         warper_id,

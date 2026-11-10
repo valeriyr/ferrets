@@ -70,9 +70,8 @@ use ferrets_simulation::{
 fn panel_names_own_pick_and_reports_its_health() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
-    let (_, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a grunt");
+    let (_, grunt) = utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a grunt");
     utils::select(&mut app, grunt, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
@@ -88,9 +87,8 @@ fn panel_names_own_pick_and_reports_its_health() {
 fn panel_names_ground_under_pick() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
-    let (_, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a grunt");
+    let (_, grunt) = utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a grunt");
     utils::select(&mut app, grunt, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let shown = panel_text(&mut app);
@@ -101,7 +99,7 @@ fn panel_names_ground_under_pick() {
     );
 
     // The sea's top rows are deep water.
-    let (_, naga) = utils::create_entity(app.world_mut(), "naga", utils::at_cell(5, 5), Some(0))
+    let (_, naga) = utils::create_entity(app.world_mut(), "naga", utils::cell(5, 5), Some(0))
         .expect("the demo content defines a naga");
     utils::select(&mut app, naga, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -114,13 +112,9 @@ fn panel_names_ground_under_pick() {
 
     // A 2×2 stilt walker over row 11, the sea's last shallow row, and row
     // 12, the land below it: both terrains, in name order.
-    let (_, walker) = utils::create_entity(
-        app.world_mut(),
-        "stilt_walker",
-        utils::at_cell(5, 11),
-        Some(0),
-    )
-    .expect("the demo content defines a stilt walker");
+    let (_, walker) =
+        utils::create_entity(app.world_mut(), "stilt_walker", utils::cell(5, 11), Some(0))
+            .expect("the demo content defines a stilt walker");
     utils::select(&mut app, walker, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let shown = panel_text(&mut app);
@@ -135,9 +129,8 @@ fn panel_names_ground_under_pick() {
 fn panel_lines_label_each_field() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
-    let (_, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a grunt");
+    let (_, grunt) = utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a grunt");
     utils::select(&mut app, grunt, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
@@ -153,9 +146,8 @@ fn panel_lines_label_each_field() {
 fn panel_reports_energy_against_its_maximum() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
-    let (_, archer) =
-        utils::create_entity(app.world_mut(), "archer", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines an archer");
+    let (_, archer) = utils::create_entity(app.world_mut(), "archer", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines an archer");
     utils::select(&mut app, archer, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
@@ -173,7 +165,7 @@ fn panel_names_rising_entity_by_what_brought_it_in() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
     let (farm, farm_id) =
-        utils::create_rising(app.world_mut(), "farm", utils::at_cell(20, 20), Some(0))
+        utils::create_rising(app.world_mut(), "farm", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a farm");
     let warp_gate = app
         .world()
@@ -220,7 +212,7 @@ fn panel_names_rising_entity_and_buff_outage_as_simulation_judges_them() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
     let (farm, farm_id) =
-        utils::create_rising(app.world_mut(), "farm", utils::at_cell(20, 20), Some(0))
+        utils::create_rising(app.world_mut(), "farm", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a farm");
     utils::select(&mut app, farm_id, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -267,11 +259,10 @@ fn supply_readout_rounds_and_turns_red_on_what_it_shows() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     app.world_mut()
         .spawn((SupplyText, Text::new(""), TextColor::default()));
-    utils::create_entity(app.world_mut(), "farm", utils::at_cell(24, 24), Some(0))
+    utils::create_entity(app.world_mut(), "farm", utils::cell(24, 24), Some(0))
         .expect("the demo content defines a farm");
-    let (grunt, _) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a grunt");
+    let (grunt, _) = utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a grunt");
     let laden = {
         let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
         registry.register_entity_buff(
@@ -315,7 +306,7 @@ fn panel_names_pick_simulation_holds_disabled() {
     spawn_panel(&mut app);
     // A gateway with no power of its own under it stands switched off.
     let (_, gateway) =
-        utils::create_entity(app.world_mut(), "gateway", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "gateway", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a gateway");
     utils::select(&mut app, gateway, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -333,10 +324,10 @@ fn panel_withholds_live_values_once_rival_pick_leaves_sight() {
     spawn_panel(&mut app);
     // A rival's unit, lit by a scout of the side's own: what the side does not
     // own, it reads only while it makes it out.
-    utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+    utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
         .expect("the demo content defines a grunt");
     let (entity, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(22, 20), Some(1))
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(22, 20), Some(1))
             .expect("the demo content defines a grunt");
     utils::run_ticks(&mut app, 2);
     utils::select(&mut app, grunt, SelectMode::Replace);
@@ -371,10 +362,10 @@ fn panel_withholds_live_values_once_rival_pick_leaves_sight() {
 fn glimpsed_rival_pick_withholds_live_values_too() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
-    utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+    utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
         .expect("the demo content defines a grunt");
     let (entity, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(22, 20), Some(1))
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(22, 20), Some(1))
             .expect("the demo content defines a grunt");
     utils::run_ticks(&mut app, 2);
     utils::select(&mut app, grunt, SelectMode::Replace);
@@ -396,7 +387,7 @@ fn panel_reports_own_pick_that_carries_no_sighting() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
     let (entity, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a grunt");
     utils::select(&mut app, grunt, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -424,7 +415,7 @@ fn panel_keeps_own_pick_that_goes_off_map() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     spawn_panel(&mut app);
     let (entity, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a grunt");
     utils::select(&mut app, grunt, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
@@ -452,7 +443,7 @@ fn rebuilding_command_card_leaves_one_button_of_each_kind() {
     // A barracks trains and a blacksmith researches, so one card carries both
     // of the cancel buttons the rebuild has to clear.
     let (_, barracks) =
-        utils::create_entity(app.world_mut(), "barracks", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "barracks", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a barracks");
     app.world_mut().insert_resource(Leading(Some(barracks)));
 
@@ -477,13 +468,9 @@ fn rebuilding_command_card_leaves_one_button_of_each_kind() {
     );
 
     // The same for a card whose building researches rather than trains.
-    let (_, blacksmith) = utils::create_entity(
-        app.world_mut(),
-        "blacksmith",
-        utils::at_cell(26, 26),
-        Some(0),
-    )
-    .expect("the demo content defines a blacksmith");
+    let (_, blacksmith) =
+        utils::create_entity(app.world_mut(), "blacksmith", utils::cell(26, 26), Some(0))
+            .expect("the demo content defines a blacksmith");
     for _ in 0..3 {
         app.world_mut().insert_resource(Leading(Some(blacksmith)));
         app.world_mut()
@@ -506,7 +493,7 @@ fn rebuilding_command_card_leaves_one_button_of_each_kind() {
 fn pressing_cancel_unit_sends_one_command_for_leading_trainer() {
     let mut app = card_app();
     let (_, barracks) =
-        utils::create_entity(app.world_mut(), "barracks", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "barracks", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a barracks");
     app.world_mut().insert_resource(Leading(Some(barracks)));
     app.world_mut()
@@ -529,13 +516,9 @@ fn pressing_cancel_unit_sends_one_command_for_leading_trainer() {
 #[test]
 fn pressing_cancel_research_on_idle_researcher_sends_nothing() {
     let mut app = card_app();
-    let (_, blacksmith) = utils::create_entity(
-        app.world_mut(),
-        "blacksmith",
-        utils::at_cell(24, 24),
-        Some(0),
-    )
-    .expect("the demo content defines a blacksmith");
+    let (_, blacksmith) =
+        utils::create_entity(app.world_mut(), "blacksmith", utils::cell(24, 24), Some(0))
+            .expect("the demo content defines a blacksmith");
     app.world_mut().insert_resource(Leading(Some(blacksmith)));
     app.world_mut()
         .spawn((hud::CancelResearchButton, Interaction::Pressed));
@@ -553,13 +536,9 @@ fn pressing_cancel_research_on_idle_researcher_sends_nothing() {
 #[test]
 fn pressing_cancel_research_names_topic_from_researcher_own_queue() {
     let mut app = card_app();
-    let (entity, blacksmith) = utils::create_entity(
-        app.world_mut(),
-        "blacksmith",
-        utils::at_cell(24, 24),
-        Some(0),
-    )
-    .expect("the demo content defines a blacksmith");
+    let (entity, blacksmith) =
+        utils::create_entity(app.world_mut(), "blacksmith", utils::cell(24, 24), Some(0))
+            .expect("the demo content defines a blacksmith");
     let iron = app
         .world()
         .resource::<ContentRegistry>()
@@ -591,7 +570,7 @@ fn rising_card_offers_cancel_unless_it_is_summon() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     let (farm, farm_id) =
-        utils::create_rising(app.world_mut(), "farm", utils::at_cell(20, 20), Some(0))
+        utils::create_rising(app.world_mut(), "farm", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a farm");
     let raise_burrow = app
         .world()
@@ -649,7 +628,7 @@ fn cancel_buttons_gray_out_with_nothing_to_call_off() {
     // the card and grayed by the availability pass, since there is nothing
     // to call off; one entry queued brings it back.
     let (entity, barracks) =
-        utils::create_entity(app.world_mut(), "barracks", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "barracks", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a barracks");
     app.world_mut().insert_resource(Leading(Some(barracks)));
     app.world_mut()
@@ -680,13 +659,9 @@ fn cancel_buttons_gray_out_with_nothing_to_call_off() {
     );
 
     // The same for a researcher, whose topic sits in its order queue.
-    let (entity, blacksmith) = utils::create_entity(
-        app.world_mut(),
-        "blacksmith",
-        utils::at_cell(26, 26),
-        Some(0),
-    )
-    .expect("the demo content defines a blacksmith");
+    let (entity, blacksmith) =
+        utils::create_entity(app.world_mut(), "blacksmith", utils::cell(26, 26), Some(0))
+            .expect("the demo content defines a blacksmith");
     app.world_mut().insert_resource(Leading(Some(blacksmith)));
     app.world_mut()
         .run_system_once(hud::update_command_card)
@@ -730,7 +705,7 @@ fn hovered_card_button_names_its_price_or_what_it_lacks() {
     // is grayed and says what either branch would take; the wraith's is live
     // and says what it costs — 150 gold, 100 wood and 90 ticks, 4.5 Seconds.
     let (_, factory) =
-        utils::create_entity(app.world_mut(), "factory", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "factory", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a factory");
     app.world_mut().insert_resource(Leading(Some(factory)));
     app.world_mut()
@@ -765,7 +740,7 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().spawn((hud::CardHint, Text::new("")));
     let (archer, archer_id) =
-        utils::create_entity(app.world_mut(), "archer", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "archer", utils::cell(20, 20), Some(0))
             .expect("the demo content defines an archer");
     app.world_mut().insert_resource(Leading(Some(archer_id)));
     app.world_mut()
@@ -794,9 +769,8 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
         .unwrap()
         .reset_cooldown(battle_focus);
     // Led by a rising entity: whatever the skill, it cannot cast yet.
-    let (_, farm_id) =
-        utils::create_rising(app.world_mut(), "farm", utils::at_cell(28, 20), Some(0))
-            .expect("the demo content defines a farm");
+    let (_, farm_id) = utils::create_rising(app.world_mut(), "farm", utils::cell(28, 20), Some(0))
+        .expect("the demo content defines a farm");
     app.world_mut().insert_resource(Leading(Some(farm_id)));
     recolor_card(&mut app);
     assert_eq!(hint_text(&mut app), "Still under construction");
@@ -830,7 +804,7 @@ fn hovered_skill_names_its_cost_or_why_it_cannot_cast() {
 
     // Led by something that knows no battle focus, or by nothing at all.
     let (_, grunt_id) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(24, 20), Some(0))
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(24, 20), Some(0))
             .expect("the demo content defines a grunt");
     app.world_mut().insert_resource(Leading(Some(grunt_id)));
     recolor_card(&mut app);
@@ -845,9 +819,8 @@ fn hovered_skill_names_ground_it_needs() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().spawn((hud::CardHint, Text::new("")));
-    let (_, naga_id) =
-        utils::create_entity(app.world_mut(), "naga", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a naga");
+    let (_, naga_id) = utils::create_entity(app.world_mut(), "naga", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a naga");
     app.world_mut().insert_resource(Leading(Some(naga_id)));
     app.world_mut()
         .run_system_once(hud::update_command_card)
@@ -864,10 +837,10 @@ fn armed_skill_names_why_it_refuses_hovered_target() {
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().spawn((hud::CardHint, Text::new("")));
     let (_, shaman_id) =
-        utils::create_entity(app.world_mut(), "shaman", utils::at_cell(30, 30), Some(0))
+        utils::create_entity(app.world_mut(), "shaman", utils::cell(30, 30), Some(0))
             .expect("the demo content defines a shaman");
     let (_, barracks_id) =
-        utils::create_entity(app.world_mut(), "barracks", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "barracks", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a barracks");
     let second_wind = app
         .world()
@@ -905,10 +878,10 @@ fn hovered_aim_past_transient_reach_reads_out_of_reach() {
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().spawn((hud::CardHint, Text::new("")));
     let (_, huntress_id) =
-        utils::create_entity(app.world_mut(), "huntress", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "huntress", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a huntress");
     // A second huntress sees round the far cell, so the landing is sighted.
-    utils::create_entity(app.world_mut(), "huntress", utils::at_cell(32, 20), Some(0))
+    utils::create_entity(app.world_mut(), "huntress", utils::cell(32, 20), Some(0))
         .expect("the demo content defines a huntress");
     utils::run_ticks(&mut app, 1);
     let dash = app
@@ -925,9 +898,7 @@ fn hovered_aim_past_transient_reach_reads_out_of_reach() {
 
     // Ten cells off, past its four: cast transient, it never walks there.
     app.world_mut()
-        .insert_resource(AimHover(Some(SkillTarget::Position(utils::at_cell(
-            30, 20,
-        )))));
+        .insert_resource(AimHover(Some(SkillTarget::Cell(utils::cell(30, 20)))));
     app.world_mut()
         .run_system_once(input::judge_aim)
         .expect("the aim judge runs");
@@ -940,9 +911,7 @@ fn hovered_aim_past_transient_reach_reads_out_of_reach() {
 
     // Three cells off, within it.
     app.world_mut()
-        .insert_resource(AimHover(Some(SkillTarget::Position(utils::at_cell(
-            23, 20,
-        )))));
+        .insert_resource(AimHover(Some(SkillTarget::Cell(utils::cell(23, 20)))));
     app.world_mut()
         .run_system_once(input::judge_aim)
         .expect("the aim judge runs");
@@ -953,13 +922,13 @@ fn hovered_aim_past_transient_reach_reads_out_of_reach() {
 fn armed_skill_stays_armed_while_its_leader_can_cast_it() {
     let mut app = card_app();
     let (archer, archer_id) =
-        utils::create_entity(app.world_mut(), "archer", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "archer", utils::cell(20, 20), Some(0))
             .expect("the demo content defines an archer");
     let (_, other_id) =
-        utils::create_entity(app.world_mut(), "archer", utils::at_cell(24, 20), Some(0))
+        utils::create_entity(app.world_mut(), "archer", utils::cell(24, 20), Some(0))
             .expect("the demo content defines an archer");
     let (_, grunt_id) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(28, 20), Some(0))
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(28, 20), Some(0))
             .expect("the demo content defines a grunt");
     let battle_focus = app
         .world()
@@ -1014,9 +983,8 @@ fn hovered_skill_names_health_it_costs() {
     app.world_mut()
         .resource_mut::<PlayerResearch>()
         .mark_completed(0, frenzy_ritual);
-    let (_, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a grunt");
+    let (_, grunt) = utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a grunt");
     app.world_mut().insert_resource(Leading(Some(grunt)));
     app.world_mut()
         .run_system_once(hud::update_command_card)
@@ -1032,9 +1000,8 @@ fn hovered_skill_names_health_it_costs() {
 fn cooldowns_leave_last_selections_skill_buttons_alone_until_card_rebuilds() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
-    let (_, grunt) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a grunt");
+    let (_, grunt) = utils::create_entity(app.world_mut(), "grunt", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a grunt");
     app.world_mut().insert_resource(Leading(Some(grunt)));
     app.world_mut()
         .run_system_once(hud::update_command_card)
@@ -1043,13 +1010,9 @@ fn cooldowns_leave_last_selections_skill_buttons_alone_until_card_rebuilds() {
 
     // The selection moves to a caster without the grunt's blood rite before
     // the card is rebuilt for it.
-    let (_, necromancer) = utils::create_entity(
-        app.world_mut(),
-        "necromancer",
-        utils::at_cell(24, 20),
-        Some(0),
-    )
-    .expect("the demo content defines a necromancer");
+    let (_, necromancer) =
+        utils::create_entity(app.world_mut(), "necromancer", utils::cell(24, 20), Some(0))
+            .expect("the demo content defines a necromancer");
     app.world_mut().insert_resource(Leading(Some(necromancer)));
     app.world_mut()
         .run_system_once(hud::update_skill_cooldowns)
@@ -1065,7 +1028,7 @@ fn captured_leading_entity_loses_its_skill_buttons() {
     // One system kept across runs, so it rebuilds only on what changed.
     let card = app.world_mut().register_system(hud::update_command_card);
     let (archer, archer_id) =
-        utils::create_entity(app.world_mut(), "archer", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "archer", utils::cell(20, 20), Some(0))
             .expect("the demo content defines an archer");
     app.world_mut().insert_resource(Leading(Some(archer_id)));
     for _ in 0..2 {
@@ -1109,9 +1072,8 @@ fn hovered_build_buttons_name_their_price_and_time() {
     app.world_mut()
         .resource_mut::<PlayerResources>()
         .add(0, "gold", 1000);
-    let (_, drone) =
-        utils::create_entity(app.world_mut(), "drone", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a drone");
+    let (_, drone) = utils::create_entity(app.world_mut(), "drone", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a drone");
     app.world_mut().insert_resource(Leading(Some(drone)));
     app.world_mut()
         .run_system_once(hud::update_command_card)
@@ -1143,13 +1105,9 @@ fn hovered_morph_names_its_price() {
     app.world_mut()
         .resource_mut::<PlayerResources>()
         .add(0, "wood", 100);
-    let (_, tower) = utils::create_entity(
-        app.world_mut(),
-        "watch_tower",
-        utils::at_cell(20, 20),
-        Some(0),
-    )
-    .expect("the demo content defines a watch tower");
+    let (_, tower) =
+        utils::create_entity(app.world_mut(), "watch_tower", utils::cell(20, 20), Some(0))
+            .expect("the demo content defines a watch tower");
     utils::select(&mut app, tower, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     app.world_mut().insert_resource(Leading(Some(tower)));
@@ -1175,9 +1133,8 @@ fn build_button_asks_nothing_of_ground_before_site_is_placed() {
     ));
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().spawn((hud::CardHint, Text::new("")));
-    let (_, tunnel) =
-        utils::create_entity(app.world_mut(), "tunnel", utils::at_cell(0, 0), Some(0))
-            .expect("the demo content defines a tunnel");
+    let (_, tunnel) = utils::create_entity(app.world_mut(), "tunnel", utils::cell(0, 0), Some(0))
+        .expect("the demo content defines a tunnel");
     utils::select(&mut app, tunnel, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     app.world_mut().insert_resource(Leading(Some(tunnel)));
@@ -1197,13 +1154,12 @@ fn tunnel_under_construction_grays_its_build_button() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().spawn((hud::CardHint, Text::new("")));
-    let (_, drone) =
-        utils::create_entity(app.world_mut(), "drone", utils::at_cell(10, 20), Some(0))
-            .expect("the demo content defines a drone");
+    let (_, drone) = utils::create_entity(app.world_mut(), "drone", utils::cell(10, 20), Some(0))
+        .expect("the demo content defines a drone");
     let (_, tunnel) = spawn::spawn_founded(
         app.world_mut(),
         "tunnel",
-        utils::at_cell(20, 20),
+        spawn::At::Cell(utils::cell(20, 20)),
         Some(0),
         FieldReach::Initial,
         drone,
@@ -1230,13 +1186,12 @@ fn bound_tunnel_grays_its_build_button_naming_its_other_end() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().spawn((hud::CardHint, Text::new("")));
-    let (_, tunnel) =
-        utils::create_entity(app.world_mut(), "tunnel", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a tunnel");
+    let (_, tunnel) = utils::create_entity(app.world_mut(), "tunnel", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a tunnel");
     spawn::spawn_founded(
         app.world_mut(),
         "tunnel",
-        utils::at_cell(30, 20),
+        spawn::At::Cell(utils::cell(30, 20)),
         Some(0),
         FieldReach::Initial,
         tunnel,
@@ -1262,9 +1217,8 @@ fn bound_tunnel_grays_its_build_button_naming_its_other_end() {
 fn pressing_grayed_unload_on_empty_burrow_sends_nothing() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
-    let (_, burrow) =
-        utils::create_entity(app.world_mut(), "burrow", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a burrow");
+    let (_, burrow) = utils::create_entity(app.world_mut(), "burrow", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a burrow");
     utils::select(&mut app, burrow, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     app.world_mut().insert_resource(Leading(Some(burrow)));
@@ -1374,13 +1328,9 @@ fn warp_hint_names_leaders_refusal_only_while_no_gate_may_warp() {
 fn pressing_warp_gates_warp_button_arms_warp_placement() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
-    let (_, gate) = utils::create_entity(
-        app.world_mut(),
-        "warp_gate",
-        utils::at_cell(20, 20),
-        Some(0),
-    )
-    .expect("the demo content defines a warp gate");
+    let (_, gate) =
+        utils::create_entity(app.world_mut(), "warp_gate", utils::cell(20, 20), Some(0))
+            .expect("the demo content defines a warp gate");
     utils::select(&mut app, gate, SelectMode::Replace);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     app.world_mut().insert_resource(Leading(Some(gate)));
@@ -1415,7 +1365,7 @@ fn grayed_button_names_ground_and_layers_it_needs() {
     app.world_mut().spawn((hud::CardHint, Text::new("")));
     register_diver(&mut app);
     let (_, diver_id) =
-        utils::create_entity(app.world_mut(), "diver", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "diver", utils::cell(20, 20), Some(0))
             .expect("the fixture registers a diver");
     app.world_mut().insert_resource(Leading(Some(diver_id)));
     app.world_mut()
@@ -1441,7 +1391,7 @@ fn self_cast_its_buff_would_not_hold_on_grays_with_reason() {
     app.world_mut().spawn((hud::CardHint, Text::new("")));
     register_diver(&mut app);
     let (_, dipper_id) =
-        utils::create_entity(app.world_mut(), "dipper", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "dipper", utils::cell(20, 20), Some(0))
             .expect("the fixture registers a dipper");
     app.world_mut().insert_resource(Leading(Some(dipper_id)));
     app.world_mut()
@@ -1463,7 +1413,7 @@ fn grayed_button_names_unmet_part_of_requirement_tree() {
     app.world_mut().spawn((hud::CardHint, Text::new("")));
     register_totem(&mut app);
     let (totem, totem_id) =
-        utils::create_entity(app.world_mut(), "totem", utils::at_cell(20, 20), Some(0))
+        utils::create_entity(app.world_mut(), "totem", utils::cell(20, 20), Some(0))
             .expect("the fixture registers a totem");
     // Hit this tick, and given an order it has not started.
     let tick = app.world().resource::<GameSession>().tick();
@@ -1507,13 +1457,9 @@ fn hovered_researches_name_their_price_and_time() {
     let mut app = card_app();
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().spawn((hud::CardHint, Text::new("")));
-    let (_, blacksmith) = utils::create_entity(
-        app.world_mut(),
-        "blacksmith",
-        utils::at_cell(26, 26),
-        Some(0),
-    )
-    .expect("the demo content defines a blacksmith");
+    let (_, blacksmith) =
+        utils::create_entity(app.world_mut(), "blacksmith", utils::cell(26, 26), Some(0))
+            .expect("the demo content defines a blacksmith");
     app.world_mut().insert_resource(Leading(Some(blacksmith)));
     app.world_mut()
         .run_system_once(hud::update_command_card)
@@ -1826,22 +1772,14 @@ fn open_warp_buttons(app: &mut App) -> usize {
 fn warp_card(app: &mut App) -> (SimulationId, SimulationId) {
     app.world_mut().spawn((hud::CommandCard, Node::default()));
     app.world_mut().init_resource::<input::WarpsSent>();
-    let (cooling, cooling_id) = utils::create_entity(
-        app.world_mut(),
-        "warp_gate",
-        utils::at_cell(20, 20),
-        Some(0),
-    )
-    .expect("the demo content defines a warp gate");
-    let (_, ready_id) = utils::create_entity(
-        app.world_mut(),
-        "warp_gate",
-        utils::at_cell(26, 20),
-        Some(0),
-    )
-    .expect("the demo content defines a warp gate");
+    let (cooling, cooling_id) =
+        utils::create_entity(app.world_mut(), "warp_gate", utils::cell(20, 20), Some(0))
+            .expect("the demo content defines a warp gate");
+    let (_, ready_id) =
+        utils::create_entity(app.world_mut(), "warp_gate", utils::cell(26, 20), Some(0))
+            .expect("the demo content defines a warp gate");
     // A pylon powers both gates, which stand idle unpowered.
-    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(24, 23), Some(0))
+    utils::create_entity(app.world_mut(), "pylon", utils::cell(24, 23), Some(0))
         .expect("the demo content defines a pylon");
     app.world_mut()
         .resource_mut::<PlayerResources>()

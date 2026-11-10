@@ -17,3 +17,15 @@ pub fn uscalar(n: u32) -> FixedU64 {
 pub fn uvec2(x: u32, y: u32) -> FixedUVec2 {
     FixedUVec2::new(uscalar(x), uscalar(y))
 }
+
+/// A fixed-point value parsed from decimal digits.
+pub fn fixed(text: &str) -> FixedU64 {
+    text.parse()
+        .unwrap_or_else(|_| panic!("'{text}' is a value"))
+}
+
+/// A signed fixed-point value parsed from decimal digits.
+pub fn signed_fixed(text: &str) -> FixedI64 {
+    text.parse()
+        .unwrap_or_else(|_| panic!("'{text}' is a signed value"))
+}

@@ -4,7 +4,8 @@ use std::cmp::Ordering;
 
 use bevy_ecs::prelude::*;
 use ferrets_geometry::{
-    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, location::Location,
+    projection::Projection,
 };
 use ferrets_nav_grid::{
     layer_id::LayerId,
@@ -19,11 +20,9 @@ use ferrets_pathfinder::{
     search,
 };
 
-use ferrets_math::FixedU64;
-use ferrets_physics::body;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 
 use crate::{
-    components::location::LocationComponent,
     entity_def,
     map_data::{MapData, MapSlot, Placement},
     movement_model::MovementModel,
@@ -330,6 +329,46 @@ impl Map {
         self.nav_grid.height()
     }
 
+    /// Returns the map's extent in cells.
+    pub fn size(&self) -> CellSize {
+        self.nav_grid.size()
+    }
+
+    /// The place of a body of `size` with its middle at `middle` on this map.
+    ///
+    /// Panics if the body would not lie wholly on the map.
+    pub fn location(&self, middle: FixedUVec2, size: CellSize) -> Location {
+        Location::new(middle, size, self.size())
+    }
+
+    /// The place of a body of `size` anchored at `anchor` on this map.
+    ///
+    /// Panics if its footprint would not lie wholly on the map.
+    pub fn location_at(&self, anchor: CellPos, size: CellSize) -> Location {
+        Location::at(anchor, size, self.size())
+    }
+
+    /// The place nearest that of a body of `size` anchored at `anchor` which
+    /// lies wholly on this map.
+    ///
+    /// Panics if the body is wider or taller than the map.
+    pub fn location_at_clamped(&self, anchor: CellPos, size: CellSize) -> Location {
+        Location::at_clamped(anchor, size, self.size())
+    }
+
+    /// The place nearest `middle` where a body of `size` lies wholly on this
+    /// map.
+    ///
+    /// Panics if the body is wider or taller than the map.
+    pub fn location_clamped(&self, middle: FixedUVec2, size: CellSize) -> Location {
+        Location::clamped(middle, size, self.size())
+    }
+
+    /// Whether a body of `size` fits on this map: no wider and no taller.
+    pub fn fits(&self, size: CellSize) -> bool {
+        size.fits_within(self.size())
+    }
+
     /// Whether `pos` lies on the map.
     #[inline]
     pub fn contains(&self, pos: CellPos) -> bool {
@@ -342,15 +381,14 @@ impl Map {
     }
 
     /// Returns `true` if no standing footprint holds a cell of a footprint of
-    /// `to` at `placed` on its layers but for what `lifted` marks there,
-    /// whatever the ground under it and whoever's claims lie on it.
+    /// `to` anchored at `anchor` on its layers but for what `lifted` marks
+    /// there, whatever the ground under it and whoever's claims lie on it.
     pub fn is_statically_free_over_lifted(
         &self,
-        placed: &LocationComponent,
+        anchor: CellPos,
         to: MoverShape,
         lifted: &[GridMark],
     ) -> bool {
-        let anchor = body::anchor(placed.position);
         CellRect::new(anchor, to.size).cells().all(|cell| {
             let static_lifted = lifted
                 .iter()

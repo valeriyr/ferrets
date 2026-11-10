@@ -270,7 +270,7 @@ fn wisp_banks_where_it_sits_and_elves_store_nothing() {
         WorkPresence::Attached(Attachment::new(
             "canopy",
             BerthStance::Orbit {
-                radius: FixedU64::lit("0.3"),
+                radius: utils::fixed("0.3"),
                 period: 60,
             },
         ))
@@ -283,7 +283,7 @@ fn wisp_banks_where_it_sits_and_elves_store_nothing() {
         WorkPresence::Attached(Attachment::new(
             "rim",
             BerthStance::Roaming {
-                speed: FixedU64::lit("0.05"),
+                speed: utils::fixed("0.05"),
                 dwell: 40,
             },
         ))
@@ -474,7 +474,7 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
         group
             .points()
             .iter()
-            .all(|point| point.y == FixedI64::lit("3.5"))
+            .all(|point| point.y == utils::signed_cells("3.5"))
     );
     let larva = registry.entity("larva").expect("larva is registered");
     assert_eq!(
@@ -522,7 +522,7 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
         })
         .expect("a larva drains off creep");
     // 1.25 a tick over the 20 ticks of a second is the whole pool of 25.
-    assert_eq!(drain, FixedI64::lit("1.25"));
+    assert_eq!(drain, utils::signed_cells("1.25"));
     assert_eq!(max_health, FixedU64::from_num(25));
     let [drone, swarmling, overlord] = larva.morphs.as_slice() else {
         panic!("the larva grows into exactly three things");
@@ -1337,7 +1337,7 @@ fn missile_rack_bursts_in_air_sparing_its_side() {
         registry.turret_def(rack).weapon().splash(),
         Some(&SplashDef::new(
             SplashShape::Circular,
-            vec![(1, FixedU64::lit("0.5"))],
+            vec![(1, utils::fixed("0.5"))],
             air,
             false
         ))
@@ -2474,7 +2474,7 @@ fn cloak_is_buff_kept_up_from_energy_that_nothing_but_decloak_ends() {
     assert_eq!(
         buff.lasting,
         Lasting::Upkeep {
-            costs: vec![Cost::Energy(FixedU64::lit("0.25"))],
+            costs: vec![Cost::Energy(utils::fixed("0.25"))],
             period: 1,
         }
     );
@@ -2572,7 +2572,7 @@ fn huntress_dashes_four_cells_without_stopping_to_cast() {
         EntityCastEffect::Relocate {
             journey: Box::new(Journey::FromCaster {
                 party: CasterParty::Caster,
-                to: FromCasterTo::Aim(Away::Cell {
+                to: FromCasterTo::Aim(Away::Ground {
                     reach: Reach::Within(Quantity::Constant(4)),
                 }),
             }),
@@ -2746,7 +2746,7 @@ fn burrow_is_raised_exactly_where_aimed_anywhere_seen_and_dug_in_anywhere() {
     // Any cell its side sees, however far from the warren.
     assert_eq!(
         *at,
-        SummonAt::Cell {
+        SummonAt::Ground {
             reach: Reach::Wherever
         }
     );
@@ -2916,7 +2916,7 @@ fn swarm_growths_come_out_full_two_way_changes_keep_points_and_upgrades_keep_sha
 
 /// A berth point from decimal strings, in cells from the footprint's anchor.
 fn berth(x: &str, y: &str) -> FixedVec2 {
-    FixedVec2::new(FixedI64::lit(x), FixedI64::lit(y))
+    FixedVec2::new(utils::signed_cells(x), utils::signed_cells(y))
 }
 
 /// The shape the type named `name` plans with.

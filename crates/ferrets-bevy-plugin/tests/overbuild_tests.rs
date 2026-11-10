@@ -30,7 +30,7 @@ fn site_rises_over_mine_and_takes_its_gold() {
     let mut app = utils::orders_app();
     let (_, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
     let (mine, _) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(10, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -59,7 +59,7 @@ fn site_rises_over_mine_and_takes_its_gold() {
 fn site_over_spring_another_body_stands_on_is_not_raised() {
     let mut app = utils::orders_app();
     let (_, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
-    let (spring, _) = utils::create_entity(app.world_mut(), "spring", utils::pos(10, 10), None)
+    let (spring, _) = utils::create_entity(app.world_mut(), "spring", utils::cell(10, 10), None)
         .expect("the spring is registered");
     // The spring claims no cell, so another sylph stands on it.
     utils::create_owned(&mut app, "sylph", 10, 10, 1);
@@ -81,7 +81,7 @@ fn builder_standing_on_spring_steps_off_it_and_raises_site_over_it() {
     // steps off to (10, 9), straight up from its own cell, and raises the
     // site over the spring for 20 of its 30 gold.
     let mut app = utils::orders_app();
-    let (spring, _) = utils::create_entity(app.world_mut(), "spring", utils::pos(10, 10), None)
+    let (spring, _) = utils::create_entity(app.world_mut(), "spring", utils::cell(10, 10), None)
         .expect("the spring is registered");
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 10, 10, 0);
     utils::grant_gold(&mut app, 30);
@@ -90,7 +90,7 @@ fn builder_standing_on_spring_steps_off_it_and_raises_site_over_it() {
     utils::run_ticks(&mut app, utils::APPLY + 10);
 
     assert_eq!(utils::count_of_type(app.world_mut(), "well_house"), 1);
-    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(10, 9));
+    assert_eq!(utils::anchor_of(app.world(), sylph), CellPos::new(10, 9));
     assert_eq!(utils::gold(app.world()), 10);
     utils::assert_despawned(app.world_mut(), spring);
 }
@@ -113,7 +113,7 @@ fn canceled_site_gives_mine_back_with_its_gold() {
     let mut app = utils::orders_app();
     let (_, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
     let (mine, _) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(10, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -140,7 +140,10 @@ fn canceled_site_gives_mine_back_with_its_gold() {
         .find(|(_, source)| source.amount == 40)
         .map(|(entity, _)| entity)
         .expect("the mine keeps its gold");
-    assert_eq!(utils::cell_of(app.world(), uncovered), CellPos::new(10, 10));
+    assert_eq!(
+        utils::anchor_of(app.world(), uncovered),
+        CellPos::new(10, 10)
+    );
 }
 
 #[test]
@@ -148,7 +151,7 @@ fn finished_site_is_mined_directly_and_leaves_nothing_when_drained() {
     let mut app = utils::orders_app();
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
     let (mine, _) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(10, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -174,7 +177,7 @@ fn finished_site_is_mined_directly_and_leaves_nothing_when_drained() {
     // drain the ten and bank them where it sits.
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(entity_def::attached(app.world(), sylph));
-    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), sylph), CellPos::new(10, 10));
     utils::run_ticks(&mut app, 4);
     assert_eq!(utils::gold(app.world()), 20);
 
@@ -193,7 +196,7 @@ fn relocating_finished_house_over_mine_breaks_contract() {
     let mut app = utils::orders_app();
     let (_, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
     let (mine, _) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(10, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -216,7 +219,7 @@ fn drained_site_over_persistent_source_gives_it_back_empty() {
     let mut app = utils::orders_app();
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
     let (geyser, _) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(10, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -228,7 +231,7 @@ fn drained_site_over_persistent_source_gives_it_back_empty() {
         PlayerCommand::BuildEntity {
             builder: sylph_id,
             type_name: "pump_house".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -262,7 +265,7 @@ fn drained_site_over_persistent_source_gives_it_back_empty() {
     };
     assert_eq!(*amount, 0);
     assert_eq!(
-        utils::cell_of(app.world(), *uncovered),
+        utils::anchor_of(app.world(), *uncovered),
         CellPos::new(10, 10)
     );
     assert!(!entity_def::attached(app.world(), sylph));
@@ -278,7 +281,7 @@ fn owned_source_refuses_rival_and_unfinished_site_refuses_its_owner() {
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 8, 10, 0);
     let (rival, _) = utils::create_owned(&mut app, "sylph", 12, 12, 1);
     let (mine, _) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(10, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -329,13 +332,13 @@ fn unfinished_site_is_never_taken_up_as_replacement_source() {
     // The seam the carrier works, and a second one for a shaft house to rise
     // over three cells away — within the twelve cells a carrier searches.
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
         .amount = 3;
     let (mine, _) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(12, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(12, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -383,7 +386,7 @@ fn uncovered_source_comes_back_where_it_was_covered() {
     // A geyser holds its ground when emptied, so it is the one that can be
     // given back after its cover stopped drawing anything.
     let (geyser, _) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(10, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -395,7 +398,7 @@ fn uncovered_source_comes_back_where_it_was_covered() {
         PlayerCommand::BuildEntity {
             builder: sylph_id,
             type_name: "pump_house".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -433,7 +436,7 @@ fn uncovered_source_comes_back_where_it_was_covered() {
     // One tick to take the order up, four for the change itself.
     utils::run_ticks(&mut app, 5);
     assert_eq!(
-        utils::cell_of(app.world(), house),
+        utils::anchor_of(app.world(), house),
         CellPos::new(9, 9),
         "the walker stands a cell out from the ground the house held"
     );
@@ -457,7 +460,7 @@ fn uncovered_source_comes_back_where_it_was_covered() {
     };
     assert_eq!(*amount, 0);
     assert_eq!(
-        utils::cell_of(app.world(), *uncovered),
+        utils::anchor_of(app.world(), *uncovered),
         CellPos::new(10, 10)
     );
 }
@@ -472,7 +475,7 @@ fn order_shaft_house(app: &mut App, builder: SimulationId, x: u32, y: u32) {
         PlayerCommand::BuildEntity {
             builder,
             type_name: "shaft_house".into(),
-            position: utils::pos(x, y),
+            anchor: utils::cell(x, y),
             flush: true,
         },
     );

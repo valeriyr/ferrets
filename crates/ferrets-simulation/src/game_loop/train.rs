@@ -4,7 +4,6 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{landing::Landing, registry::ContentRegistry};
 use ferrets_geometry::cell_rect::CellRect;
-use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::orders::{self, Processing, Refusal};
 use crate::{
@@ -17,7 +16,7 @@ use crate::{
     make_way::{self, Asked},
     order::Order,
     rally,
-    spawn::{self, FieldReach},
+    spawn::{self, At, FieldReach},
 };
 
 /// Whether `entity` may start a Train: its type trains and it has risen.
@@ -131,7 +130,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     }
 
     if train_component.progress >= train_time {
-        let trainer_rect = entity_def::footprint_rect(world, entity);
+        let trainer_rect = entity_def::location(world, entity).footprint();
         let owner = entity_def::owner(world, entity)
             .expect("a train queue is filled by its owner's command");
         let mut landings = Landings::new(owner, Landing::Anywhere, &[], &[], &[]);
@@ -163,7 +162,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
                 spawn::spawn_trained(
                     world,
                     &type_name,
-                    FixedUVec2::from(cell),
+                    At::Cell(cell),
                     owner,
                     FieldReach::Initial,
                     trainer,

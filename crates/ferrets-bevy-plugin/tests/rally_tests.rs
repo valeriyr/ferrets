@@ -30,7 +30,7 @@ fn trained_unit_moves_to_rally_position() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (_, barracks_id) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 30);
 
     utils::push_command(
@@ -51,20 +51,20 @@ fn trained_unit_moves_to_rally_position() {
     utils::run_ticks(&mut app, 30);
     let world = app.world_mut();
     let soldier = utils::single_owned_of_type(world, "soldier", 0);
-    assert_eq!(utils::cell_of(world, soldier), CellPos::new(5, 10));
+    assert_eq!(utils::anchor_of(world, soldier), CellPos::new(5, 10));
 }
 
 #[test]
 fn rally_on_resource_source_makes_trained_worker_harvest() {
     let mut app = rally_app();
     let world = app.world_mut();
-    let (_, hall_id) = utils::create_entity(world, "hall", utils::pos(10, 10), Some(0)).unwrap();
-    let (mine, mine_id) = utils::create_entity(world, "mine", utils::pos(14, 10), None).unwrap();
+    let (_, hall_id) = utils::create_entity(world, "hall", utils::cell(10, 10), Some(0)).unwrap();
+    let (mine, mine_id) = utils::create_entity(world, "mine", utils::cell(14, 10), None).unwrap();
     world
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
         .amount = 100;
-    utils::create_entity(world, "depot", utils::pos(6, 10), Some(0)).unwrap();
+    utils::create_entity(world, "depot", utils::cell(6, 10), Some(0)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 10);
 
     utils::push_command(
@@ -93,9 +93,9 @@ fn rally_on_hostile_target_makes_trained_soldier_attack() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (_, barracks_id) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     let (enemy, enemy_id) =
-        utils::create_entity(world, "soldier", utils::pos(14, 10), Some(1)).unwrap();
+        utils::create_entity(world, "soldier", utils::cell(14, 10), Some(1)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 30);
 
     utils::push_command(
@@ -122,7 +122,7 @@ fn clearing_rally_point_leaves_trained_unit_at_spawn_cell() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (barracks, barracks_id) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 30);
 
     utils::push_command(
@@ -159,9 +159,9 @@ fn rally_target_gone_before_spawn_leaves_trained_unit_without_orders() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (barracks, barracks_id) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     let (enemy, enemy_id) =
-        utils::create_entity(world, "soldier", utils::pos(14, 10), Some(1)).unwrap();
+        utils::create_entity(world, "soldier", utils::cell(14, 10), Some(1)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 30);
 
     utils::push_command(
@@ -201,7 +201,7 @@ fn rally_on_foreign_trainer_is_refused() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (barracks, barracks_id) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(1)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(1)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -211,7 +211,7 @@ fn rally_on_foreign_trainer_is_refused() {
         },
     );
 
-    utils::run_ticks(&mut app, 2);
+    utils::run_ticks(&mut app, utils::APPLY);
     let rally = app
         .world_mut()
         .get::<RallyPointComponent>(barracks)
@@ -224,7 +224,7 @@ fn rally_on_entity_without_rally_capability_is_refused() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (soldier, soldier_id) =
-        utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(world, "soldier", utils::cell(5, 5), Some(0)).unwrap();
 
     utils::push_command(
         &mut app,
@@ -235,7 +235,7 @@ fn rally_on_entity_without_rally_capability_is_refused() {
     );
 
     // A non-producer never carries rally state; the command is ignored.
-    utils::run_ticks(&mut app, 2);
+    utils::run_ticks(&mut app, utils::APPLY);
     assert!(
         app.world_mut()
             .get::<RallyPointComponent>(soldier)
@@ -248,9 +248,9 @@ fn rally_on_vanished_target_is_refused() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (barracks, barracks_id) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     let (enemy, enemy_id) =
-        utils::create_entity(world, "soldier", utils::pos(14, 10), Some(1)).unwrap();
+        utils::create_entity(world, "soldier", utils::cell(14, 10), Some(1)).unwrap();
 
     spawn::destroy_entity(app.world_mut(), enemy);
     utils::run_ticks(&mut app, 4);
@@ -263,7 +263,31 @@ fn rally_on_vanished_target_is_refused() {
         },
     );
 
-    utils::run_ticks(&mut app, 2);
+    utils::run_ticks(&mut app, utils::APPLY);
+    let rally = app
+        .world_mut()
+        .get::<RallyPointComponent>(barracks)
+        .unwrap();
+    assert_eq!(rally.0, None);
+}
+
+#[test]
+fn rally_off_map_is_refused() {
+    // The map is 32 cells wide: x 32 lies past its last column.
+    let mut app = utils::orders_app();
+    let world = app.world_mut();
+    let (barracks, barracks_id) =
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetRallyPoint {
+            entity: barracks_id,
+            target: Some(RallyTarget::Position(utils::point("32", "10"))),
+        },
+    );
+
+    utils::run_ticks(&mut app, utils::APPLY);
     let rally = app
         .world_mut()
         .get::<RallyPointComponent>(barracks)

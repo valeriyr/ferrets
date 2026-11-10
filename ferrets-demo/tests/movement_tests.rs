@@ -6,13 +6,14 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_simulation::{
     components::{
         location::LocationComponent, order_queue::OrderQueueComponent,
         resource::ResourceSourceComponent,
     },
+    entity_def,
     movement_model::MovementModel,
     order::Order,
 };
@@ -26,13 +27,9 @@ fn continuous_group_move_settles_without_milling() {
     // bodies arrive together and contest the exact destination.
     let mut units: Vec<Entity> = Vec::new();
     for (x, y) in [(10, 6), (10, 7)] {
-        let (entity, _) = utils::create_entity(
-            app.world_mut(),
-            "peasant",
-            FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y)),
-            Some(0),
-        )
-        .expect("extra peasant spawns");
+        let (entity, _) =
+            utils::create_entity(app.world_mut(), "peasant", utils::cell(x, y), Some(0))
+                .expect("extra peasant spawns");
         units.push(entity);
     }
     {
@@ -40,14 +37,14 @@ fn continuous_group_move_settles_without_milling() {
         let mission_pair: Vec<Entity> = world
             .query::<(Entity, &LocationComponent)>()
             .iter(world)
-            .filter(|(_, location)| location.position.x == FixedU64::from_num(9))
+            .filter(|(_, location)| location.position.x == utils::cells("9.5"))
             .map(|(entity, _)| entity)
             .collect();
         units.extend(mission_pair);
     }
     assert_eq!(units.len(), 4, "four peasants march");
 
-    let target = FixedUVec2::new(FixedU64::from_num(20), FixedU64::from_num(20));
+    let target = utils::pos(20, 20);
     for &unit in &units {
         app.world_mut()
             .entity_mut(unit)
@@ -100,24 +97,12 @@ fn continuous_group_move_settles_without_milling() {
     assert_eq!(
         resting,
         vec![
-            utils::position_bits(0x13_fdbc_670e, 0x13_e110_733d),
-            utils::position_bits(0x14_0fe9_1264, 0x14_e07c_6fda),
-            utils::position_bits(0x14_e7d6_a434, 0x13_528b_9488),
-            utils::position_bits(0x15_0870_d286, 0x14_8e2f_d75b),
+            utils::position_bits(0x14_7dbc_670e, 0x14_6110_733d),
+            utils::position_bits(0x14_8fe9_1264, 0x15_607c_6fda),
+            utils::position_bits(0x15_67d6_a434, 0x13_d28b_9488),
+            utils::position_bits(0x15_8870_d286, 0x15_0e2f_d75b),
         ]
     );
-
-    // Rest also means separated circle bodies: no pair closer than a
-    // body diameter.
-    for (index, a) in settled.iter().enumerate() {
-        for b in settled.iter().skip(index + 1) {
-            let separation = a.distance(*b);
-            assert!(
-                separation >= FixedU64::from_num(0.99),
-                "settled bodies must not overlap: separation {separation}"
-            );
-        }
-    }
 }
 
 #[test]
@@ -132,13 +117,8 @@ fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
     let mut ring = Vec::new();
     for y in 20..23 {
         for x in 20..23 {
-            let (tree, id) = utils::create_entity(
-                app.world_mut(),
-                "tree",
-                FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y)),
-                None,
-            )
-            .expect("tree spawns");
+            let (tree, id) = utils::create_entity(app.world_mut(), "tree", utils::cell(x, y), None)
+                .expect("tree spawns");
             // A spawned source starts empty; stock it so the harvest
             // settles on the ordered tree instead of falling back to the
             // mission's grove.
@@ -155,13 +135,9 @@ fn harvest_of_unreachable_tree_switches_to_reachable_neighbor() {
         }
     }
     let center = center.unwrap();
-    let (worker, _) = utils::create_entity(
-        app.world_mut(),
-        "peasant",
-        FixedUVec2::new(FixedU64::from_num(15), FixedU64::from_num(21)),
-        Some(0),
-    )
-    .expect("worker spawns");
+    let (worker, _) =
+        utils::create_entity(app.world_mut(), "peasant", utils::cell(15, 21), Some(0))
+            .expect("worker spawns");
 
     app.world_mut()
         .entity_mut(worker)
@@ -225,13 +201,9 @@ fn walk_rounds_water_corner_without_creeping_at_it() {
     // without ever creeping, whatever the gap's width or the body's speed. It
     // moves to the plugin once the demo's content is shared with it.
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (walker, _) = utils::create_entity(
-        app.world_mut(),
-        "peasant",
-        FixedUVec2::new(FixedU64::from_num(48), FixedU64::from_num(19)),
-        Some(0),
-    )
-    .expect("peasant spawns");
+    let (walker, _) =
+        utils::create_entity(app.world_mut(), "peasant", utils::cell(48, 19), Some(0))
+            .expect("peasant spawns");
 
     app.world_mut()
         .entity_mut(walker)
@@ -239,7 +211,7 @@ fn walk_rounds_water_corner_without_creeping_at_it() {
         .unwrap()
         .push(
             Order::Move {
-                target: FixedUVec2::new(FixedU64::from_num(50), FixedU64::from_num(13)),
+                target: utils::pos(50, 13),
                 size: CellSize::ONE,
                 range: 0,
             },
@@ -247,14 +219,16 @@ fn walk_rounds_water_corner_without_creeping_at_it() {
         );
 
     // Six cells north and two east at a peasant's pace: 18 ticks with the
-    // corner rounded, 19 while creeping at it.
+    // corner rounded for its body's low edge to cross into (50, 13), 19 while
+    // creeping at it.
     utils::run_ticks(&mut app, 18);
 
-    let arrived = utils::position_of(app.world_mut(), walker);
+    let world = app.world();
+    let arrived = entity_def::location(world, walker).bounds().min();
     assert_eq!(
-        utils::cell_of(arrived),
-        (50, 13),
-        "the walk was still at {arrived:?}, creeping at the corner"
+        CellPos::from(arrived),
+        CellPos::new(50, 13),
+        "the walk's low edge was still at {arrived:?}, creeping at the corner"
     );
 }
 

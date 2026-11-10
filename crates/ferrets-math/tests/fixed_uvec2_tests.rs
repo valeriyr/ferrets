@@ -80,9 +80,9 @@ fn length_of_pythagorean_triple_is_exact() {
 /// (1.5, 2) is the 3-4-5 triangle halved.
 #[test]
 fn length_of_fractional_triple_is_exact() {
-    let v = FixedUVec2::new(FixedU64::from_num(1.5), FixedU64::from_num(2));
+    let v = FixedUVec2::new(utils::fixed("1.5"), FixedU64::from_num(2));
 
-    assert_eq!(v.length(), FixedU64::from_num(2.5));
+    assert_eq!(v.length(), utils::fixed("2.5"));
 }
 
 #[test]
@@ -92,9 +92,9 @@ fn length_of_zero_vector_is_zero() {
 
 #[test]
 fn length_along_single_axis_keeps_component() {
-    let v = FixedUVec2::new(FixedU64::from_num(7.25), FixedU64::ZERO);
+    let v = FixedUVec2::new(utils::fixed("7.25"), FixedU64::ZERO);
 
-    assert_eq!(v.length(), FixedU64::from_num(7.25));
+    assert_eq!(v.length(), utils::fixed("7.25"));
 }
 
 /// An irrational length rounds down as tightly as the precision allows:

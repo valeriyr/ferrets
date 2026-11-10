@@ -15,4 +15,11 @@ impl CellSize {
     pub const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
     }
+
+    /// Whether a footprint of this size fits within `area`: no wider and no
+    /// taller.
+    #[inline]
+    pub const fn fits_within(self, area: CellSize) -> bool {
+        self.width <= area.width && self.height <= area.height
+    }
 }

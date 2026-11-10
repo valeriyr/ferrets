@@ -1,5 +1,6 @@
 //! The tagged wire envelope: round-trips and canonical byte layout.
 
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_network::{
     message::{
@@ -180,7 +181,7 @@ fn every_command_frames() -> Message {
                 flush: false,
             },
             PlayerCommand::Attack {
-                target: AttackTarget::Position(pos(7, 3)),
+                target: AttackTarget::Cell(CellPos::new(7, 3)),
                 flush: true,
             },
             PlayerCommand::SendToEntity {
@@ -221,7 +222,7 @@ fn every_command_frames() -> Message {
             PlayerCommand::BuildEntity {
                 builder: SimulationId(4),
                 type_name: "town_hall".into(),
-                position: pos(8, 8),
+                anchor: CellPos::new(8, 8),
                 flush: true,
             },
             PlayerCommand::Stop,

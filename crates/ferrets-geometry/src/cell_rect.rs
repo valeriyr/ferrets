@@ -1,5 +1,7 @@
 //! Grid-aligned rectangle of cells.
 
+use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
+
 use crate::{cell_pos::CellPos, cell_size::CellSize};
 
 /// A rectangle of whole cells: an origin and the size spanned from it — a
@@ -22,6 +24,35 @@ impl CellRect {
     #[inline]
     pub const fn cell(origin: CellPos) -> Self {
         Self::new(origin, CellSize::ONE)
+    }
+
+    /// The cells `bounds` lies over: every cell it shares area with, an edge
+    /// on a cell boundary entering no cell beyond it. A side of no length
+    /// lies over the one cell its coordinate falls in.
+    #[inline]
+    pub fn covering(bounds: FixedURect) -> Self {
+        let span = |low: FixedU64, high: FixedU64| {
+            let first = low.floor().to_num::<u32>();
+            let last = high.ceil().to_num::<u32>().saturating_sub(1).max(first);
+            (first, last - first + 1)
+        };
+        let (x, width) = span(bounds.min().x, bounds.max().x);
+        let (y, height) = span(bounds.min().y, bounds.max().y);
+        Self::new(CellPos::new(x, y), CellSize::new(width, height))
+    }
+
+    /// The exact rectangle the cells span, from the first cell's corner to
+    /// the far corner of the last.
+    #[inline]
+    pub fn bounds(self) -> FixedURect {
+        let corner = FixedUVec2::from(self.origin);
+        FixedURect::new(
+            corner,
+            FixedUVec2::new(
+                corner.x + FixedU64::from_num(self.size.width),
+                corner.y + FixedU64::from_num(self.size.height),
+            ),
+        )
     }
 
     /// Returns `true` if the rectangle covers `pos`.

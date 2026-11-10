@@ -58,7 +58,7 @@ fn relay_warps_blade_in_rising_at_picked_cell() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     let blade = utils::single_owned_of_type(app.world_mut(), "blade", 0);
-    assert_eq!(utils::cell_of(app.world(), blade), CellPos::new(12, 10));
+    assert_eq!(utils::anchor_of(app.world(), blade), CellPos::new(12, 10));
     assert!(entity_def::rising(app.world(), blade));
     // 100 gold granted, 50 paid.
     assert_eq!(utils::gold(app.world()), 50);
@@ -236,7 +236,7 @@ fn calling_off_older_warp_leaves_later_warps_cooldown() {
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(!utils::alive(&app, first_id));
     assert_eq!(
-        warp::judge(app.world(), 0, relay, "lancer", utils::pos(14, 10)).map(|_| ()),
+        warp::judge(app.world(), 0, relay, "lancer", utils::cell(14, 10)).map(|_| ()),
         Err(WarpRefusal::CoolingDown)
     );
 }
@@ -328,7 +328,7 @@ fn relay_warps_drill_in_over_vein_covering_it_and_refuses_open_ground() {
     let mut app = app();
     utils::create_owned(&mut app, "beacon", 10, 10, 0);
     let (relay, relay_id) = utils::create_owned(&mut app, "relay", 5, 10, 0);
-    let (vein, vein_id) = utils::create_entity(app.world_mut(), "vein", utils::pos(12, 10), None)
+    let (vein, vein_id) = utils::create_entity(app.world_mut(), "vein", utils::cell(12, 10), None)
         .expect("the vein is registered");
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(vein)
@@ -345,7 +345,7 @@ fn relay_warps_drill_in_over_vein_covering_it_and_refuses_open_ground() {
     utils::run_ticks(&mut app, utils::APPLY);
     let drill = utils::single_owned_of_type(app.world_mut(), "drill", 0);
     assert!(entity_def::rising(app.world(), drill));
-    assert_eq!(utils::cell_of(app.world(), drill), CellPos::new(12, 10));
+    assert_eq!(utils::anchor_of(app.world(), drill), CellPos::new(12, 10));
     // The vein is covered, not merely gone: it dies as overbuilt and the drill
     // holds the 40 it had left.
     let announced = &app.world().resource::<utils::Announced>().0;
@@ -368,7 +368,7 @@ fn relay_refuses_well_over_spring_walker_stands_on_until_walker_dies() {
     let mut app = app();
     utils::create_owned(&mut app, "beacon", 10, 10, 0);
     let (relay, relay_id) = utils::create_owned(&mut app, "relay", 5, 10, 0);
-    utils::create_entity(app.world_mut(), "spring", utils::pos(12, 10), None)
+    utils::create_entity(app.world_mut(), "spring", utils::cell(12, 10), None)
         .expect("the spring is registered");
     // The spring claims no cell, so a walker stands on it.
     let (lookout, lookout_id) = utils::create_owned(&mut app, "lookout", 12, 10, 1);
@@ -621,7 +621,7 @@ fn warped_blade_with_no_rally_stays_where_set_down() {
     let blade = utils::single_owned_of_type(app.world_mut(), "blade", 0);
     assert!(!entity_def::rising(app.world(), blade));
     assert!(entity_def::orders(app.world(), blade).is_empty());
-    assert_eq!(utils::cell_of(app.world(), blade), CellPos::new(12, 10));
+    assert_eq!(utils::anchor_of(app.world(), blade), CellPos::new(12, 10));
 }
 
 #[test]
@@ -682,7 +682,7 @@ fn warped_blade_whose_relay_died_stays_where_set_down() {
 
     assert!(!entity_def::rising(app.world(), blade));
     assert!(entity_def::orders(app.world(), blade).is_empty());
-    assert_eq!(utils::cell_of(app.world(), blade), CellPos::new(12, 10));
+    assert_eq!(utils::anchor_of(app.world(), blade), CellPos::new(12, 10));
 }
 
 //
@@ -909,7 +909,7 @@ fn judged_type(
     x: u32,
     y: u32,
 ) -> Result<(), WarpRefusal> {
-    warp::judge(app.world(), 0, warper, type_name, utils::pos(x, y)).map(|_| ())
+    warp::judge(app.world(), 0, warper, type_name, utils::cell(x, y)).map(|_| ())
 }
 
 /// The tick `warper`'s cooldown runs out at.

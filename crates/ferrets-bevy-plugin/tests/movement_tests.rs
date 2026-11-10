@@ -9,14 +9,14 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
+use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
 use ferrets_physics::terrain;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{movement::MoveComponent, order_queue::OrderQueueComponent},
     entity_def,
     map::Map,
-    movement_model::{self, MovementModel},
+    movement_model::MovementModel,
     order::Order,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     spawn,
@@ -58,11 +58,7 @@ fn body_pressed_into_water_corner_rounds_it_on_land() {
         .collect();
     let mut app = utils::dry_orders_app(MovementModel::Continuous, &water, |_, _| {});
     let (landlubber, _) = utils::create_owned(&mut app, "landlubber", 12, 5, 0);
-    movement_model::move_body(
-        app.world_mut(),
-        landlubber,
-        utils::part_way("10.68", "5.08"),
-    );
+    utils::move_body(&mut app, landlubber, utils::point("11.18", "5.58"));
     walk_to_spot(&mut app, landlubber, utils::pos(4, 5));
     let shape = {
         let world = app.world();
@@ -111,7 +107,7 @@ fn body_rounding_footprint_corner_looks_where_it_steps() {
 
     // A quarter of a tick's walk is the floor a step has to clear to be a
     // heading, so the runner's own speed sets it.
-    let crumb = utils::effective_speed(&app, runner) * FixedU64::from_num(0.25);
+    let crumb = utils::effective_speed(&app, runner) * utils::fixed("0.25");
     let mut before = utils::position_of(app.world_mut(), runner);
     let mut looked = utils::facing_of(app.world(), runner);
     let mut crumbs = 0;
@@ -178,7 +174,7 @@ fn body_walled_across_its_way_walks_open_axis() {
     };
     assert_eq!(
         walled,
-        FixedUVec2::new(walled.x, FixedU64::from_num(5)),
+        FixedUVec2::new(walled.x, utils::fixed("5.5")),
         "the blocked tick closed the whole gap to the waypoint's own row"
     );
 
@@ -217,7 +213,7 @@ fn point_order_blocked_at_final_approach_accepts_by_cell() {
         .unwrap()
         .push(
             Order::Move {
-                target: FixedUVec2::new(FixedU64::from_num(7.3), FixedU64::from_num(7)),
+                target: utils::point("7.8", "7.5"),
                 size: CellSize::ONE,
                 range: 0,
             },
@@ -236,7 +232,10 @@ fn point_order_blocked_at_final_approach_accepts_by_cell() {
             .is_some_and(|queue| queue.0.is_empty()),
         "the walk must finish instead of grinding at the wall"
     );
-    assert_eq!(utils::cell_of(app.world_mut(), runner), CellPos::new(7, 7));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), runner),
+        CellPos::new(7, 7)
+    );
 }
 
 #[test]
@@ -249,7 +248,7 @@ fn body_clipped_into_footprint_walks_itself_free() {
     // the static footprint — staged directly, since placement reads claims at
     // the rounded anchor and cannot see circle edges. Deep enough that no
     // single step clears it, so draining is the only way out.
-    movement_model::move_body(app.world_mut(), runner, utils::part_way("7.45", "7"));
+    utils::move_body(&mut app, runner, utils::point("7.95", "7.5"));
 
     app.world_mut()
         .entity_mut(runner)
@@ -257,7 +256,7 @@ fn body_clipped_into_footprint_walks_itself_free() {
         .unwrap()
         .push(
             Order::Move {
-                target: FixedUVec2::new(FixedU64::from_num(4), FixedU64::from_num(7)),
+                target: utils::pos(4, 7),
                 size: CellSize::ONE,
                 range: 0,
             },
@@ -273,7 +272,10 @@ fn body_clipped_into_footprint_walks_itself_free() {
             .is_some_and(|queue| queue.0.is_empty()),
         "the clipped body must walk itself free and finish"
     );
-    assert_eq!(utils::cell_of(app.world_mut(), runner), CellPos::new(4, 7));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), runner),
+        CellPos::new(4, 7)
+    );
 }
 
 //
@@ -305,7 +307,7 @@ fn wide_blocker_steps_aside_where_its_footprint_fits() {
         .unwrap()
         .push(
             Order::Move {
-                target: FixedUVec2::new(FixedU64::from_num(12), FixedU64::from_num(5)),
+                target: utils::pos(12, 5),
                 size: CellSize::ONE,
                 range: 0,
             },
@@ -315,12 +317,12 @@ fn wide_blocker_steps_aside_where_its_footprint_fits() {
     utils::run_ticks(&mut app, 200);
 
     assert_eq!(
-        utils::cell_of(app.world_mut(), wagon),
+        utils::anchor_of(app.world_mut(), wagon),
         CellPos::new(8, 6),
         "the wagon stepped aside with its whole footprint"
     );
     assert_eq!(
-        utils::cell_of(app.world_mut(), soldier),
+        utils::anchor_of(app.world_mut(), soldier),
         CellPos::new(12, 5),
         "the walk passed through the vacated lane"
     );
@@ -353,7 +355,7 @@ fn cell_walk_follows_corridor_past_its_first_leg() {
     // at the soldier's pace, with room to spare for the leg changes.
     utils::run_ticks(&mut app, utils::APPLY + 900);
 
-    let arrived = utils::cell_of(app.world_mut(), soldier);
+    let arrived = utils::anchor_of(app.world_mut(), soldier);
     assert_eq!(
         arrived,
         CellPos::new(90, 90),
@@ -384,12 +386,12 @@ fn stop_ends_cell_walk_after_its_current_step() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY + 8);
-    let before = utils::cell_of(app.world_mut(), soldier);
+    let before = utils::anchor_of(app.world_mut(), soldier);
 
     utils::push_command(&mut app, PlayerCommand::Stop);
     utils::run_ticks(&mut app, utils::APPLY + 60);
 
-    let after = utils::cell_of(app.world_mut(), soldier);
+    let after = utils::anchor_of(app.world_mut(), soldier);
     assert!(
         after.x - before.x <= 2,
         "told to stop at {before:?}, the walk carried on to {after:?}"
@@ -612,7 +614,7 @@ fn game_whose_map_serves_no_mover_does_not_start() {
 fn runner_clipping_keep_corner(app: &mut App) -> Entity {
     utils::create_owned(app, "keep", 8, 6, 0);
     let (runner, _) = utils::create_owned(app, "runner", 12, 5, 0);
-    movement_model::move_body(app.world_mut(), runner, utils::part_way("10.68", "5.08"));
+    utils::move_body(app, runner, utils::point("11.18", "5.58"));
     runner
 }
 

@@ -170,7 +170,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     // aboard, and its own business stopped, only once it stands on a cell it
     // holds — nothing of it is touched while the boarding can still wait.
     if let MovementModel::Cell = world.resource::<Map>().movement_model()
-        && movement_model::is_mid_crossing(entity_def::position(world, target))
+        && movement_model::is_mid_crossing(world, target)
     {
         world.entity_mut(entity).insert(load);
         return Processing::state(OrderState::InProcessing);

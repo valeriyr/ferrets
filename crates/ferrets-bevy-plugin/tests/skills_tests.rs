@@ -45,7 +45,7 @@ mod utils;
 fn using_skill_applies_effect_and_spends_energy() {
     let mut app = app();
     let (mage, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let base = utils::effective_damage(&app, mage);
 
     utils::cast_self(&mut app, mage_id, "battle_focus");
@@ -73,7 +73,7 @@ fn using_skill_applies_effect_and_spends_energy() {
 fn skill_with_resource_cost_pays_stockpile() {
     let mut app = app();
     let (mage, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     utils::grant_gold(&mut app, 30);
     let base = utils::effective_damage(&app, mage);
     utils::cast_self(&mut app, mage_id, "rally");
@@ -95,7 +95,7 @@ fn skill_with_resource_cost_pays_stockpile() {
 fn skill_with_unaffordable_resource_cost_is_refused() {
     let mut app = app();
     let (mage, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     utils::grant_gold(&mut app, 10);
     let base = utils::effective_damage(&app, mage);
     utils::cast_self(&mut app, mage_id, "rally");
@@ -117,7 +117,7 @@ fn skill_with_unaffordable_resource_cost_is_refused() {
 fn skill_with_health_cost_pays_health() {
     let mut app = app();
     let (mage, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let base = utils::effective_damage(&app, mage);
     utils::cast_self(&mut app, mage_id, "sacrifice");
     utils::run_ticks(&mut app, 5);
@@ -138,7 +138,7 @@ fn skill_with_health_cost_pays_health() {
 fn skill_with_lethal_health_cost_is_refused() {
     let mut app = app();
     let (mage, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
 
     // The cost equals the mage's full health: surviving on zero is not
     // surviving, so the cast is refused.
@@ -166,7 +166,7 @@ fn skill_with_lethal_health_cost_is_refused() {
 fn skill_requirement_gates_cast() {
     let mut app = app();
     let (mage, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let base = utils::effective_damage(&app, mage);
 
     // Before the research, the cast is refused outright.
@@ -205,9 +205,9 @@ fn skill_requirement_gates_cast() {
 fn buff_cast_on_target_lacking_its_stat_is_refused_and_costs_nothing() {
     let mut app = app();
     let (mage, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (totem, totem_id) =
-        utils::create_entity(app.world_mut(), "totem", utils::pos(7, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "totem", utils::cell(7, 5), Some(0)).unwrap();
 
     // The totem has no damage for frenzy to move: no buff lands, the 10
     // energy stays in the mage's full 100, and the skill is still ready.
@@ -229,7 +229,7 @@ fn buff_cast_on_target_lacking_its_stat_is_refused_and_costs_nothing() {
 fn buff_cast_on_rising_entity_carrying_its_stat_lands() {
     let mut app = app();
     let (_, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (rising, rising_id) = utils::create_crewed_rising(&mut app, "mage", 7, 5, 0);
 
     utils::cast_on(&mut app, mage_id, "empower", rising_id);
@@ -241,9 +241,9 @@ fn buff_cast_on_rising_entity_carrying_its_stat_lands() {
 fn buff_cast_on_target_carrying_its_stat_lands() {
     let mut app = app();
     let (_, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (other, other_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(7, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(7, 5), Some(0)).unwrap();
 
     utils::cast_on(&mut app, mage_id, "empower", other_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
@@ -254,9 +254,9 @@ fn buff_cast_on_target_carrying_its_stat_lands() {
 fn applying_buff_to_entity_lacking_its_stat_is_uncarried() {
     let mut app = app();
     let (totem, _) =
-        utils::create_entity(app.world_mut(), "totem", utils::pos(7, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "totem", utils::cell(7, 5), Some(0)).unwrap();
     let (mage, _) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let frenzy = frenzy(&app);
 
     assert_eq!(
@@ -278,9 +278,9 @@ fn applying_buff_to_entity_lacking_its_stat_is_uncarried() {
 fn heal_restores_up_to_maximum() {
     let mut app = app();
     let (_, mage_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (totem, totem_id) =
-        utils::create_entity(app.world_mut(), "totem", utils::pos(7, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "totem", utils::cell(7, 5), Some(0)).unwrap();
     utils::wound(&mut app, totem, "5");
 
     // 45 + 10 = 55, held at the totem's 50.
@@ -297,7 +297,7 @@ fn heal_restores_up_to_maximum() {
 fn aim_without_target_is_unaimed() {
     let mut app = app();
     let (mage, _) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
 
     assert_eq!(aim(&app, mage, "empower", None), Err(AimRefusal::Unaimed));
 }
@@ -306,7 +306,7 @@ fn aim_without_target_is_unaimed() {
 fn aim_at_cell_off_map_is_off_map() {
     let mut app = app();
     let (mage, _) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
 
     // The map is 32 cells a side: cell (40, 5) lies past its edge, (7, 5) on it.
     assert_eq!(
@@ -314,7 +314,7 @@ fn aim_at_cell_off_map_is_off_map() {
             &app,
             mage,
             "sweep",
-            Some(SkillTarget::Position(utils::pos(40, 5)))
+            Some(SkillTarget::Cell(utils::cell(40, 5)))
         ),
         Err(AimRefusal::OffMap)
     );
@@ -323,7 +323,7 @@ fn aim_at_cell_off_map_is_off_map() {
             &app,
             mage,
             "sweep",
-            Some(SkillTarget::Position(utils::pos(7, 5)))
+            Some(SkillTarget::Cell(utils::cell(7, 5)))
         ),
         Ok(CastAim::Cell(CellPos::new(7, 5)))
     );
@@ -333,9 +333,9 @@ fn aim_at_cell_off_map_is_off_map() {
 fn aim_at_target_out_of_sight_is_unseen() {
     let mut app = app();
     let (mage, _) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (_, stray_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(25, 25), None).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(25, 25), None).unwrap();
     utils::run_ticks(&mut app, 1);
 
     // 20 cells off, past the mage's sight of 4.
@@ -349,9 +349,9 @@ fn aim_at_target_out_of_sight_is_unseen() {
 fn aim_at_ownerless_target_of_own_only_skill_is_wrong_side() {
     let mut app = app();
     let (mage, _) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (_, stray_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(7, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(7, 5), None).unwrap();
     // One tick for the fog to make the stray out: none stands seen before it.
     utils::run_ticks(&mut app, 1);
 
@@ -365,9 +365,9 @@ fn aim_at_ownerless_target_of_own_only_skill_is_wrong_side() {
 fn aim_at_type_skill_does_not_name_is_wrong_kind() {
     let mut app = app();
     let (mage, _) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (_, totem_id) =
-        utils::create_entity(app.world_mut(), "totem", utils::pos(7, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "totem", utils::cell(7, 5), Some(0)).unwrap();
 
     assert_eq!(
         aim(&app, mage, "bless", Some(SkillTarget::Entity(totem_id))),
@@ -379,9 +379,9 @@ fn aim_at_type_skill_does_not_name_is_wrong_kind() {
 fn aim_at_target_lacking_buff_stat_is_uncarried() {
     let mut app = app();
     let (mage, _) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (_, totem_id) =
-        utils::create_entity(app.world_mut(), "totem", utils::pos(7, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "totem", utils::cell(7, 5), Some(0)).unwrap();
 
     assert_eq!(
         aim(&app, mage, "empower", Some(SkillTarget::Entity(totem_id))),
@@ -393,11 +393,11 @@ fn aim_at_target_lacking_buff_stat_is_uncarried() {
 fn aim_heal_at_target_without_health_is_uncarried() {
     let mut app = app();
     let (mage, _) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (_, banner_id) =
-        utils::create_entity(app.world_mut(), "banner", utils::pos(7, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "banner", utils::cell(7, 5), Some(0)).unwrap();
     let (totem, totem_id) =
-        utils::create_entity(app.world_mut(), "totem", utils::pos(5, 7), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "totem", utils::cell(5, 7), Some(0)).unwrap();
 
     assert_eq!(
         aim(&app, mage, "mend", Some(SkillTarget::Entity(banner_id))),
@@ -413,9 +413,9 @@ fn aim_heal_at_target_without_health_is_uncarried() {
 fn aim_at_own_named_carrier_is_entity() {
     let mut app = app();
     let (mage, _) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
     let (other, other_id) =
-        utils::create_entity(app.world_mut(), "mage", utils::pos(7, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "mage", utils::cell(7, 5), Some(0)).unwrap();
 
     assert_eq!(
         aim(&app, mage, "bless", Some(SkillTarget::Entity(other_id))),
@@ -553,7 +553,7 @@ fn app() -> App {
                     costs: Vec::new(),
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Watch {
-                        at: Spot::Cell {
+                        at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
                         radius: Quantity::Constant(2),

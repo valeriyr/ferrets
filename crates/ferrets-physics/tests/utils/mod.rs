@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use ferrets_geometry::cell_size::CellSize;
+use ferrets_geometry::{cell_size::CellSize, location::Location};
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_nav_grid::{
     layer_id::LayerId, layer_mask::LayerMask, mover_shape::MoverShape, terrain_id::TerrainId,
@@ -12,6 +12,8 @@ use ferrets_physics::body::Body;
 pub const GROUND: LayerId = LayerId::new(1);
 /// A layer disjoint from [`GROUND`], for bodies that pass each other.
 pub const AIR: LayerId = LayerId::new(2);
+/// The map every test body stands on unless a test says otherwise.
+pub const MAP_SIZE: CellSize = CellSize::new(64, 64);
 /// The terrain every test grid is made of.
 pub const LAND: TerrainId = TerrainId::new(1);
 /// A second terrain, for cells a land body may not overlap.
@@ -33,20 +35,26 @@ pub fn signed_cells(text: &str) -> FixedI64 {
     FixedI64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is an offset in cells"))
 }
 
-pub fn position(x: &str, y: &str) -> FixedUVec2 {
+/// A point on the map, written as decimals.
+pub fn point(x: &str, y: &str) -> FixedUVec2 {
     FixedUVec2::new(cells(x), cells(y))
+}
+
+/// The place of a body of `size` with its middle at `(x, y)` on [`MAP_SIZE`].
+pub fn location(x: &str, y: &str, size: CellSize) -> Location {
+    Location::new(point(x, y), size, MAP_SIZE)
 }
 
 pub fn heading(x: &str, y: &str) -> FixedVec2 {
     FixedVec2::new(signed_cells(x), signed_cells(y))
 }
 
-/// A half-cell-radius body at rest, filling a single cell, of the baseline
-/// weight every test body carries unless it says otherwise.
+/// A half-cell-radius body at rest with its middle at `(x, y)`, filling a
+/// single cell, of the baseline weight every test body carries unless it says
+/// otherwise.
 pub fn resting(x: &str, y: &str) -> Body {
     Body {
-        position: position(x, y),
-        size: CellSize::ONE,
+        location: location(x, y, CellSize::ONE),
         radius: cells("0.5"),
         weight: FixedU64::ONE,
         layers: LayerMask::from(GROUND),
@@ -65,7 +73,7 @@ pub fn weighing(body: Body, weight: &str) -> Body {
 /// A body filling a `size`-by-`size` footprint, its circle inscribed in it.
 pub fn wide(x: &str, y: &str, size: u32) -> Body {
     Body {
-        size: CellSize::new(size, size),
+        location: location(x, y, CellSize::new(size, size)),
         radius: FixedU64::from_num(size) / 2,
         ..resting(x, y)
     }

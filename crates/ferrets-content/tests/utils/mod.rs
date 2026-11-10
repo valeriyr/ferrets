@@ -13,7 +13,7 @@ use ferrets_content::{
     terrains::Terrains,
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedI64, FixedU64};
 use ferrets_nav_grid::{layer_id::LayerId, layer_mask::LayerMask};
 
 /// The navigation layers these tests register, in the order a registry mints
@@ -87,6 +87,12 @@ pub fn weapon(targets: impl Into<LayerMask>) -> AttackDef {
 pub fn fixed(text: &str) -> FixedU64 {
     text.parse()
         .unwrap_or_else(|_| panic!("'{text}' is a value"))
+}
+
+/// A signed fixed-point value parsed from decimal digits.
+pub fn signed_fixed(text: &str) -> FixedI64 {
+    text.parse()
+        .unwrap_or_else(|_| panic!("'{text}' is a signed value"))
 }
 
 /// Each of `pools` held at its own initial while rising.

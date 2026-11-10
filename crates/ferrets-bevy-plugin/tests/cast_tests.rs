@@ -109,9 +109,69 @@ fn exact_raise_stands_on_ground_of_body_it_spends() {
     assert_eq!(
         skeletons
             .iter()
-            .map(|&skeleton| utils::cell_of(app.world(), skeleton))
+            .map(|&skeleton| utils::anchor_of(app.world(), skeleton))
             .collect::<Vec<_>>(),
         vec![CellPos::new(6, 5)]
+    );
+}
+
+#[test]
+fn exact_raise_of_type_wider_than_map_is_refused() {
+    // The map is 32 cells across: a 40×40 colossus raised exactly at a body
+    // has no place on it, centered there or anywhere, and nothing rises.
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let body = fallen(&mut app, 6, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_colossus_in_place", body);
+    utils::run_ticks(&mut app, 5);
+
+    assert_eq!(count_of(&app, "colossus"), 0);
+}
+
+#[test]
+fn exact_raise_at_wide_remains_stands_centered_on_them() {
+    // A keep on (8..10, 5..7) falls to rubble there, its middle (9.5, 6.5).
+    // A one-cell skeleton raised exactly at the rubble is centered on it:
+    // its low corner 9.5 − 1/2 = 9 on x and 6 on y, the rubble's middle
+    // cell (9, 6) — not its top-left cell, (8, 5).
+    let mut app = app();
+    let necromancer = caster(&mut app, 5, 5);
+    let rubble = rubble(&mut app, 8, 5);
+
+    utils::cast_on(&mut app, necromancer, "raise_in_place", rubble);
+    utils::run_ticks(&mut app, 5);
+
+    let skeletons = utils::owned_of_type(app.world_mut(), "skeleton", 0);
+    assert_eq!(
+        skeletons
+            .iter()
+            .map(|&skeleton| utils::anchor_of(app.world(), skeleton))
+            .collect::<Vec<_>>(),
+        vec![CellPos::new(9, 6)]
+    );
+}
+
+#[test]
+fn nearby_raise_at_wide_remains_lands_around_their_whole_footprint() {
+    // A keep on (8..10, 5..7) falls to rubble there. Two skeletons raised
+    // nearby land on the rubble's own cells, spent before they land, nearest
+    // its middle: (9, 6), then (9, 5) first by row — not around its top-left
+    // cell, (8, 5).
+    let mut app = app();
+    let acolyte = summoner(&mut app, 5, 5);
+    let rubble = rubble(&mut app, 8, 5);
+
+    utils::cast_on(&mut app, acolyte, "raise_where_it_stands", rubble);
+    utils::run_ticks(&mut app, 5);
+
+    let skeletons = utils::owned_of_type(app.world_mut(), "skeleton", 0);
+    assert_eq!(
+        skeletons
+            .iter()
+            .map(|&skeleton| utils::anchor_of(app.world(), skeleton))
+            .collect::<Vec<_>>(),
+        vec![CellPos::new(9, 6), CellPos::new(9, 5)]
     );
 }
 
@@ -145,7 +205,7 @@ fn exact_raise_stands_on_ground_of_solid_body_it_spends() {
     assert_eq!(
         skeletons
             .iter()
-            .map(|&skeleton| utils::cell_of(app.world(), skeleton))
+            .map(|&skeleton| utils::anchor_of(app.world(), skeleton))
             .collect::<Vec<_>>(),
         vec![CellPos::new(8, 5)]
     );
@@ -296,7 +356,7 @@ fn summon_sets_down_only_where_summoned_types_placement_rules_admit() {
 
     let mut cells: Vec<CellPos> = utils::owned_of_type(app.world_mut(), "ghoul", 0)
         .into_iter()
-        .map(|ghoul| utils::cell_of(app.world(), ghoul))
+        .map(|ghoul| utils::anchor_of(app.world(), ghoul))
         .collect();
     cells.sort_unstable_by_key(|cell| (cell.y, cell.x));
     // Unblighted, the two would rise at (6, 4) and on the body's own cell,
@@ -328,6 +388,66 @@ fn summon_over_supply_ceiling_pays_nothing() {
         100,
         "and nothing was paid for it"
     );
+}
+
+#[test]
+fn summon_around_caster_lands_beside_its_footprint() {
+    // Under the continuous model the caster walks to the middle (11.25,
+    // 10.5): its low corner (10.75, 10) rounds to (11, 10), its footprint,
+    // though it stands across (10, 10) too. A post summoned around it lands
+    // on the ring of that one cell, first by row nearest it: (11, 9), straight
+    // above — not (10, 9), above the cells it stands across.
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |registry, _| {
+        registry.register(
+            EntityTypeDef::new("post")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(10)),
+        );
+        let entity_type = registry.type_id("post").expect("the post is registered");
+        let plant = registry.register_skill(
+            "plant_post",
+            SkillDef {
+                cooldown: 10,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    casting: Casting::Instant,
+                    effect: EntityCastEffect::Summon {
+                        at: SummonAt::Caster,
+                        entity_type,
+                        count: Quantity::Constant(1),
+                        placement: SummonPlacement::Nearby,
+                        landing: Landing::Anywhere,
+                        within: Vec::new(),
+                        arrives: SummonArrival::Standing,
+                    },
+                },
+                requires: Vec::new(),
+            },
+        );
+        let mut planter = registry
+            .entity("soldier")
+            .expect("the orders content declares a soldier")
+            .clone()
+            .with_skills([plant]);
+        planter.name = "planter".to_string();
+        registry.register(planter);
+    });
+    let (planter, planter_id) = utils::create_owned(&mut app, "planter", 10, 10, 0);
+    utils::walk_onto(&mut app, planter, utils::point("11.25", "10.5"), 20);
+
+    utils::cast_self(&mut app, planter_id, "plant_post");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let posts = utils::owned_of_type(app.world_mut(), "post", 0);
+    let [post] = posts.as_slice() else {
+        panic!("one post is planted");
+    };
+    assert_eq!(utils::anchor_of(app.world(), *post), CellPos::new(11, 9));
 }
 
 //
@@ -523,7 +643,7 @@ fn rising_summon_losing_its_field_is_lost_unrefunded() {
 #[test]
 fn summon_raised_over_source_covers_it_and_finds_none_far_off() {
     let mut app = app();
-    let (seam, seam_id) = utils::create_entity(app.world_mut(), "seam", utils::pos(10, 10), None)
+    let (seam, seam_id) = utils::create_entity(app.world_mut(), "seam", utils::cell(10, 10), None)
         .expect("the seam is registered");
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(seam)
@@ -541,7 +661,7 @@ fn summon_raised_over_source_covers_it_and_finds_none_far_off() {
     utils::cast_at(&mut app, acolyte, "raise_spire", 10, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let spire = utils::single_owned_of_type(app.world_mut(), "spire", 0);
-    assert_eq!(utils::cell_of(app.world(), spire), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), spire), CellPos::new(10, 10));
     assert!(entity_def::rising(app.world(), spire));
     // The seam is covered, not merely gone: it dies as overbuilt and the spire
     // holds the 40 it had left.
@@ -566,7 +686,7 @@ fn exact_summon_over_source_raises_only_on_source_under_aimed_cell() {
     // seam under the aimed cell and nothing is raised, though a nearby raise
     // would find the seam; planted at (10, 10), it covers the seam.
     let mut app = app();
-    utils::create_entity(app.world_mut(), "seam", utils::pos(10, 10), None)
+    utils::create_entity(app.world_mut(), "seam", utils::cell(10, 10), None)
         .expect("the seam is registered");
     let acolyte = summoner(&mut app, 2, 2);
     utils::run_ticks(&mut app, 1);
@@ -579,7 +699,7 @@ fn exact_summon_over_source_raises_only_on_source_under_aimed_cell() {
     utils::cast_at(&mut app, acolyte, "plant_spire", 10, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let spire = utils::single_owned_of_type(app.world_mut(), "spire", 0);
-    assert_eq!(utils::cell_of(app.world(), spire), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), spire), CellPos::new(10, 10));
 }
 
 #[test]
@@ -587,7 +707,7 @@ fn exact_summon_over_wide_source_snaps_to_source_under_aimed_cell() {
     // A 2×2 lode over (10..11, 10..11). Planted with the aim on its far cell,
     // (11, 11), the derrick anchors on the lode under that cell, at (10, 10).
     let mut app = app();
-    utils::create_entity(app.world_mut(), "lode", utils::pos(10, 10), None)
+    utils::create_entity(app.world_mut(), "lode", utils::cell(10, 10), None)
         .expect("the lode is registered");
     let acolyte = summoner(&mut app, 2, 2);
     utils::run_ticks(&mut app, 1);
@@ -596,13 +716,13 @@ fn exact_summon_over_wide_source_snaps_to_source_under_aimed_cell() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     let derrick = utils::single_owned_of_type(app.world_mut(), "derrick", 0);
-    assert_eq!(utils::cell_of(app.world(), derrick), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), derrick), CellPos::new(10, 10));
 }
 
 #[test]
 fn summon_over_spring_walker_stands_on_raises_nothing_until_walker_dies() {
     let mut app = app();
-    utils::create_entity(app.world_mut(), "spring", utils::pos(10, 10), None)
+    utils::create_entity(app.world_mut(), "spring", utils::cell(10, 10), None)
         .expect("the spring is registered");
     // The spring claims no cell, so a walking necromancer stands on it.
     let (walker, _) = utils::create_owned(&mut app, "necromancer", 10, 10, 1);
@@ -618,7 +738,7 @@ fn summon_over_spring_walker_stands_on_raises_nothing_until_walker_dies() {
     utils::cast_at(&mut app, acolyte, "raise_well", 10, 10);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let well = utils::single_owned_of_type(app.world_mut(), "well", 0);
-    assert_eq!(utils::cell_of(app.world(), well), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), well), CellPos::new(10, 10));
     assert_eq!(count_of(&app, "spring"), 0);
 }
 
@@ -659,7 +779,7 @@ fn summon_at_ground_body_cannot_stand_on_lands_only_where_it_steps_from_there() 
     assert_eq!(
         landlubbers
             .into_iter()
-            .map(|landlubber| utils::cell_of(app.world(), landlubber))
+            .map(|landlubber| utils::anchor_of(app.world(), landlubber))
             .collect::<Vec<_>>(),
         vec![CellPos::new(10, 8)]
     );
@@ -683,7 +803,10 @@ fn exact_summon_stands_only_on_aimed_cell() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
     let planted = utils::owned_of_type(app.world_mut(), "landlubber", 0);
     assert_eq!(planted.len(), 1);
-    assert_eq!(utils::cell_of(app.world(), planted[0]), CellPos::new(10, 8));
+    assert_eq!(
+        utils::anchor_of(app.world(), planted[0]),
+        CellPos::new(10, 8)
+    );
     // 100 - 30 = 70.
     assert_eq!(energy_as_u32(&app, caller), 70);
 
@@ -760,7 +883,7 @@ fn summon_at_caster_comes_out_of_its_whole_footprint() {
     assert_eq!(
         landlubbers
             .into_iter()
-            .map(|landlubber| utils::cell_of(app.world(), landlubber))
+            .map(|landlubber| utils::anchor_of(app.world(), landlubber))
             .collect::<Vec<_>>(),
         vec![CellPos::new(2, 0)]
     );
@@ -1111,7 +1234,7 @@ fn cast_paid_at_start_is_announced_as_it_lands() {
         skill_casts(&app),
         vec![SimulationEvent::SkillCast {
             caster: necromancer,
-            target: SkillTarget::Position(utils::pos(6, 5)),
+            target: SkillTarget::Cell(utils::cell(6, 5)),
             skill: utils::skill_id(&app, "raise_committed"),
         }],
         "announced once, on tick 7 as it lands"
@@ -1269,7 +1392,7 @@ fn refunded_health_cost_holds_under_maximum() {
         app.world_mut(),
         necromancer_entity,
         PoolId::HEALTH,
-        utils::fixed("5"),
+        FixedU64::from_num(5),
     );
     move_away(&mut app, necromancer);
     utils::run_ticks(&mut app, utils::APPLY);
@@ -1381,7 +1504,7 @@ fn cast_requirement_is_judged_again_when_casting_begins() {
     utils::cast_on(&mut app, caster_id, "mark", raft_id);
     utils::run_ticks(&mut app, 60);
     assert_eq!(
-        entity_def::occupied_rect(app.world(), caster).origin,
+        entity_def::location(app.world(), caster).footprint().origin,
         CellPos::new(7, 5)
     );
     assert!(!entity_def::bears(app.world(), raft, marked));
@@ -1669,7 +1792,7 @@ fn transient_cast_within_reach_lands_from_where_its_caster_stands() {
     utils::cast_on(&mut app, caster_id, "tag", near_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(entity_def::bears(app.world(), near, marked));
-    assert_eq!(utils::cell_of(app.world(), caster), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), caster), CellPos::new(5, 5));
 }
 
 #[test]
@@ -1719,10 +1842,10 @@ fn caster_that_cannot_walk_has_its_picked_aim_judged_as_ordered() {
 #[test]
 fn caster_that_cannot_walk_gives_up_aim_that_leaves_its_reach() {
     // The wader, older than the obelisk, walks south half a cell a tick. The
-    // pin is judged as it stands at (5, 8.5), on cells 8 and 9: three cells
-    // from the obelisk at (5, 5), within reach. Its step to (5, 9) on that
-    // same tick, before the obelisk's turn, puts it four off: the cast ends
-    // there, nothing landed and nothing walked.
+    // pin is judged as it stands with its middle at (5.5, 9), on cells 8 and
+    // 9: three cells from the obelisk at (5, 5), within reach. Its step to
+    // (5.5, 9.5) on that same tick, before the obelisk's turn, puts it four
+    // off: the cast ends there, nothing landed and nothing walked.
     let mut app = shore_app();
     let (wader, wader_id) = utils::create_owned(&mut app, "wader", 5, 8, 0);
     let (obelisk, obelisk_id) = utils::create_owned(&mut app, "obelisk", 5, 5, 0);
@@ -1754,7 +1877,7 @@ fn transient_cast_out_of_reach_is_refused_without_walking() {
     utils::run_ticks(&mut app, 30);
     assert!(!entity_def::bears(app.world(), far, marked));
     assert_eq!(cooldown_of(&app, caster_id, "tag"), Cooldown::Ready);
-    assert_eq!(utils::cell_of(app.world(), caster), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), caster), CellPos::new(5, 5));
 }
 
 //
@@ -1807,6 +1930,29 @@ fn app() -> App {
                 )
                 .with_pool(Pool::health(30))
                 .with_dying(2, utils::leaves("wreck")),
+        );
+        // A 3×3 keep that falls to 3×3 rubble.
+        registry.register(
+            EntityTypeDef::new("rubble")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_tags(["remains"])
+                .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
+        );
+        registry.register(
+            EntityTypeDef::new("keep")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(30))
+                .with_dying(2, utils::leaves("rubble")),
         );
         registry.register(
             EntityTypeDef::new("skeleton")
@@ -2240,13 +2386,42 @@ fn app() -> App {
                 },
             )
         };
+        // One colossus, wider than the map, raised exactly where a body lies.
+        let raise_colossus_in_place = {
+            let entity_type = registry
+                .type_id("colossus")
+                .expect("the summoned type is registered");
+            registry.register_skill(
+                "raise_colossus_in_place",
+                SkillDef {
+                    cooldown: 10,
+                    caster: SkillCaster::Entity {
+                        costs: Vec::new(),
+                        casting: Casting::Instant,
+                        effect: EntityCastEffect::Summon {
+                            at: SummonAt::Fallen {
+                                kinds: Kinds::Any,
+                                reach: Reach::Wherever,
+                            },
+                            entity_type,
+                            count: Quantity::Constant(1),
+                            placement: SummonPlacement::Exact,
+                            landing: Landing::Anywhere,
+                            within: Vec::new(),
+                            arrives: SummonArrival::Standing,
+                        },
+                    },
+                    requires: Vec::new(),
+                },
+            )
+        };
         registry.register(
             utils::walker("necromancer", utils::GROUND_DOMAIN)
                 .with_pool(Pool::health(40))
                 .with_sight_range(20)
                 .with_pool(Pool::energy(100))
                 .with_stat(ritual_time, FixedU64::from_num(10))
-                .with_stat(host_size, FixedU64::lit("3.5"))
+                .with_stat(host_size, utils::fixed("3.5"))
                 .with_skills([
                     raise_committed,
                     raise_refundable,
@@ -2261,6 +2436,7 @@ fn app() -> App {
                     raise_by_stat,
                     self_immolate,
                     raise_in_place,
+                    raise_colossus_in_place,
                 ]),
         );
         // A mound rises over ten ticks of its own work.
@@ -2297,7 +2473,7 @@ fn app() -> App {
             "sight_mound",
             summon_skill(
                 mound,
-                SummonAt::Cell {
+                SummonAt::Ground {
                     reach: Reach::Wherever,
                 },
                 Landing::Sighted,
@@ -2371,7 +2547,7 @@ fn app() -> App {
             "raise_spire",
             summon_skill(
                 spire,
-                SummonAt::Cell {
+                SummonAt::Ground {
                     reach: Reach::Wherever,
                 },
                 Landing::Anywhere,
@@ -2382,7 +2558,7 @@ fn app() -> App {
         );
         let plant = summon_skill(
             spire,
-            SummonAt::Cell {
+            SummonAt::Ground {
                 reach: Reach::Wherever,
             },
             Landing::Anywhere,
@@ -2419,7 +2595,7 @@ fn app() -> App {
         let derrick = registry.type_id("derrick").expect("just registered");
         let plant = summon_skill(
             derrick,
-            SummonAt::Cell {
+            SummonAt::Ground {
                 reach: Reach::Wherever,
             },
             Landing::Anywhere,
@@ -2462,7 +2638,7 @@ fn app() -> App {
             "raise_well",
             summon_skill(
                 well,
-                SummonAt::Cell {
+                SummonAt::Ground {
                     reach: Reach::Wherever,
                 },
                 Landing::Anywhere,
@@ -2475,7 +2651,7 @@ fn app() -> App {
             "glow_mound",
             summon_skill(
                 mound,
-                SummonAt::Cell {
+                SummonAt::Ground {
                     reach: Reach::Wherever,
                 },
                 Landing::Anywhere,
@@ -2589,6 +2765,26 @@ fn fallen(app: &mut App, x: u32, y: u32) -> SimulationId {
         .0
 }
 
+/// Razes a keep of player 1 anchored at `(x, y)` and returns the 3×3 rubble
+/// it leaves there.
+fn rubble(app: &mut App, x: u32, y: u32) -> SimulationId {
+    let (keep, _) = utils::create_owned(app, "keep", x, y, 1);
+    damage::apply(
+        app.world_mut(),
+        SimulationId(u32::MAX),
+        keep,
+        FixedU64::from_num(1000),
+        Slain::Remains,
+    );
+    utils::run_ticks(app, 4);
+    app.world()
+        .resource::<EntityIndex>()
+        .remains_entries()
+        .last()
+        .expect("the keep left rubble")
+        .0
+}
+
 /// Ticks a `mound` rises over.
 const MOUND_RISE_TIME: u32 = 10;
 
@@ -2666,7 +2862,7 @@ fn pool_caller_app() -> App {
             "call_landlubber",
             summon_skill(
                 landlubber,
-                SummonAt::Cell {
+                SummonAt::Ground {
                     reach: Reach::Wherever,
                 },
                 Landing::Anywhere,
@@ -2677,7 +2873,7 @@ fn pool_caller_app() -> App {
         );
         let plant = summon_skill(
             landlubber,
-            SummonAt::Cell {
+            SummonAt::Ground {
                 reach: Reach::Wherever,
             },
             Landing::Anywhere,
@@ -2691,7 +2887,7 @@ fn pool_caller_app() -> App {
             "call_near",
             summon_skill(
                 landlubber,
-                SummonAt::Cell {
+                SummonAt::Ground {
                     reach: Reach::Within(Quantity::Constant(3)),
                 },
                 Landing::Anywhere,

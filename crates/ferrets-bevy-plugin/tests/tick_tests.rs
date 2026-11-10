@@ -78,7 +78,7 @@ fn tick_within_its_share_is_not_throttled() {
     // Anything up to its share of the budget — 65% of 50 ms — runs in full. The
     // boundary is stated as the share itself rather than as 32.5 ms: fixed-point
     // holds 0.65 to the last bit it has, not to the last decimal.
-    assert_eq!(local(fixed("1"), ONE), NO_THROTTLE);
+    assert_eq!(local(FixedU64::from_num(1), ONE), NO_THROTTLE);
     assert_eq!(local(utils::NOMINAL_MILLIS * TARGET_LOAD, ONE), NO_THROTTLE);
 }
 
@@ -112,7 +112,7 @@ fn floor_is_share_of_nominal_whatever_speed_was_chosen() {
     for factor in ["0.25", "1", "2", "8"] {
         let speed = fixed(factor);
         assert_eq!(
-            local(fixed("10000"), speed),
+            local(FixedU64::from_num(10000), speed),
             MIN_NOMINAL_SHARE / speed,
             "at {factor}x",
         );
@@ -124,7 +124,10 @@ fn floor_never_forces_slow_speed_faster() {
     // A cadence already below the floor is the player's choice, not a stall, so
     // the floor collapses to no throttle at all rather than speeding it up.
     let slower_than_the_floor = MIN_NOMINAL_SHARE / 2;
-    assert_eq!(local(fixed("10000"), slower_than_the_floor), NO_THROTTLE);
+    assert_eq!(
+        local(FixedU64::from_num(10000), slower_than_the_floor),
+        NO_THROTTLE
+    );
 }
 
 //
@@ -140,7 +143,7 @@ fn frames_arriving_with_headroom_do_not_throttle() {
     for margin in ["1", "1.5", "2"] {
         assert_eq!(
             ferrets_bevy_plugin::throttle_for(
-                fixed("1"),
+                FixedU64::from_num(1),
                 budget(ONE),
                 ONE,
                 Some(fixed(margin)),
@@ -157,13 +160,25 @@ fn margin_under_headroom_eases_cadence_off() {
     // Half a tick of headroom halves the cadence, handing the late peer twice
     // the wall time per tick.
     assert_eq!(
-        ferrets_bevy_plugin::throttle_for(fixed("1"), budget(ONE), ONE, Some(fixed("0.5")), None),
+        ferrets_bevy_plugin::throttle_for(
+            FixedU64::from_num(1),
+            budget(ONE),
+            ONE,
+            Some(fixed("0.5")),
+            None
+        ),
         fixed("0.5"),
     );
     // No lead at all stops there rather than dropping to the floor: frames that
     // simply are not arriving are what blocking and the drop rule are for.
     assert_eq!(
-        ferrets_bevy_plugin::throttle_for(fixed("1"), budget(ONE), ONE, Some(FixedU64::ZERO), None),
+        ferrets_bevy_plugin::throttle_for(
+            FixedU64::from_num(1),
+            budget(ONE),
+            ONE,
+            Some(FixedU64::ZERO),
+            None
+        ),
         MIN_PEER_THROTTLE,
     );
 }
@@ -173,11 +188,23 @@ fn peer_that_cannot_hold_cadence_caps_it() {
     // At 1x a peer good for only 0.8x pulls everyone to 0.8x, while one good for
     // more than was chosen constrains nothing.
     assert_eq!(
-        ferrets_bevy_plugin::throttle_for(fixed("1"), budget(ONE), ONE, None, Some(fixed("0.8"))),
+        ferrets_bevy_plugin::throttle_for(
+            FixedU64::from_num(1),
+            budget(ONE),
+            ONE,
+            None,
+            Some(fixed("0.8"))
+        ),
         fixed("0.8"),
     );
     assert_eq!(
-        ferrets_bevy_plugin::throttle_for(fixed("1"), budget(ONE), ONE, None, Some(fixed("4"))),
+        ferrets_bevy_plugin::throttle_for(
+            FixedU64::from_num(1),
+            budget(ONE),
+            ONE,
+            None,
+            Some(FixedU64::from_num(4))
+        ),
         NO_THROTTLE,
     );
 }
@@ -189,12 +216,18 @@ fn peer_beyond_accommodating_is_left_to_drop_rule() {
     // tick, and the drop rule decides — it has the grace window, the authority and
     // the game's own say, none of which a throttle has any business guessing at.
     assert_eq!(
-        ferrets_bevy_plugin::throttle_for(fixed("1"), budget(ONE), ONE, None, Some(fixed("0.1"))),
+        ferrets_bevy_plugin::throttle_for(
+            FixedU64::from_num(1),
+            budget(ONE),
+            ONE,
+            None,
+            Some(fixed("0.1"))
+        ),
         MIN_PEER_THROTTLE,
     );
     assert_eq!(
         ferrets_bevy_plugin::throttle_for(
-            fixed("1"),
+            FixedU64::from_num(1),
             budget(ONE),
             ONE,
             Some(FixedU64::ZERO),
@@ -209,7 +242,7 @@ fn peer_beyond_accommodating_is_left_to_drop_rule() {
 fn own_cost_floor_is_deeper_than_peer_floor() {
     // Nobody can be dropped to fix this node's own tick cost, so slowing down is
     // the only recourse there is and the floor goes deeper.
-    let hopeless = local(fixed("10000"), ONE);
+    let hopeless = local(FixedU64::from_num(10000), ONE);
     assert_eq!(hopeless, MIN_NOMINAL_SHARE);
     assert!(
         hopeless < MIN_PEER_THROTTLE,
@@ -227,18 +260,18 @@ fn peer_cap_is_read_against_chosen_speed() {
             budget(ONE),
             ONE,
             None,
-            Some(fixed("2"))
+            Some(FixedU64::from_num(2))
         ),
         NO_THROTTLE,
     );
-    let quick = fixed("4");
+    let quick = FixedU64::from_num(4);
     assert_eq!(
         ferrets_bevy_plugin::throttle_for(
             FixedU64::DELTA,
             budget(quick),
             quick,
             None,
-            Some(fixed("2"))
+            Some(FixedU64::from_num(2))
         ),
         fixed("0.5"),
     );
@@ -250,7 +283,13 @@ fn tightest_of_three_wins() {
     // budget; the throttle answers to whichever is tightest.
     let full = budget(ONE);
     assert_eq!(
-        ferrets_bevy_plugin::throttle_for(full, full, ONE, Some(fixed("2")), Some(fixed("4"))),
+        ferrets_bevy_plugin::throttle_for(
+            full,
+            full,
+            ONE,
+            Some(FixedU64::from_num(2)),
+            Some(FixedU64::from_num(4))
+        ),
         fixed("0.65"),
         "this node's own cost",
     );
@@ -260,7 +299,7 @@ fn tightest_of_three_wins() {
             full,
             ONE,
             Some(fixed("0.6")),
-            Some(fixed("4"))
+            Some(FixedU64::from_num(4))
         ),
         fixed("0.6"),
         "delivery",
@@ -270,7 +309,7 @@ fn tightest_of_three_wins() {
             FixedU64::DELTA,
             full,
             ONE,
-            Some(fixed("2")),
+            Some(FixedU64::from_num(2)),
             Some(fixed("0.2"))
         ),
         MIN_PEER_THROTTLE,
@@ -304,7 +343,7 @@ fn sustainable_factor_reads_tick_cost_against_nominal_budget() {
 fn sustainable_factor_halves_when_tick_cost_doubles() {
     // What this node can hold is a statement about the tick's cost alone — never
     // about the cadence in force, which a throttle would already have lowered.
-    let cost = fixed("20");
+    let cost = FixedU64::from_num(20);
     assert_eq!(
         ferrets_bevy_plugin::sustainable_factor(cost * 2, utils::NOMINAL_MILLIS),
         ferrets_bevy_plugin::sustainable_factor(cost, utils::NOMINAL_MILLIS) / 2,
@@ -320,7 +359,7 @@ fn game_that_turns_throttling_off_keeps_its_chosen_cadence() {
     // A game may prefer to fall behind in hitches rather than change pace.
     let mut app = cadence_app();
     app.world_mut().resource_mut::<ThrottleConfig>().enabled = false;
-    utils::set_tick_cost(&mut app, fixed("10000"));
+    utils::set_tick_cost(&mut app, FixedU64::from_num(10000));
 
     app.update();
 
@@ -334,7 +373,7 @@ fn throttling_on_reacts_to_same_tick_cost() {
     // out at the floor, so the assertion above is about the switch and not about
     // the cost being ignored anyway.
     let mut app = cadence_app();
-    utils::set_tick_cost(&mut app, fixed("10000"));
+    utils::set_tick_cost(&mut app, FixedU64::from_num(10000));
 
     app.update();
 
@@ -375,12 +414,12 @@ fn local_speed_intent_sets_session_speed() {
     // Off the network the intents are the game's only way to steer the session;
     // the engine applies them ahead of the frame's fixed loop.
     let mut app = cadence_app();
-    app.world_mut().resource_mut::<SpeedIntent>().0 = Some(GameSpeed::new(fixed("2")));
+    app.world_mut().resource_mut::<SpeedIntent>().0 = Some(GameSpeed::new(FixedU64::from_num(2)));
 
     app.update();
     assert_eq!(
         app.world().resource::<GameSession>().speed(),
-        GameSpeed::new(fixed("2")),
+        GameSpeed::new(FixedU64::from_num(2)),
     );
 
     // The cadence follows on the next frame: intents apply in `PreUpdate`, after
@@ -406,7 +445,7 @@ fn networked_game_leaves_intents_to_control_plane() {
     // here would put this node on a different cadence than its peers.
     let mut app = cadence_app();
     app.world_mut().insert_resource(NetworkActive);
-    app.world_mut().resource_mut::<SpeedIntent>().0 = Some(GameSpeed::new(fixed("2")));
+    app.world_mut().resource_mut::<SpeedIntent>().0 = Some(GameSpeed::new(FixedU64::from_num(2)));
 
     app.update();
 
@@ -417,7 +456,7 @@ fn networked_game_leaves_intents_to_control_plane() {
     );
     assert_eq!(
         app.world().resource::<SpeedIntent>().0,
-        Some(GameSpeed::new(fixed("2"))),
+        Some(GameSpeed::new(FixedU64::from_num(2))),
         "the intent is left for the control plane",
     );
 }
@@ -432,7 +471,7 @@ fn paused_game_is_not_throttled() {
     // stretched step would make the drop rule's grace window, counted in blocked
     // steps, take that many times longer in wall time to expire.
     let mut app = cadence_app();
-    utils::set_tick_cost(&mut app, fixed("10000"));
+    utils::set_tick_cost(&mut app, FixedU64::from_num(10000));
     app.world_mut()
         .resource_mut::<GameSession>()
         .set_paused(true);

@@ -80,7 +80,7 @@ pub fn tick(world: &mut World) {
             .get::<StatsComponent>()
             .and_then(|stats| stats.effective_as_u32(EntityStatId::ATTACK_RANGE))
             .expect("attackers have a range stat");
-        let anchor = entity_def::position(world, entity);
+        let position = entity_def::position(world, entity);
 
         match stance {
             Stance::StandGround => {
@@ -101,7 +101,7 @@ pub fn tick(world: &mut World) {
                         Order::Attack {
                             target: AttackTarget::Entity(target),
                             leash: Some(Leash {
-                                anchor,
+                                position,
                                 radius: range,
                             }),
                         },
@@ -128,7 +128,7 @@ pub fn tick(world: &mut World) {
                 {
                     queue.push(attack, None);
                     if walks_home {
-                        queue.push(Order::AttackMove { target: anchor }, None);
+                        queue.push(Order::AttackMove { target: position }, None);
                     }
                 }
             }

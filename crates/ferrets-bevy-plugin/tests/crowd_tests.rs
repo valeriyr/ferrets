@@ -53,8 +53,8 @@ fn head_on_movers_swap_in_corridor() {
 
     utils::run_ticks(&mut app, 120);
 
-    assert_eq!(utils::cell_of(app.world_mut(), left), CellPos::new(7, 5));
-    assert_eq!(utils::cell_of(app.world_mut(), right), CellPos::new(2, 5));
+    assert_eq!(utils::anchor_of(app.world_mut(), left), CellPos::new(7, 5));
+    assert_eq!(utils::anchor_of(app.world_mut(), right), CellPos::new(2, 5));
 }
 
 #[test]
@@ -89,8 +89,8 @@ fn head_on_movers_of_different_domains_swap_in_corridor() {
 
     // In a sealed corridor only a swap gets them past each other.
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, left), CellPos::new(7, 5));
-    assert_eq!(utils::cell_of(world, right), CellPos::new(2, 5));
+    assert_eq!(utils::anchor_of(world, left), CellPos::new(7, 5));
+    assert_eq!(utils::anchor_of(world, right), CellPos::new(2, 5));
     assert!(utils::order_queue_is_empty(world, left));
     assert!(utils::order_queue_is_empty(world, right));
 }
@@ -113,7 +113,7 @@ fn wide_walk_reaches_goal_and_reclaims_footprint() {
     utils::run_ticks(&mut app, 200);
 
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, wagon), CellPos::new(10, 6));
+    assert_eq!(utils::anchor_of(world, wagon), CellPos::new(10, 6));
     let grid = world.resource::<Map>().nav_grid();
     for (x, y) in [(10, 6), (11, 6), (10, 7), (11, 7)] {
         assert!(
@@ -164,8 +164,8 @@ fn head_on_unequal_sizes_never_swap() {
     utils::run_ticks(&mut app, 400);
 
     let world = app.world_mut();
-    let wagon_cell = utils::cell_of(world, wagon);
-    let soldier_cell = utils::cell_of(world, soldier);
+    let wagon_cell = utils::anchor_of(world, wagon);
+    let soldier_cell = utils::anchor_of(world, soldier);
     // The exact end state: the soldier, asked aside down the only way open,
     // walks ahead of the wagon to (14,5), the nearest cell clear of the cells
     // the wagon's walk still enters, and the wagon covers its goal with
@@ -193,11 +193,11 @@ fn idle_ally_steps_aside() {
 
     utils::run_ticks(&mut app, 80);
 
-    assert_eq!(utils::cell_of(app.world_mut(), mover), CellPos::new(8, 5));
+    assert_eq!(utils::anchor_of(app.world_mut(), mover), CellPos::new(8, 5));
     // The yield walks the ally to the nearest cell off the cells the step
     // enters, the row above first: straight up, off the walked line.
     assert_eq!(
-        utils::cell_of(app.world_mut(), bystander),
+        utils::anchor_of(app.world_mut(), bystander),
         CellPos::new(6, 4)
     );
 }
@@ -230,8 +230,8 @@ fn ally_standing_its_ground_is_walked_around_not_asked_aside() {
     // Idle but standing its ground, the ally holds as an enemy would: the walk
     // goes round it to its goal, and the ally never moves.
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, mover), CellPos::new(8, 5));
-    assert_eq!(utils::cell_of(world, bystander), CellPos::new(6, 5));
+    assert_eq!(utils::anchor_of(world, mover), CellPos::new(8, 5));
+    assert_eq!(utils::anchor_of(world, bystander), CellPos::new(6, 5));
 }
 
 #[test]
@@ -266,8 +266,8 @@ fn walk_ends_beside_ally_standing_its_ground_on_its_goal() {
 
     let world = app.world_mut();
     assert!(utils::order_queue_is_empty(world, mover));
-    assert_eq!(utils::cell_of(world, mover), CellPos::new(7, 5));
-    assert_eq!(utils::cell_of(world, bystander), CellPos::new(8, 5));
+    assert_eq!(utils::anchor_of(world, mover), CellPos::new(7, 5));
+    assert_eq!(utils::anchor_of(world, bystander), CellPos::new(8, 5));
 }
 
 #[test]
@@ -294,8 +294,8 @@ fn idle_ally_steps_aside_only_onto_its_terrain() {
     // The yield takes the nearest cell off the walk still on land: the row
     // below, the row above it took in the test above being water.
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, mover), CellPos::new(8, 5));
-    assert_eq!(utils::cell_of(world, bystander), CellPos::new(6, 6));
+    assert_eq!(utils::anchor_of(world, mover), CellPos::new(8, 5));
+    assert_eq!(utils::anchor_of(world, bystander), CellPos::new(6, 6));
 }
 
 #[test]
@@ -331,7 +331,7 @@ fn crowd_ordered_to_one_point_settles() {
                 .is_some_and(|queue| queue.0.is_empty()),
             "every walk must settle instead of grinding"
         );
-        cells.push(utils::cell_of(world, *soldier));
+        cells.push(utils::anchor_of(world, *soldier));
     }
     cells.sort_unstable();
     // The exact settle: the goal taken, the rest ringed beside it — the cells
@@ -392,7 +392,7 @@ fn fanned_group_move_shares_one_corridor() {
     utils::run_ticks(&mut app, 400);
     let mut cells: Vec<CellPos> = soldiers
         .iter()
-        .map(|(soldier, _)| utils::cell_of(app.world_mut(), *soldier))
+        .map(|(soldier, _)| utils::anchor_of(app.world_mut(), *soldier))
         .collect();
     cells.sort_unstable();
     // The exact settle: the goal taken, the followers packed beside it.
@@ -427,7 +427,10 @@ fn attacker_takes_free_cell_beside_working_ally() {
     // and the second, finding it held by an ally at work, takes the free cell
     // below it at once instead of waiting on it.
     utils::run_ticks(&mut app, 7);
-    assert_eq!(utils::cell_of(app.world_mut(), second), CellPos::new(9, 11));
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), second),
+        CellPos::new(9, 11)
+    );
     // Two blades from the start, each striking every fourth tick and the pair in
     // turn: blows of 10 land on ticks 7, 9, … 25, and the tenth fells the
     // depot's 100.
@@ -466,7 +469,7 @@ fn attacker_takes_free_cell_beside_ally_standing_its_ground() {
     assert_eq!(utils::health(&app, depot), FixedU64::from_num(100));
     utils::run_ticks(&mut app, 1);
     assert_eq!(
-        utils::cell_of(app.world_mut(), attacker),
+        utils::anchor_of(app.world_mut(), attacker),
         CellPos::new(9, 9)
     );
     assert_eq!(utils::health(&app, depot), FixedU64::from_num(90));
@@ -501,7 +504,7 @@ fn walk_onto_cell_held_by_enemy_ends_beside_it() {
     assert!(!utils::order_queue_is_empty(app.world_mut(), walker));
     utils::run_ticks(&mut app, 1);
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, walker), CellPos::new(9, 10));
+    assert_eq!(utils::anchor_of(world, walker), CellPos::new(9, 10));
     assert!(utils::order_queue_is_empty(world, walker));
 }
 
@@ -527,7 +530,7 @@ fn walk_waits_on_held_cell_short_of_its_goal() {
     // ox on the twenty-third.
     utils::run_ticks(&mut app, 20);
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, walker), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(world, walker), CellPos::new(5, 5));
     assert!(!utils::order_queue_is_empty(world, walker));
     utils::run_ticks(&mut app, 1);
     assert!(utils::order_queue_is_empty(app.world_mut(), walker));
@@ -564,7 +567,7 @@ fn walk_waits_on_goal_held_by_walking_ally() {
     // fifteenth, once the ally's own walk has given up and it stands idle.
     utils::run_ticks(&mut app, 14);
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, walker), CellPos::new(7, 5));
+    assert_eq!(utils::anchor_of(world, walker), CellPos::new(7, 5));
     assert!(!utils::order_queue_is_empty(world, walker));
     utils::run_ticks(&mut app, 1);
     assert!(utils::order_queue_is_empty(app.world_mut(), walker));

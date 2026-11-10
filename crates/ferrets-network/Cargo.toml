@@ -17,4 +17,5 @@ tokio.workspace = true
 ferrets-simulation.workspace = true
 
 [dev-dependencies]
+ferrets-geometry.workspace = true
 ferrets-math.workspace = true

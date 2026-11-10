@@ -3,11 +3,10 @@
 use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{PendingInput, TickPacing};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
 use ferrets_nav_grid::slope::Slope;
-use ferrets_physics::body;
 use ferrets_simulation::{
     command::{PlayerCommand, SkillTarget},
     components::{
@@ -27,7 +26,7 @@ use crate::{
     hud,
     input::{self, Clicked, InputMode},
     map,
-    render::{self, CELL_PX, FogReveal, Smoothing, world_center},
+    render::{self, CELL_PX, FogReveal, Smoothing},
     sound::Muted,
     states::InGameUi,
     time,
@@ -123,7 +122,7 @@ pub fn spawn_debug(
     if let Some((x, y)) = cursor_cell(&windows, &cameras) {
         pending.push(PlayerCommand::Spawn {
             type_name: debug.spawn_type.clone(),
-            position: FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y)),
+            position: CellPos::new(x, y).middle(),
         });
     }
 }
@@ -158,7 +157,7 @@ pub fn debug_readout(
     // What a click there would select: the hit-test selection uses, never a
     // fogged entity or a shimmer.
     let hover = cursor_world(&windows, &cameras)
-        .and_then(|world| input::entity_at(world, Clicked::Standing, &registry, &entities))
+        .and_then(|world| input::entity_at(world, Clicked::Standing, &registry, &map, &entities))
         .and_then(|id| entities.iter().find(|(info, ..)| info.id() == id))
         .map(|(info, ..)| format!("{} #{}", hud::pretty_name(info.type_name()), info.id().0));
     let hover_str = hover.as_deref().unwrap_or("-");
@@ -257,10 +256,11 @@ pub fn draw_grid(
             Sighting::Seen | Sighting::Unseen => false,
         })
         .map(|(info, location, _)| {
-            CellRect::new(
-                body::anchor(location.position),
+            map.location(
+                location.position,
                 registry.def(info.type_id()).location.unwrap().size(),
             )
+            .footprint()
         })
         .collect();
 
@@ -342,7 +342,8 @@ pub fn draw_bodies(
         if !render::made_out(visibility, sighted) {
             continue;
         }
-        let cell = body::anchor(location.position);
+        let size = def.location.expect("a mover stands somewhere").size();
+        let cell = map.location(location.position, size).anchor();
         if !(reveal.reveals() || render::sees(&session, &watch, &fog, cell.x, cell.y)) {
             continue;
         }
@@ -350,16 +351,7 @@ pub fn draw_bodies(
             continue;
         };
 
-        // The circle sits half a footprint past the anchor, so a wider body is
-        // drawn where it actually is rather than off its own near corner.
-        let size = def
-            .location
-            .map(|location| location.size())
-            .unwrap_or(CellSize::ONE);
-        let center = Vec2::new(
-            (location.position.x.to_num::<f32>() + size.width as f32 / 2.0) * CELL_PX,
-            -(location.position.y.to_num::<f32>() + size.height as f32 / 2.0) * CELL_PX,
-        );
+        let center = render::world_point(location.position).truncate();
         gizmos.circle_2d(center, radius.to_num::<f32>() * CELL_PX, BODY);
 
         let claimed = Vec2::new(
@@ -377,7 +369,6 @@ pub fn draw_bodies(
 pub fn draw_hierarchy(
     mut gizmos: Gizmos,
     map: Res<Map>,
-    registry: Res<ContentRegistry>,
     debug: Res<DebugState>,
     selection: Res<Selection>,
     session: Res<GameSession>,
@@ -407,16 +398,15 @@ pub fn draw_hierarchy(
 
     // Entrances of every mover shape the hierarchy serves. A wide mover has its
     // own, narrower set, so drawing all of them shows where clearance bites.
-    let cell_center =
-        |cell: CellPos| world_center(FixedUVec2::from(cell), CellSize::ONE).truncate();
+    let cell_middle = |cell: CellPos| render::cell_point(cell).truncate();
     for shape in hierarchy.shapes() {
         for transition in hierarchy.transitions(shape) {
             gizmos.line_2d(
-                cell_center(transition.a),
-                cell_center(transition.b),
+                cell_middle(transition.a),
+                cell_middle(transition.b),
                 ENTRANCE,
             );
-            gizmos.circle_2d(cell_center(transition.a), CELL_PX * 0.15, ENTRANCE);
+            gizmos.circle_2d(cell_middle(transition.a), CELL_PX * 0.15, ENTRANCE);
         }
     }
 
@@ -429,18 +419,17 @@ pub fn draw_hierarchy(
         if !selected.contains(&info.id()) {
             continue;
         }
-        let size = registry.def(info.type_id()).location.unwrap().size();
-        let mut from = world_center(location.position, size).truncate();
+        let mut from = render::world_point(location.position).truncate();
         for cell in movement.path.iter().rev() {
-            let to = cell_center(*cell);
+            let to = cell_middle(*cell);
             gizmos.line_2d(from, to, SEGMENT);
             from = to;
         }
         for crossing in movement.corridor.iter().rev() {
-            let to = cell_center(crossing.from);
+            let to = cell_middle(crossing.from);
             gizmos.line_2d(from, to, CORRIDOR);
             gizmos.circle_2d(to, CELL_PX * 0.2, CORRIDOR);
-            from = cell_center(crossing.to);
+            from = cell_middle(crossing.to);
         }
     }
 }
@@ -452,6 +441,7 @@ pub fn draw_orders(
     mut gizmos: Gizmos,
     debug: Res<DebugState>,
     registry: Res<ContentRegistry>,
+    map: Res<Map>,
     units: Query<(
         &EntityInfoComponent,
         &LocationComponent,
@@ -479,12 +469,12 @@ pub fn draw_orders(
         return;
     }
 
-    // A destination is named by the first cell of its footprint, so a line drawn to
-    // the position alone points at a corner of what the unit is walking to.
-    let footprint_center = |position: FixedUVec2, size: CellSize| {
-        world_center(FixedUVec2::from(CellPos::from(position)), size).truncate()
+    // A footprint goal is named by its first cell; its line ends at the
+    // footprint's middle.
+    let footprint_middle = |anchor: CellPos, size: CellSize| {
+        render::world_point(map.location_at_clamped(anchor, size).middle()).truncate()
     };
-    let cell_center = |position: FixedUVec2| footprint_center(position, CellSize::ONE);
+    let point = |position: FixedUVec2| render::world_point(position).truncate();
     // The target end is judged as the unit is: a line to a target the
     // perspective does not make out is not drawn.
     let entity_center = |id| {
@@ -492,41 +482,47 @@ pub fn draw_orders(
             .iter()
             .find(|(info, ..)| info.id() == id)
             .filter(|(_, _, visibility, sighted)| render::made_out(visibility, *sighted))
-            .map(|(info, location, ..)| {
-                let size = registry.def(info.type_id()).location.unwrap().size();
-                world_center(location.position, size).truncate()
-            })
+            .map(|(_, location, ..)| render::world_point(location.position).truncate())
     };
 
-    for (info, location, queue, patrol, visibility, sighted) in &units {
+    for (_, location, queue, patrol, visibility, sighted) in &units {
         // Don't reveal the orders of a unit the fog hides or the perspective
         // only glimpses.
         if !render::made_out(visibility, sighted) {
             continue;
         }
-        let size = registry.def(info.type_id()).location.unwrap().size();
-        let start = world_center(location.position, size).truncate();
+        let start = render::world_point(location.position).truncate();
         for entry in &queue.0 {
             let (end, color) = match &entry.order {
-                Order::Move { target, size, .. } => (Some(footprint_center(*target, *size)), MOVE),
-                Order::AttackMove { target } => (Some(cell_center(*target)), COMBAT),
+                Order::Move {
+                    target,
+                    size,
+                    range,
+                } => {
+                    let end = if *range == 0 && *size == CellSize::ONE {
+                        point(*target)
+                    } else {
+                        footprint_middle(CellPos::from(*target), *size)
+                    };
+                    (Some(end), MOVE)
+                }
+                Order::AttackMove { target } => (Some(point(*target)), COMBAT),
                 Order::Attack { target, .. } => match target {
                     AttackTarget::Entity(id) => (entity_center(*id), COMBAT),
-                    AttackTarget::Position(cell) => (Some(cell_center(*cell)), COMBAT),
+                    AttackTarget::Cell(cell) => {
+                        (Some(render::cell_point(*cell).truncate()), COMBAT)
+                    }
                 },
                 Order::Guard { target } => (entity_center(*target), GUARD),
                 Order::Follow { target } => (entity_center(*target), GUARD),
                 Order::Harvest { target } => (entity_center(*target), HARVEST),
                 Order::Build { task } => match task {
-                    BuildTask::Found {
-                        type_name,
-                        position,
-                    } => {
+                    BuildTask::Found { type_name, anchor } => {
                         let size = registry
                             .entity(type_name)
                             .and_then(|def| def.location)
                             .map_or(CellSize::ONE, |location| location.size());
-                        (Some(footprint_center(*position, size)), BUILD)
+                        (Some(footprint_middle(*anchor, size)), BUILD)
                     }
                     BuildTask::Join { site } => (entity_center(*site), BUILD),
                 },
@@ -534,8 +530,8 @@ pub fn draw_orders(
                 Order::Patrol { target } => {
                     // Both patrol endpoints; before the order starts, the
                     // return point is where the unit stands.
-                    let end = cell_center(*target);
-                    let home = cell_center(patrol.map_or(location.position, |p| p.home));
+                    let end = point(*target);
+                    let home = point(patrol.map_or(location.position, |p| p.home));
                     gizmos.line_2d(home, end, COMBAT);
                     gizmos.circle_2d(end, CELL_PX * 0.25, COMBAT);
                     gizmos.circle_2d(home, CELL_PX * 0.25, COMBAT);
@@ -544,12 +540,14 @@ pub fn draw_orders(
                 Order::Board { target } => (entity_center(*target), GUARD),
                 Order::Load { target } => (entity_center(*target), GUARD),
                 Order::Unload { at } => match at {
-                    Some(position) => (Some(cell_center(*position)), GUARD),
+                    Some(cell) => (Some(render::cell_point(*cell).truncate()), GUARD),
                     None => continue,
                 },
                 Order::Cast { target, .. } => match target {
                     Some(SkillTarget::Entity(id)) => (entity_center(*id), COMBAT),
-                    Some(SkillTarget::Position(cell)) => (Some(cell_center(*cell)), COMBAT),
+                    Some(SkillTarget::Cell(cell)) => {
+                        (Some(render::cell_point(*cell).truncate()), COMBAT)
+                    }
                     None => continue,
                 },
                 // A form change happens where the unit stands, so it has no line.

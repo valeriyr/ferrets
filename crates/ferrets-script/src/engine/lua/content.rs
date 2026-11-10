@@ -601,7 +601,7 @@ fn parse_projectile(table: &Table) -> crate::Result<ProjectileDef> {
 const SIDES: [&str; 4] = ["'own'", "'allied'", "'enemy'", "'anyone'"];
 
 /// Reads where a summon sets its units down, which may be any aim:
-/// `"caster"`, `"position"`, `"fallen"` or a side (`"own"`, `"allied"`,
+/// `"caster"`, `"ground"`, `"fallen"` or a side (`"own"`, `"allied"`,
 /// `"enemy"`, `"anyone"`) on its own, or any but `"caster"` as a
 /// `{ kind, only, range }` table — `only` the filter an aimed entity must
 /// pass, `range` how close the caster must come (a cell count or a
@@ -636,10 +636,10 @@ fn parse_summon_at(value: &Value, registry: &ContentRegistry) -> crate::Result<S
                 "a caster aim is written \"caster\": it takes no filter and no range".to_string(),
             )),
         },
-        "position" => match only {
-            None => Ok(SummonAt::Cell { reach }),
+        "ground" => match only {
+            None => Ok(SummonAt::Ground { reach }),
             Some(_) => Err(ScriptError::ContentError(
-                "a position aim takes no filter".to_string(),
+                "a ground aim takes no filter".to_string(),
             )),
         },
         "fallen" => Ok(SummonAt::Fallen {
@@ -650,7 +650,7 @@ fn parse_summon_at(value: &Value, registry: &ContentRegistry) -> crate::Result<S
         // capability uses.
         whose => {
             let side = content::affiliation(whose).map_err(|_| {
-                let mut expected = vec!["'caster'", "'position'", "'fallen'"];
+                let mut expected = vec!["'caster'", "'ground'", "'fallen'"];
                 expected.extend_from_slice(&SIDES);
                 content::unexpected("aim", &expected, &content::quoted(whose))
             })?;
@@ -675,35 +675,35 @@ fn parse_recipient(value: &Value, registry: &ContentRegistry) -> crate::Result<R
     match parse_summon_at(value, registry)? {
         SummonAt::Caster => Ok(Recipient::Caster),
         SummonAt::Standing { whom, reach } => Ok(Recipient::Standing { whom, reach }),
-        SummonAt::Cell { .. } => Err(content::unexpected("recipient", &expected(), "'position'")),
+        SummonAt::Ground { .. } => Err(content::unexpected("recipient", &expected(), "'ground'")),
         SummonAt::Fallen { .. } => Err(content::unexpected("recipient", &expected(), "'fallen'")),
     }
 }
 
-/// Reads the spot a cast acts around: `"caster"`, a position, or something
+/// Reads the spot a cast acts around: `"caster"`, the ground, or something
 /// standing.
 fn parse_spot(value: &Value, registry: &ContentRegistry) -> crate::Result<Spot> {
     match parse_summon_at(value, registry)? {
         SummonAt::Caster => Ok(Spot::Caster),
-        SummonAt::Cell { reach } => Ok(Spot::Cell { reach }),
+        SummonAt::Ground { reach } => Ok(Spot::Ground { reach }),
         SummonAt::Standing { whom, reach } => Ok(Spot::Standing { whom, reach }),
         SummonAt::Fallen { .. } => {
-            let mut expected = vec!["'caster'", "'position'"];
+            let mut expected = vec!["'caster'", "'ground'"];
             expected.extend_from_slice(&SIDES);
             Err(content::unexpected("spot", &expected, "'fallen'"))
         }
     }
 }
 
-/// Reads an aim away from the caster: a position, or something standing.
+/// Reads an aim away from the caster: the ground, or something standing.
 fn parse_away(value: &Value, registry: &ContentRegistry) -> crate::Result<Away> {
     let expected = || {
-        let mut expected = vec!["'position'"];
+        let mut expected = vec!["'ground'"];
         expected.extend_from_slice(&SIDES);
         expected
     };
     match parse_summon_at(value, registry)? {
-        SummonAt::Cell { reach } => Ok(Away::Cell { reach }),
+        SummonAt::Ground { reach } => Ok(Away::Ground { reach }),
         SummonAt::Standing { whom, reach } => Ok(Away::Standing { whom, reach }),
         SummonAt::Caster => Err(content::unexpected(
             "aim away from the caster",
@@ -727,10 +727,10 @@ fn parse_standing_aim(value: &Value, registry: &ContentRegistry) -> crate::Resul
             &SIDES,
             "'caster'",
         )),
-        SummonAt::Cell { .. } => Err(content::unexpected(
+        SummonAt::Ground { .. } => Err(content::unexpected(
             "aim at something standing",
             &SIDES,
-            "'position'",
+            "'ground'",
         )),
         SummonAt::Fallen { .. } => Err(content::unexpected(
             "aim at something standing",

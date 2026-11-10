@@ -55,9 +55,7 @@ use ferrets_content::{
     turret::{TurretDef, TurretFire, TurretMount, TurretStats, WeaponConduct},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
-use ferrets_geometry::{
-    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
-};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 
 use ferrets_math::{
     FixedI64, FixedU64, facing::Facing, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2,
@@ -99,7 +97,7 @@ use ferrets_simulation::{
     input::{InputFrames, PlayerFrame},
     map::Map,
     map_data::MapData,
-    movement_model::MovementModel,
+    movement_model::{self, MovementModel},
     order::{AttackTarget, Order},
     resources::PlayerResources,
     ruleset::{RemainsLimit, Ruleset},
@@ -111,7 +109,7 @@ use ferrets_simulation::{
     },
     simulation_id::SimulationId,
     skirmish::Skirmish,
-    spawn::{self, Arrival, FieldReach},
+    spawn::{self, Arrival, At, FieldReach},
     statistics::Statistics,
     visibility::{self, Senses, Sighting},
 };
@@ -262,8 +260,8 @@ pub fn walker(name: &str, domain: DomainId) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(domain, CellSize::ONE, Solidity::Solid, domain_layer(domain))
         .with_movement(
-            FixedU64::from_num(0.5),
-            FixedU64::from_num(0.5),
+            fixed("0.5"),
+            fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -355,7 +353,7 @@ pub fn tick(app: &App) -> u32 {
 /// own 20 Hz.
 pub const NOMINAL_HZ: f64 = 20.0;
 /// The same cadence as a tick length, in the milliseconds the pacing counts in.
-pub const NOMINAL_MILLIS: FixedU64 = FixedU64::lit("50");
+pub const NOMINAL_MILLIS: FixedU64 = FixedU64::const_from_int(50);
 
 /// Makes `app` measure `exec_millis` per tick against the nominal cadence — the
 /// cost its throttle reacts to, and what it then reports to its peers.
@@ -422,14 +420,18 @@ pub fn sighting_of(app: &App, player: PlayerId, entity: Entity) -> Sighting {
     visibility::sighting(app.world(), player, entity, Senses::SeatDeclared)
 }
 
-pub fn pos(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
+/// The cell at `(x, y)`.
+pub fn cell(x: u32, y: u32) -> CellPos {
+    CellPos::new(x, y)
 }
 
-/// A position part way across its cells, which only a continuous-model body can
-/// hold (see [`continuous_orders_app`]). Written as decimals rather than floats,
-/// so the position is the one the digits name.
-pub fn part_way(x: &str, y: &str) -> FixedUVec2 {
+/// The middle of the cell at `(x, y)`.
+pub fn pos(x: u32, y: u32) -> FixedUVec2 {
+    cell(x, y).middle()
+}
+
+/// A point on the map, written as decimals.
+pub fn point(x: &str, y: &str) -> FixedUVec2 {
     let coordinate =
         |text: &str| FixedU64::from_str(text).unwrap_or_else(|_| panic!("'{text}' is a position"));
     FixedUVec2::new(coordinate(x), coordinate(y))
@@ -444,18 +446,18 @@ pub fn offset(from: FixedUVec2, to: FixedUVec2) -> FixedVec2 {
     )
 }
 
-/// Creates an entity of `type_name` at `position` for `owner`, its field
-/// sources at their initial reach, announcing nothing.
+/// Creates an entity of `type_name` anchored at `anchor` for `owner`, its
+/// field sources at their initial reach, announcing nothing.
 pub fn create_entity(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    anchor: CellPos,
     owner: Option<PlayerId>,
 ) -> Option<(Entity, SimulationId)> {
     spawn::create_entity(
         world,
         type_name,
-        position,
+        At::Cell(anchor),
         owner,
         FieldReach::Initial,
         Arrival::Standing { starts: &[] },
@@ -490,7 +492,7 @@ pub fn create_owned(
     spawn::create_entity(
         app.world_mut(),
         type_name,
-        pos(x, y),
+        At::Cell(cell(x, y)),
         Some(player),
         FieldReach::Initial,
         Arrival::Standing { starts: &[] },
@@ -513,7 +515,7 @@ pub fn create_rising(
     spawn::create_entity(
         app.world_mut(),
         type_name,
-        pos(x, y),
+        At::Cell(cell(x, y)),
         Some(player),
         FieldReach::Initial,
         Arrival::Rising {
@@ -583,7 +585,7 @@ pub fn place(app: &mut App, type_name: &str, x: u32, y: u32, player: PlayerId) -
     spawn::spawn_placed(
         app.world_mut(),
         type_name,
-        pos(x, y),
+        At::Cell(cell(x, y)),
         Some(player),
         FieldReach::Full,
         &[],
@@ -622,7 +624,8 @@ pub fn selection(app: &App) -> Vec<SimulationId> {
 }
 
 /// Two-player app for the selection and control-group suites: an armed unit, a
-/// one-hit-kill `critter` (for group pruning), and a tagged `keep` building.
+/// one-hit-kill `critter` (for group pruning), a 2×2 `brute`, and a tagged
+/// `keep` building.
 pub fn selection_app() -> App {
     let mut app = make_app(vec![
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
@@ -634,8 +637,8 @@ pub fn selection_app() -> App {
             EntityTypeDef::new("soldier")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -650,6 +653,12 @@ pub fn selection_app() -> App {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_pool(Pool::health(1))
                 .with_dying(1, []),
+        );
+        registry.register(
+            EntityTypeDef::new("brute")
+                .with_location(GROUND_DOMAIN, CellSize::new(2, 2), Solidity::Solid, GROUND)
+                .with_pool(Pool::health(100))
+                .with_sight_range(5),
         );
         registry.register(
             EntityTypeDef::new("keep")
@@ -673,8 +682,8 @@ pub fn cell_crowd_app() -> App {
             EntityTypeDef::new("soldier")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -686,7 +695,7 @@ pub fn cell_crowd_app() -> App {
             EntityTypeDef::new("wagon")
                 .with_location(GROUND_DOMAIN, CellSize::new(2, 2), Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.3),
+                    fixed("0.3"),
                     FixedU64::ONE,
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -726,8 +735,8 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
             EntityTypeDef::new("whelp")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -836,7 +845,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
             EntityTypeDef::new("wyrm")
                 .with_location(GROUND_DOMAIN, CellSize::new(3, 3), Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.3),
+                    fixed("0.3"),
                     FixedU64::ONE,
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -862,7 +871,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
             EntityTypeDef::new("giant")
                 .with_location(GROUND_DOMAIN, CellSize::new(3, 3), Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.3),
+                    fixed("0.3"),
                     FixedU64::ONE,
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -881,7 +890,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
             EntityTypeDef::new("ogre")
                 .with_location(GROUND_DOMAIN, CellSize::new(2, 2), Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.3),
+                    fixed("0.3"),
                     FixedU64::ONE,
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -894,8 +903,8 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
             EntityTypeDef::new("husk")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -907,8 +916,8 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
             EntityTypeDef::new("wisp")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -951,7 +960,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
             EntityTypeDef::new("golem")
                 .with_location(GROUND_DOMAIN, CellSize::new(2, 2), Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.3),
+                    fixed("0.3"),
                     FixedU64::ONE,
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -1010,8 +1019,8 @@ fn brood_mover(name: &str, max_health: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
         .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
         .with_movement(
-            FixedU64::from_num(0.5),
-            FixedU64::from_num(0.5),
+            fixed("0.5"),
+            fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -1252,7 +1261,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 .with_broodling(Attachment::new(
                     "brood",
                     BerthStance::Roaming {
-                        speed: FixedU64::from_num(0.1),
+                        speed: fixed("0.1"),
                         dwell: 5,
                     },
                 ))
@@ -1359,7 +1368,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 EntityTypeDef::new(name)
                     .with_location(GROUND_DOMAIN, CellSize::new(3, 3), Solidity::Solid, GROUND)
                     .with_movement(
-                        FixedU64::from_num(0.3),
+                        fixed("0.3"),
                         FixedU64::ONE,
                         FixedU64::ONE,
                         FixedU64::from_num(360),
@@ -1651,7 +1660,8 @@ pub fn run_steps(app: &mut App, steps: u32) {
     }
 }
 
-pub fn order_queue_is_empty(world: &mut World, entity: Entity) -> bool {
+/// Whether `entity` has no order left to carry out.
+pub fn order_queue_is_empty(world: &World, entity: Entity) -> bool {
     world
         .get::<OrderQueueComponent>(entity)
         .is_some_and(|q| q.front().is_none())
@@ -1699,8 +1709,8 @@ pub fn order_morph(app: &mut App, entity: Entity, type_name: &str) {
         );
 }
 
-/// Pushes a Move order to `(x, y)` onto the entity's queue, behind whatever
-/// it is doing.
+/// Pushes a Move order to the middle of the cell `(x, y)` onto the entity's
+/// queue, behind whatever it is doing.
 pub fn order_move(app: &mut App, entity: Entity, x: u32, y: u32) {
     order_move_onto(app, entity, pos(x, y));
 }
@@ -1758,13 +1768,22 @@ pub fn assert_despawned(world: &mut World, entity: Entity) {
     }
 }
 
-/// The cell the entity currently stands on.
-pub fn cell_of(world: &World, entity: Entity) -> CellPos {
-    CellPos::from(position_of(world, entity))
+/// The cell the entity is anchored at where it stands.
+pub fn anchor_of(world: &World, entity: Entity) -> CellPos {
+    entity_def::location(world, entity).anchor()
 }
 
-/// The entity's continuous position — sub-cell precise, where [`cell_of`]
-/// floors it to a cell.
+/// Moves the continuous-model `entity`'s body so its middle is at `point`, its
+/// claim following it.
+pub fn move_body(app: &mut App, entity: Entity, point: FixedUVec2) {
+    let world = app.world_mut();
+    let location = world
+        .resource::<Map>()
+        .location(point, entity_def::size(world, entity));
+    movement_model::move_body(world, entity, location);
+}
+
+/// The entity's position: its body's middle, sub-cell precise.
 pub fn position_of(world: &World, entity: Entity) -> FixedUVec2 {
     world.get::<LocationComponent>(entity).unwrap().position
 }
@@ -1834,7 +1853,7 @@ pub fn assert_reveal_deferred_then_lands_on(app: &mut App, worker: Entity, cell:
 
     assert!(!entity_def::hidden(app.world(), worker));
     assert!(!entity_def::pending_reveal(app.world(), worker));
-    assert_eq!(cell_of(app.world_mut(), worker), cell);
+    assert_eq!(anchor_of(app.world_mut(), worker), cell);
 }
 
 /// The entities of the given content type owned by `player`.
@@ -1863,7 +1882,7 @@ pub fn single_owned_of_type(world: &mut World, type_name: &str, player: PlayerId
 /// Whether two entities stand within `distance` of each other, measured the
 /// way the map itself measures — under its projection.
 pub fn within(world: &mut World, a: Entity, b: Entity, distance: u32) -> bool {
-    let (cell_a, cell_b) = (cell_of(world, a), cell_of(world, b));
+    let (cell_a, cell_b) = (anchor_of(world, a), anchor_of(world, b));
     world
         .resource::<Map>()
         .projection()
@@ -1873,17 +1892,15 @@ pub fn within(world: &mut World, a: Entity, b: Entity, distance: u32) -> bool {
 /// Asserts `unit` stands beside `building`'s footprint: within one cell of
 /// it, and not on it.
 pub fn assert_adjacent_to_footprint(world: &mut World, unit: Entity, building: Entity) {
-    let origin = cell_of(world, building);
-    let size = entity_def::of(world, building).location.unwrap().size();
-    let footprint = CellRect::new(origin, size);
-    let unit_cell = cell_of(world, unit);
+    let footprint = entity_def::location(world, building).footprint();
+    let unit_cell = anchor_of(world, unit);
     assert!(
         world
             .resource::<Map>()
             .projection()
             .in_range_of_rect(unit_cell, footprint, 1)
             && !footprint.contains(unit_cell),
-        "expected {unit_cell:?} beside the footprint at {origin:?}, not on it"
+        "expected {unit_cell:?} beside the footprint {footprint:?}, not on it"
     );
 }
 
@@ -2106,8 +2123,8 @@ pub fn combat_app() -> App {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(8)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2162,8 +2179,8 @@ pub fn combat_app() -> App {
             EntityTypeDef::new("gun_wagon")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2197,8 +2214,8 @@ pub fn combat_app() -> App {
             EntityTypeDef::new("rolling_gun")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2251,8 +2268,8 @@ pub fn combat_app() -> App {
             EntityTypeDef::new("rolling_mortar")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2446,8 +2463,8 @@ pub fn combat_app() -> App {
             EntityTypeDef::new("prowler")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2484,8 +2501,8 @@ pub fn combat_app() -> App {
             EntityTypeDef::new("escort")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2529,7 +2546,7 @@ pub fn combat_app() -> App {
                 .with_location(GROUND_DOMAIN, CellSize::new(2, 2), Solidity::Solid, GROUND)
                 .with_sight_range(12)
                 .with_movement(
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -2601,8 +2618,8 @@ pub fn supply_app() -> App {
             EntityTypeDef::new("settler")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2627,8 +2644,8 @@ pub fn supply_app() -> App {
             EntityTypeDef::new("pioneer")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2664,8 +2681,8 @@ pub fn player_effects_app() -> App {
             EntityTypeDef::new("runner")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2760,8 +2777,8 @@ pub fn research_app_seating(slots: Vec<PlayerSlot>) -> App {
             EntityTypeDef::new(name)
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -2889,8 +2906,8 @@ pub fn annex_app() -> App {
             EntityTypeDef::new("keep_aloft")
                 .with_location(AIR_DOMAIN, CellSize::new(2, 2), Solidity::Solid, AIR)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3088,8 +3105,8 @@ pub fn annex_app() -> App {
             EntityTypeDef::new("runner")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3115,8 +3132,8 @@ pub fn annex_app() -> App {
             EntityTypeDef::new("sentry")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3153,8 +3170,8 @@ pub fn transport_app() -> App {
             EntityTypeDef::new("rifleman")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3196,8 +3213,8 @@ pub fn transport_app() -> App {
             EntityTypeDef::new("grunt")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3211,8 +3228,8 @@ pub fn transport_app() -> App {
             EntityTypeDef::new("civilian")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3225,8 +3242,8 @@ pub fn transport_app() -> App {
             EntityTypeDef::new(name)
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3482,8 +3499,8 @@ pub fn transport_app() -> App {
             EntityTypeDef::new("gun_rider")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3534,7 +3551,7 @@ pub fn transport_app() -> App {
                         Delivery::Instant,
                         Some(SplashDef::new(
                             SplashShape::Circular,
-                            vec![(2, FixedU64::from_num(0.5))],
+                            vec![(2, fixed("0.5"))],
                             GROUND,
                             true,
                         )),
@@ -3569,8 +3586,8 @@ pub fn corner_app() -> App {
             EntityTypeDef::new("runner")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.3),
-                    FixedU64::from_num(0.5),
+                    fixed("0.3"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3598,8 +3615,8 @@ pub fn turning_app() -> App {
             EntityTypeDef::new("nimble")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.25),
-                    FixedU64::from_num(0.5),
+                    fixed("0.25"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(9),
                     FixedU64::from_num(18),
@@ -3610,8 +3627,8 @@ pub fn turning_app() -> App {
             EntityTypeDef::new("ponderous")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.25),
-                    FixedU64::from_num(0.5),
+                    fixed("0.25"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(9),
                     FixedU64::ONE,
@@ -3669,7 +3686,7 @@ pub fn load(app: &mut App, holder: SimulationId, target: SimulationId) {
 }
 
 /// Issues an unload command for `holder` as the local player.
-pub fn unload(app: &mut App, holder: SimulationId, at: Option<FixedUVec2>) {
+pub fn unload(app: &mut App, holder: SimulationId, at: Option<CellPos>) {
     push_command(
         app,
         PlayerCommand::Unload {
@@ -3680,8 +3697,8 @@ pub fn unload(app: &mut App, holder: SimulationId, at: Option<FixedUVec2>) {
     );
 }
 
-/// Sets `entity`'s rally point to `(x, y)` for player 0, and lets the command
-/// land.
+/// Sets `entity`'s rally point to the middle of the cell `(x, y)` for
+/// player 0, and lets the command land.
 pub fn set_rally(app: &mut App, entity: SimulationId, x: u32, y: u32) {
     set_rally_to(app, entity, RallyTarget::Position(pos(x, y)));
     run_ticks(app, APPLY);
@@ -3777,7 +3794,7 @@ pub fn warp_in(app: &mut App, warper: SimulationId, type_name: &str, x: u32, y: 
         PlayerCommand::WarpIn {
             warper,
             type_name: type_name.into(),
-            at: pos(x, y),
+            anchor: cell(x, y),
         },
     );
 }
@@ -3790,7 +3807,7 @@ pub fn build_entity(app: &mut App, builder: SimulationId, type_name: &str, x: u3
         PlayerCommand::BuildEntity {
             builder,
             type_name: type_name.into(),
-            position: pos(x, y),
+            anchor: cell(x, y),
             flush: false,
         },
     );
@@ -3858,7 +3875,7 @@ pub fn cast_at(app: &mut App, caster: SimulationId, skill: &str, x: u32, y: u32)
         app,
         skill,
         SkillCasterRef::Entity(caster),
-        Some(SkillTarget::Position(pos(x, y))),
+        Some(SkillTarget::Cell(cell(x, y))),
     );
 }
 
@@ -3903,8 +3920,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -3923,7 +3940,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::new(2, 2), Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -3939,8 +3956,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::from_num(4),
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4063,8 +4080,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4102,8 +4119,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4124,8 +4141,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4147,8 +4164,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4171,8 +4188,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4189,8 +4206,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4206,8 +4223,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4236,8 +4253,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4266,8 +4283,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4332,8 +4349,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4377,8 +4394,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4423,8 +4440,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4441,7 +4458,7 @@ pub fn register_orders_content(app: &mut App) {
                         WorkPresence::Attached(Attachment::new(
                             "rim",
                             BerthStance::Roaming {
-                                speed: FixedU64::from_num(0.25),
+                                speed: fixed("0.25"),
                                 dwell: 2,
                             },
                         )),
@@ -4457,8 +4474,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4475,7 +4492,7 @@ pub fn register_orders_content(app: &mut App) {
                         WorkPresence::Attached(Attachment::new(
                             "rim",
                             BerthStance::Circling {
-                                speed: FixedU64::from_num(0.25),
+                                speed: fixed("0.25"),
                                 dwell: 2,
                             },
                         )),
@@ -4491,8 +4508,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4509,7 +4526,7 @@ pub fn register_orders_content(app: &mut App) {
                         WorkPresence::Attached(Attachment::new(
                             "canopy",
                             BerthStance::Orbit {
-                                radius: FixedU64::from_num(0.25),
+                                radius: fixed("0.25"),
                                 period: 4,
                             },
                         )),
@@ -4524,8 +4541,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4552,8 +4569,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4583,8 +4600,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4643,8 +4660,8 @@ pub fn register_orders_content(app: &mut App) {
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_sight_range(40)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4782,8 +4799,8 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("walking_shaft")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4836,8 +4853,8 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("walking_pump")
                 .with_location(GROUND_DOMAIN, CellSize::new(3, 3), Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4861,8 +4878,8 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("ghost")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Passable, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4875,8 +4892,8 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("sentry")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -4893,8 +4910,8 @@ pub fn register_orders_content(app: &mut App) {
             EntityTypeDef::new("archer")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
                 .with_movement(
-                    FixedU64::from_num(0.5),
-                    FixedU64::from_num(0.5),
+                    fixed("0.5"),
+                    fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
                     FixedU64::from_num(360),
@@ -5008,8 +5025,8 @@ pub fn harness_soldier() -> EntityTypeDef {
         .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND)
         .with_sight_range(8)
         .with_movement(
-            FixedU64::from_num(0.5),
-            FixedU64::from_num(0.5),
+            fixed("0.5"),
+            fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),

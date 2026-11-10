@@ -6,22 +6,18 @@
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{ReplayPlayback, instantiate_map};
 use ferrets_content::player_stats::PlayerStatId;
-use ferrets_geometry::projection::Projection;
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
+use ferrets_math::FixedU64;
 use ferrets_simulation::{
     map::Map,
     movement_model::MovementModel,
     player_stats::PlayerStats,
     resources::PlayerResources,
     session::{GameSession, player_id::PlayerId},
-    spawn::{self, FieldReach},
+    spawn::{self, At, FieldReach},
 };
 
 use crate::{map, settings::Settings};
-
-fn cell(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
-}
 
 /// The rules to build the scene's map under, in order of authority: a replay
 /// states the ones its recorded game was played with, a live game takes the
@@ -118,7 +114,7 @@ fn spawn_base(world: &mut World, player: PlayerId, race: &str, (x, y): (u32, u32
         if spawn::spawn_placed(
             world,
             type_name,
-            cell(x, y),
+            At::Cell(CellPos::new(x, y)),
             Some(player),
             FieldReach::Full,
             &[],

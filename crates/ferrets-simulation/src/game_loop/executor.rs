@@ -5,7 +5,7 @@
 //! the single exception — any visible entity can be selected.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
 use super::{
@@ -30,6 +30,7 @@ use crate::{
     entity_index::EntityIndex,
     events::SpendCause,
     input::InputFrames,
+    map::Map,
     order::{AttackTarget, BuildTask, Order},
     player_research::PlayerResearch,
     requirements,
@@ -37,7 +38,7 @@ use crate::{
     selection::Selection,
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
-    spawn::{self, FieldReach},
+    spawn::{self, At, FieldReach},
     supply, tunnels, visibility,
 };
 use ferrets_content::{
@@ -141,15 +142,14 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             apply_selection(world, player, candidates, *mode);
         }
         PlayerCommand::Move { target, flush } => {
+            if !on_map(world, *target) {
+                return;
+            }
             let commanded = commanded_selection(world, player);
             issue(
                 world,
                 commanded,
-                Order::Move {
-                    target: *target,
-                    size: CellSize::ONE,
-                    range: 0,
-                },
+                orders::move_to_point(*target),
                 CancelPolicy::from_bool(*flush),
             );
         }
@@ -161,11 +161,19 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             //
             // A named target is never ordered to attack itself; a cell excludes nobody.
             // A named target must be in sight to be named at all — fog
-            // refuses the order the way it hides the sprite.
-            if let Some(id) = target.entity()
-                && visibility::interactable_to(world, player, id).is_none()
-            {
-                return;
+            // refuses the order the way it hides the sprite; a cell must lie
+            // on the map.
+            match target {
+                AttackTarget::Entity(id) => {
+                    if visibility::interactable_to(world, player, *id).is_none() {
+                        return;
+                    }
+                }
+                AttackTarget::Cell(cell) => {
+                    if !world.resource::<Map>().contains(*cell) {
+                        return;
+                    }
+                }
             }
             let commanded = match target.entity() {
                 Some(id) => commanded_selection_excluding(world, player, id),
@@ -182,6 +190,9 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             );
         }
         PlayerCommand::AttackMove { target, flush } => {
+            if !on_map(world, *target) {
+                return;
+            }
             let commanded = commanded_selection(world, player);
             issue(
                 world,
@@ -191,6 +202,9 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             );
         }
         PlayerCommand::Patrol { target, flush } => {
+            if !on_map(world, *target) {
+                return;
+            }
             let commanded = commanded_selection(world, player);
             issue(
                 world,
@@ -234,12 +248,15 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
         PlayerCommand::WarpIn {
             warper,
             type_name,
-            at,
+            anchor,
         } => {
+            if !fits_map_at(world, type_name, *anchor) {
+                return;
+            }
             let Some(entity) = find_owned_interactable(world, player, *warper) else {
                 return;
             };
-            if let Ok(plan) = warp::judge(world, player, entity, type_name, *at) {
+            if let Ok(plan) = warp::judge(world, player, entity, type_name, *anchor) {
                 warp::begin(world, player, plan);
             }
         }
@@ -256,10 +273,18 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             // An entity target must exist when the rally point is set, matching
             // the send-to-entity rule; it may be gone again by the time a unit
             // spawns, which spawn-time resolution handles.
-            if let Some(RallyTarget::Entity(id)) = target
-                && visibility::interactable_to(world, player, *id).is_none()
-            {
-                return;
+            match target {
+                Some(RallyTarget::Entity(id)) => {
+                    if visibility::interactable_to(world, player, *id).is_none() {
+                        return;
+                    }
+                }
+                Some(RallyTarget::Position(point)) => {
+                    if !on_map(world, *point) {
+                        return;
+                    }
+                }
+                None => {}
             }
             if let Some(mut rally) = world.entity_mut(entity).get_mut::<RallyPointComponent>() {
                 rally.0 = *target;
@@ -268,9 +293,12 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
         PlayerCommand::BuildEntity {
             builder,
             type_name,
-            position,
+            anchor,
             flush,
         } => {
+            if !fits_map_at(world, type_name, *anchor) {
+                return;
+            }
             let Some(entity) = find_owned_interactable(world, player, *builder) else {
                 return;
             };
@@ -278,7 +306,7 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
                 world,
                 vec![entity],
                 Order::Build {
-                    task: BuildTask::found(type_name, *position),
+                    task: BuildTask::found(type_name, *anchor),
                 },
                 CancelPolicy::from_bool(*flush),
             );
@@ -355,6 +383,11 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             let Some(entity) = find_owned_interactable(world, player, *holder) else {
                 return;
             };
+            if let Some(cell) = at
+                && !world.resource::<Map>().contains(*cell)
+            {
+                return;
+            }
             issue(
                 world,
                 vec![entity],
@@ -396,12 +429,18 @@ fn execute(world: &mut World, player: PlayerId, command: &PlayerCommand) {
             type_name,
             position,
         } => {
-            // Sandbox spawn: no-op if the type is unknown or the cell is
-            // blocked. The position comes off the wire, so it is floored to
-            // the cell origin the spawn contract requires rather than
-            // trusted to be one.
-            let corner = FixedUVec2::from(CellPos::from(*position));
-            spawn::spawn_sandbox(world, type_name, corner, Some(player), FieldReach::Initial);
+            if !on_map(world, *position) {
+                return;
+            }
+            // Sandbox spawn: no-op if the type is unknown, wider or taller
+            // than the map, or the ground there does not take it.
+            spawn::spawn_sandbox(
+                world,
+                type_name,
+                At::Position(*position),
+                Some(player),
+                FieldReach::Initial,
+            );
         }
     }
 }
@@ -478,6 +517,9 @@ fn train_entity(world: &mut World, player: PlayerId, trainer: SimulationId, type
         .as_ref()
         .is_some_and(|t| t.can_train(type_name))
     {
+        return;
+    }
+    if !fits_map(world, type_name) {
         return;
     }
     // A bound tunnel end has its other end already.
@@ -780,8 +822,6 @@ fn research_in_flight(world: &World, player: PlayerId, research: ResearchId) -> 
 /// Buildings are excluded from a rect selection (they can still be selected
 /// individually). When the box holds no own units it falls back to a single
 /// other-owner entity so an enemy or neutral can still be boxed to inspect it.
-/// The rectangle tests footprint centers, so boxing matches what an entity
-/// is drawn as even when a continuous mover rests between cell origins.
 fn resolve_box_selection(world: &World, player: PlayerId, rect: &FixedURect) -> Vec<SimulationId> {
     let index = world.resource::<EntityIndex>();
     let in_rect: Vec<(SimulationId, Entity)> = index
@@ -789,7 +829,7 @@ fn resolve_box_selection(world: &World, player: PlayerId, rect: &FixedURect) -> 
         .into_iter()
         .filter(|&(id, entity)| {
             visibility::interactable_to(world, player, id).is_some()
-                && rect.contains(entity_def::footprint_center(world, entity))
+                && boxed(world, entity, rect)
                 && !world
                     .entity(entity)
                     .get::<TagsComponent>()
@@ -832,7 +872,7 @@ fn resolve_type_selection(
         .filter(|&(id, entity)| {
             index.interactable(world, id).is_some()
                 && entity_def::owner(world, entity) == Some(player)
-                && rect.contains(entity_def::footprint_center(world, entity))
+                && boxed(world, entity, rect)
                 && world
                     .entity(entity)
                     .get::<EntityInfoComponent>()
@@ -977,4 +1017,37 @@ fn use_skill(
         (SkillCasterRef::Player, SkillCaster::Entity { .. })
         | (SkillCasterRef::Entity(_), SkillCaster::Player { .. }) => {}
     }
+}
+
+/// Whether `point`, a point a command names, lies on the map.
+fn on_map(world: &World, point: FixedUVec2) -> bool {
+    world.resource::<Map>().contains(CellPos::from(point))
+}
+
+/// Whether a body of `type_name` fits on the map: no wider and no taller.
+fn fits_map(world: &World, type_name: &str) -> bool {
+    body_fits(world, world.resource::<Map>(), type_name)
+}
+
+/// Whether `anchor` lies on the map and a body of `type_name` fits on it.
+fn fits_map_at(world: &World, type_name: &str, anchor: CellPos) -> bool {
+    let map = world.resource::<Map>();
+    map.contains(anchor) && body_fits(world, map, type_name)
+}
+
+/// Whether a body of `type_name` fits on `map`: true for a type the registry
+/// does not know or one with no location.
+fn body_fits(world: &World, map: &Map, type_name: &str) -> bool {
+    world
+        .resource::<ContentRegistry>()
+        .entity(type_name)
+        .and_then(|def| def.location)
+        .is_none_or(|location| map.fits(location.size()))
+}
+
+/// Whether a selection box `rect` holds `entity`: its middle lies in the box,
+/// the far edges excluded, so boxes that share an edge never hold the same
+/// body.
+fn boxed(world: &World, entity: Entity, rect: &FixedURect) -> bool {
+    rect.contains_half_open(entity_def::position(world, entity))
 }

@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use bevy_ecs::prelude::*;
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_geometry::cell_pos::CellPos;
 
 use crate::{components::chase::ChaseState, simulation_id::SimulationId};
 
@@ -78,7 +78,7 @@ impl LoadComponent {
 #[derive(Component, Debug)]
 pub struct UnloadComponent {
     /// Where to let the passengers out, if the order named a destination.
-    pub at: Option<FixedUVec2>,
+    pub at: Option<CellPos>,
     /// Ticks left before the next passenger may step out.
     pub cooldown: u32,
     /// The last chase round toward the destination; identical rounds
@@ -88,7 +88,7 @@ pub struct UnloadComponent {
 
 impl UnloadComponent {
     /// Creates in-flight unloading state aimed at `at`.
-    pub fn new(at: Option<FixedUVec2>) -> Self {
+    pub fn new(at: Option<CellPos>) -> Self {
         Self {
             at,
             cooldown: 0,

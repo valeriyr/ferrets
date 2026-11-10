@@ -349,7 +349,12 @@ fn landing_carries_each_named_pool_by_its_own_carry() {
     let (flask, _) = utils::create_owned(&mut app, "flask", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
     utils::wound(&mut app, flask, "25");
-    pools::drain(app.world_mut(), flask, PoolId::ENERGY, utils::fixed("30"));
+    pools::drain(
+        app.world_mut(),
+        flask,
+        PoolId::ENERGY,
+        FixedU64::from_num(30),
+    );
 
     // Health by share, 25 of 50 onto 80: 40. Energy full: 20 of 20.
     utils::order_morph(&mut app, flask, "vessel");
@@ -365,7 +370,12 @@ fn pool_landing_names_not_keeps_its_value_under_new_maximum() {
     let (flask, _) = utils::create_owned(&mut app, "flask", 5, 5, 0);
     let (other, _) = utils::create_owned(&mut app, "flask", 7, 5, 0);
     utils::run_ticks(&mut app, 1);
-    pools::drain(app.world_mut(), other, PoolId::ENERGY, utils::fixed("30"));
+    pools::drain(
+        app.world_mut(),
+        other,
+        PoolId::ENERGY,
+        FixedU64::from_num(30),
+    );
 
     // Energy is not named: the full 40 is held under the jar's 30, and 10 of
     // 40 stays 10.
@@ -455,7 +465,12 @@ fn kept_pool_carried_as_initial_starts_at_new_forms_initial() {
     );
     let (carafe, _) = utils::create_owned(&mut app, "carafe", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    pools::drain(app.world_mut(), carafe, PoolId::ENERGY, utils::fixed("35"));
+    pools::drain(
+        app.world_mut(),
+        carafe,
+        PoolId::ENERGY,
+        FixedU64::from_num(35),
+    );
     utils::order_morph(&mut app, carafe, "wick");
     utils::run_ticks(&mut app, HATCHES);
     // 40 − 35 = 5 as a carafe; the wick starts it at its own quarter of 40: 10.
@@ -469,7 +484,12 @@ fn initial_carry_enters_interim_and_lands_at_each_forms_initial() {
     let (sprout, _) = utils::create_owned(&mut app, "sprout", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
     // 10 as a sprout, 5 after a drain; the pod starts it at half of 40, 20.
-    pools::drain(app.world_mut(), sprout, PoolId::ENERGY, utils::fixed("5"));
+    pools::drain(
+        app.world_mut(),
+        sprout,
+        PoolId::ENERGY,
+        FixedU64::from_num(5),
+    );
     utils::order_morph(&mut app, sprout, "bloom");
     utils::run_ticks(&mut app, 1);
     assert_eq!(entity_def::type_name(app.world(), sprout), "pod");
@@ -488,7 +508,12 @@ fn initial_carry_reverts_to_origins_initial() {
     utils::order_morph(&mut app, sprout, "bloom");
     utils::run_ticks(&mut app, 1);
     // 20 in the pod, 2 after a drain; called off, the sprout starts it at 10.
-    pools::drain(app.world_mut(), sprout, PoolId::ENERGY, utils::fixed("18"));
+    pools::drain(
+        app.world_mut(),
+        sprout,
+        PoolId::ENERGY,
+        FixedU64::from_num(18),
+    );
     utils::soft_cancel_orders(app.world_mut(), sprout);
     utils::run_ticks(&mut app, 1);
     assert_eq!(entity_def::type_name(app.world(), sprout), "sprout");
@@ -501,7 +526,12 @@ fn initial_carry_starts_pool_interim_lacked_at_initial() {
     // Through a husk with no energy, landing on a fruit: a quarter of 60, 15.
     let (sprout, _) = utils::create_owned(&mut app, "sprout", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    pools::drain(app.world_mut(), sprout, PoolId::ENERGY, utils::fixed("5"));
+    pools::drain(
+        app.world_mut(),
+        sprout,
+        PoolId::ENERGY,
+        FixedU64::from_num(5),
+    );
     utils::order_morph(&mut app, sprout, "fruit");
     utils::run_ticks(&mut app, 1);
     assert_eq!(entity_def::type_name(app.world(), sprout), "husk");
@@ -512,7 +542,12 @@ fn initial_carry_starts_pool_interim_lacked_at_initial() {
     // Called off in the husk, back to the sprout's own 10.
     let (other, _) = utils::create_owned(&mut app, "sprout", 8, 5, 0);
     utils::run_ticks(&mut app, 1);
-    pools::drain(app.world_mut(), other, PoolId::ENERGY, utils::fixed("5"));
+    pools::drain(
+        app.world_mut(),
+        other,
+        PoolId::ENERGY,
+        FixedU64::from_num(5),
+    );
     utils::order_morph(&mut app, other, "fruit");
     utils::run_ticks(&mut app, 1);
     utils::soft_cancel_orders(app.world_mut(), other);
@@ -549,7 +584,7 @@ fn amount_initial_held_under_maximum_its_passives_lower() {
                     FixedU64::from_num(50),
                     FixedU64::ZERO,
                     FixedU64::ZERO,
-                    PoolInitial::Amount(utils::fixed("45")),
+                    PoolInitial::Amount(FixedU64::from_num(45)),
                 ))
                 .with_passives([dimmed]),
         );
@@ -622,7 +657,7 @@ fn buff_interim_cannot_carry_leaves_origin_by_share_before_record() {
         app.world_mut(),
         caterpillar,
         PoolId::ENERGY,
-        utils::fixed("20"),
+        FixedU64::from_num(20),
     );
 
     // 60 of 80 under `charged`; the chrysalis cannot carry it, so it leaves
@@ -648,7 +683,7 @@ fn pool_interim_lacks_takes_shifts_of_its_absence() {
         app.world_mut(),
         caterpillar,
         PoolId::ENERGY,
-        utils::fixed("30"),
+        FixedU64::from_num(30),
     );
     utils::order_morph(&mut app, caterpillar, "skipper");
     utils::run_ticks(&mut app, 1);
@@ -676,7 +711,7 @@ fn landing_carries_pool_interim_lacked_from_origin_maximum() {
         app.world_mut(),
         caterpillar,
         PoolId::ENERGY,
-        utils::fixed("30"),
+        FixedU64::from_num(30),
     );
 
     // 10 of the caterpillar's 40, carried by share onto the emperor's 100:
@@ -696,7 +731,7 @@ fn landing_carries_pool_interim_lacked_from_origin_maximum_now() {
         app.world_mut(),
         caterpillar,
         PoolId::ENERGY,
-        utils::fixed("20"),
+        FixedU64::from_num(20),
     );
     utils::order_morph(&mut app, caterpillar, "emperor");
     utils::run_ticks(&mut app, 1);
@@ -720,7 +755,7 @@ fn landing_carries_pool_interim_lacked_under_origin_passives() {
         app.world_mut(),
         glowworm,
         PoolId::ENERGY,
-        utils::fixed("30"),
+        FixedU64::from_num(30),
     );
 
     // 30 of 60 under `spark`, which belongs to the glowworm's form: it does
@@ -766,7 +801,7 @@ fn revert_keeps_origin_passive_out_of_its_missed_shifts() {
         app.world_mut(),
         glowworm,
         PoolId::ENERGY,
-        utils::fixed("30"),
+        FixedU64::from_num(30),
     );
 
     // 30 of 60 under `spark`; back as a glowworm, `spark` is fitted again and
@@ -788,7 +823,7 @@ fn landing_fills_pool_interim_lacked_when_named_full() {
         app.world_mut(),
         caterpillar,
         PoolId::ENERGY,
-        utils::fixed("30"),
+        FixedU64::from_num(30),
     );
 
     // 10 of 40 recorded; the regent's landing names energy full: 100 of 100.
@@ -850,7 +885,12 @@ fn lowered_maximum_may_empty_energy() {
     let mut app = app();
     let (keep, _) = utils::create_owned(&mut app, "keep", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    pools::drain(app.world_mut(), keep, PoolId::ENERGY, utils::fixed("30"));
+    pools::drain(
+        app.world_mut(),
+        keep,
+        PoolId::ENERGY,
+        FixedU64::from_num(30),
+    );
 
     // 10 of 40, cut by 30 by difference: 10 − 30 held at 0 — only a live
     // health pool is kept above empty.
@@ -865,7 +905,12 @@ fn share_from_zero_maximum_returns_nothing() {
     let mut app = app();
     let (keep, _) = utils::create_owned(&mut app, "keep", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    pools::drain(app.world_mut(), keep, PoolId::ENERGY, utils::fixed("10"));
+    pools::drain(
+        app.world_mut(),
+        keep,
+        PoolId::ENERGY,
+        FixedU64::from_num(10),
+    );
 
     // 30 of 40, the maximum taken to 40 × (1 − 1) = 0: 30 × 0 / 40 = 0.
     let silenced = utils::entity_buff_id(&app, "silenced");
@@ -884,7 +929,12 @@ fn clamp_from_zero_maximum_returns_nothing() {
     let mut app = app();
     let (keep, _) = utils::create_owned(&mut app, "keep", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    pools::drain(app.world_mut(), keep, PoolId::ENERGY, utils::fixed("10"));
+    pools::drain(
+        app.world_mut(),
+        keep,
+        PoolId::ENERGY,
+        FixedU64::from_num(10),
+    );
 
     // 30 of 40 held under a maximum of 0: min(30, 0) = 0; back to 40, the
     // value stays where it is: 0 of 40.
@@ -902,7 +952,12 @@ fn difference_from_zero_maximum_returns_whole_new_maximum() {
     let mut app = app();
     let (keep, _) = utils::create_owned(&mut app, "keep", 5, 5, 0);
     utils::run_ticks(&mut app, 1);
-    pools::drain(app.world_mut(), keep, PoolId::ENERGY, utils::fixed("10"));
+    pools::drain(
+        app.world_mut(),
+        keep,
+        PoolId::ENERGY,
+        FixedU64::from_num(10),
+    );
 
     // 30 of 40, the maximum down by 40: 30 − 40 held at 0; back up by 40:
     // 0 + 40 = 40 of 40.
@@ -1193,7 +1248,12 @@ fn restore_holds_under_effective_maximum() {
 
     // 70 of 100, braced to 120 of 150; 120 + 50 = 170 is held at the braced
     // 150, not the declared 100.
-    pools::restore(app.world_mut(), keep, PoolId::HEALTH, utils::fixed("50"));
+    pools::restore(
+        app.world_mut(),
+        keep,
+        PoolId::HEALTH,
+        FixedU64::from_num(50),
+    );
     assert_eq!(utils::health_as_u32(&app, keep), 150);
 }
 
@@ -1208,7 +1268,7 @@ fn refunded_cost_holds_under_maximum() {
     utils::order_morph(&mut app, egg, "shell");
     utils::run_ticks(&mut app, 2);
     assert_eq!(utils::health_as_u32(&app, egg), 40);
-    pools::restore(app.world_mut(), egg, PoolId::HEALTH, utils::fixed("10"));
+    pools::restore(app.world_mut(), egg, PoolId::HEALTH, FixedU64::from_num(10));
     utils::push_command(&mut app, PlayerCommand::CancelMorph { entity: egg_id });
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert_eq!(entity_def::type_name(app.world(), egg), "egg");
@@ -1692,14 +1752,14 @@ fn app() -> App {
                     FixedU64::from_num(50),
                     FixedU64::ZERO,
                     FixedU64::ZERO,
-                    PoolInitial::Amount(utils::fixed("30")),
+                    PoolInitial::Amount(FixedU64::from_num(30)),
                 ))
                 .with_passives([wings]),
         );
         // A wick starting at a quarter of its 40 energy, and a taper at 15.
         for (name, initial) in [
             ("wick", PoolInitial::Share(utils::fixed("0.25"))),
-            ("taper", PoolInitial::Amount(utils::fixed("15"))),
+            ("taper", PoolInitial::Amount(FixedU64::from_num(15))),
         ] {
             registry.register(
                 EntityTypeDef::new(name)
@@ -1834,7 +1894,7 @@ fn spun_caterpillar(app: &mut App, into: &str) -> Entity {
         app.world_mut(),
         caterpillar,
         PoolId::ENERGY,
-        utils::fixed("30"),
+        FixedU64::from_num(30),
     );
     utils::order_morph(app, caterpillar, into);
     utils::run_ticks(app, 1);
@@ -1925,7 +1985,7 @@ fn carry_initial_app() -> App {
         };
         registry.register(
             vessel("sprout")
-                .with_pool(energy(40, PoolInitial::Amount(utils::fixed("10"))))
+                .with_pool(energy(40, PoolInitial::Amount(FixedU64::from_num(10))))
                 .with_morphs([
                     via("bloom", "pod", vec![(PoolId::ENERGY, PoolCarry::Initial)]),
                     via("fruit", "husk", Vec::new()),

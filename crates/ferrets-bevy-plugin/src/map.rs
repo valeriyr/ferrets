@@ -2,14 +2,14 @@
 
 use bevy::prelude::*;
 use ferrets_content::{pool::PoolInitial, pool_def::PoolId, registry::ContentRegistry};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
     components::resource::ResourceSourceComponent,
     fields::FieldGrid,
     map::Map,
     map_data::MapData,
     session::GameSession,
-    spawn::{self, FieldReach},
+    spawn::{self, At, FieldReach},
     visibility::VisibilityGrid,
     watches::Watches,
 };
@@ -41,7 +41,6 @@ pub fn instantiate_map(world: &mut World, data: &MapData) {
             }
         }
         let (x, y) = placement.cell;
-        let position = FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y));
         let starts: Vec<(PoolId, PoolInitial)> = placement
             .pools
             .iter()
@@ -56,7 +55,7 @@ pub fn instantiate_map(world: &mut World, data: &MapData) {
         let Some((entity, _)) = spawn::spawn_placed(
             world,
             &placement.type_name,
-            position,
+            At::Cell(CellPos::new(x, y)),
             placement.owner,
             FieldReach::Full,
             &starts,

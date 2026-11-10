@@ -7,7 +7,6 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::SimulationPlugin;
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{content::CONTENT, map, ruleset, setup};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     components::{
@@ -55,13 +54,9 @@ fn worker_harvests_wood_on_demo_map() {
     }
 
     // A worker beside player 0's grove at (8..10, 20..21).
-    let (worker, worker_id) = utils::create_entity(
-        app.world_mut(),
-        "peasant",
-        FixedUVec2::new(FixedU64::from_num(7), FixedU64::from_num(20)),
-        Some(0),
-    )
-    .expect("worker spawns");
+    let (worker, worker_id) =
+        utils::create_entity(app.world_mut(), "peasant", utils::cell(7, 20), Some(0))
+            .expect("worker spawns");
 
     // Find a tree's id to harvest.
     let tree_id: SimulationId = {
@@ -70,7 +65,7 @@ fn worker_harvests_wood_on_demo_map() {
             .query::<(&EntityInfoComponent, &LocationComponent)>()
             .iter(world)
             .find(|(info, location)| {
-                info.type_name() == "tree" && location.position.x == FixedU64::from_num(8)
+                info.type_name() == "tree" && location.position.x == utils::cells("8.5")
             })
             .map(|(info, _)| info.id())
             .expect("tree exists")
@@ -93,7 +88,7 @@ fn worker_harvests_wood_on_demo_map() {
     assert_eq!(wood, 235, "wood banked by tick 300");
     assert_eq!(
         utils::position_of(world, worker),
-        FixedUVec2::new(FixedU64::from_num(9), FixedU64::from_num(19)),
+        utils::pos(9, 19),
         "the worker rests on the lattice beside its work"
     );
 }

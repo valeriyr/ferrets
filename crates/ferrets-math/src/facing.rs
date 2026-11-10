@@ -94,7 +94,7 @@ impl Facing {
     pub fn unit(self) -> FixedVec2 {
         /// The vertices, clockwise from north.
         const VERTICES: [(FixedI64, FixedI64); 16] = [
-            (FixedI64::ZERO, FixedI64::lit("-1")),
+            (FixedI64::ZERO, FixedI64::NEG_ONE),
             (
                 FixedI64::lit("0.38268343236"),
                 FixedI64::lit("-0.92387953251"),
@@ -107,7 +107,7 @@ impl Facing {
                 FixedI64::lit("0.92387953251"),
                 FixedI64::lit("-0.38268343236"),
             ),
-            (FixedI64::lit("1"), FixedI64::ZERO),
+            (FixedI64::ONE, FixedI64::ZERO),
             (
                 FixedI64::lit("0.92387953251"),
                 FixedI64::lit("0.38268343236"),
@@ -120,7 +120,7 @@ impl Facing {
                 FixedI64::lit("0.38268343236"),
                 FixedI64::lit("0.92387953251"),
             ),
-            (FixedI64::ZERO, FixedI64::lit("1")),
+            (FixedI64::ZERO, FixedI64::ONE),
             (
                 FixedI64::lit("-0.38268343236"),
                 FixedI64::lit("0.92387953251"),
@@ -133,7 +133,7 @@ impl Facing {
                 FixedI64::lit("-0.92387953251"),
                 FixedI64::lit("0.38268343236"),
             ),
-            (FixedI64::lit("-1"), FixedI64::ZERO),
+            (FixedI64::NEG_ONE, FixedI64::ZERO),
             (
                 FixedI64::lit("-0.92387953251"),
                 FixedI64::lit("-0.38268343236"),

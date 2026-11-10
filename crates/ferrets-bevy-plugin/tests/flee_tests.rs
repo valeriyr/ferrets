@@ -3,9 +3,10 @@
 
 mod utils;
 
+use bevy::prelude::*;
 use ferrets_content::pool_def::PoolId;
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -25,17 +26,17 @@ fn commanded_worker_keeps_harvesting_under_fire() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (worker, worker_id) =
-        utils::create_entity(world, "worker", utils::pos(9, 10), Some(0)).unwrap();
-    let (mine, mine_id) = utils::create_entity(world, "mine", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(world, "worker", utils::cell(9, 10), Some(0)).unwrap();
+    let (mine, mine_id) = utils::create_entity(world, "mine", utils::cell(10, 10), None).unwrap();
     world
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
         .amount = 100;
-    utils::create_entity(world, "depot", utils::pos(4, 10), Some(0)).unwrap();
+    utils::create_entity(world, "depot", utils::cell(4, 10), Some(0)).unwrap();
     // An enemy to be hit by, parked far outside its own acquisition range, so
     // the only damage is the hit staged below.
     let (_, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(26, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(26, 10), Some(1)).unwrap();
 
     utils::select(&mut app, worker_id);
     utils::push_command(
@@ -79,8 +80,8 @@ fn fleeing_soldier_runs_instead_of_fighting_back() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (runner, runner_id) =
-        utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
-    let (enemy, _) = utils::create_entity(world, "sentry", utils::pos(13, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(10, 10), Some(0)).unwrap();
+    let (enemy, _) = utils::create_entity(world, "sentry", utils::cell(13, 10), Some(1)).unwrap();
 
     utils::select(&mut app, runner_id);
     utils::push_command(
@@ -102,7 +103,7 @@ fn fleeing_soldier_runs_instead_of_fighting_back() {
     );
     // And it ran: from (10,10) to (4,16), six cells down and to the left, the
     // enemy coming from the right at (13,10).
-    assert_eq!(utils::cell_of(world, runner), CellPos::new(4, 16));
+    assert_eq!(utils::anchor_of(world, runner), CellPos::new(4, 16));
 }
 
 #[test]
@@ -134,4 +135,63 @@ fn runner_shot_from_inside_holder_flees_from_holder() {
         }
     }
     assert_eq!(target, Some(utils::pos(19, 3)));
+}
+
+#[test]
+fn wide_body_flees_onto_its_cells() {
+    // Under the continuous model the wagon, unarmed and so fleeing, covers
+    // (10..11, 10..11). Hit from the sentry anchored at (4, 10), it runs six
+    // cells away on each axis, to stand anchored at (16, 16): its middle at
+    // (16 + 1, 16 + 1) = (17, 17).
+    let mut app = utils::continuous_orders_app();
+    let world = app.world_mut();
+    let (wagon, _) = utils::create_entity(world, "wagon", utils::cell(10, 10), Some(0)).unwrap();
+    let (_, sentry_id) =
+        utils::create_entity(world, "sentry", utils::cell(4, 10), Some(1)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    let world = app.world_mut();
+    let tick = world.resource::<GameSession>().tick();
+    last_hit::record(world, wagon, sentry_id, tick);
+    assert_eq!(flee_target(&mut app, wagon), Some(utils::point("17", "17")));
+}
+
+#[test]
+fn wide_body_flees_onto_map_at_far_edge() {
+    // The wagon, anchored at (28, 10) on the 32-wide map and hit from the
+    // sentry at (20, 10), runs six cells away on each axis: x to
+    // min(28 + 6, 31) = 31, y to 16. A 2×2 at (31, 16) would cover column 32,
+    // so it stands held on the map, anchored at (32 − 2, 16) = (30, 16): its
+    // middle at (30 + 1, 16 + 1) = (31, 17).
+    let mut app = utils::continuous_orders_app();
+    let world = app.world_mut();
+    let (wagon, _) = utils::create_entity(world, "wagon", utils::cell(28, 10), Some(0)).unwrap();
+    let (_, sentry_id) =
+        utils::create_entity(world, "sentry", utils::cell(20, 10), Some(1)).unwrap();
+    utils::run_ticks(&mut app, 1);
+
+    let world = app.world_mut();
+    let tick = world.resource::<GameSession>().tick();
+    last_hit::record(world, wagon, sentry_id, tick);
+    assert_eq!(flee_target(&mut app, wagon), Some(utils::point("31", "17")));
+}
+
+//
+// ─── Helpers ────────────────────────────────────────────────────────────────
+//
+
+/// Runs up to three ticks one at a time, returning the target of the first
+/// move `entity` queues.
+fn flee_target(app: &mut App, entity: Entity) -> Option<FixedUVec2> {
+    for _ in 0..3 {
+        utils::run_ticks(app, 1);
+        let front = app
+            .world()
+            .get::<OrderQueueComponent>(entity)
+            .and_then(|queue| queue.front().map(|entry| entry.order.clone()));
+        if let Some(Order::Move { target, .. }) = front {
+            return Some(target);
+        }
+    }
+    None
 }

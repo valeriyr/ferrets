@@ -1,6 +1,7 @@
 //! The game session: lifecycle and participants.
 
-use ferrets_math::FixedU64;
+mod utils;
+
 use ferrets_simulation::ruleset::{RemainsLimit, Ruleset};
 use ferrets_simulation::session::{
     GameResult, GameSession, Winner,
@@ -480,10 +481,10 @@ fn fresh_session_runs_at_normal_speed() {
 #[test]
 fn set_speed_is_kept() {
     let mut session = session(2);
-    let quarter = GameSpeed::new(FixedU64::from_num(0.25));
+    let quarter = GameSpeed::new(utils::fixed("0.25"));
     session.set_speed(quarter);
     assert_eq!(session.speed(), quarter);
-    assert_eq!(session.speed().factor(), FixedU64::from_num(0.25));
+    assert_eq!(session.speed().factor(), utils::fixed("0.25"));
 }
 
 //

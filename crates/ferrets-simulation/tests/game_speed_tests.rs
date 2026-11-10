@@ -1,5 +1,7 @@
 //! The game speed factor: what a session's cadence may be scaled by.
 
+mod utils;
+
 use ferrets_math::FixedU64;
 use ferrets_simulation::session::game_speed::{GameSpeed, error::GameSpeedError};
 
@@ -9,7 +11,7 @@ use ferrets_simulation::session::game_speed::{GameSpeed, error::GameSpeedError};
 
 #[test]
 fn new_carries_factor() {
-    let quarter = FixedU64::from_num(0.25);
+    let quarter = utils::fixed("0.25");
     assert_eq!(GameSpeed::new(quarter).factor(), quarter);
 }
 

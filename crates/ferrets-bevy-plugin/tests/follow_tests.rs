@@ -10,9 +10,9 @@ fn follow_tracks_moving_target() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (follower, follower_id) =
-        utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(world, "soldier", utils::cell(5, 5), Some(0)).unwrap();
     let (leader, leader_id) =
-        utils::create_entity(world, "soldier", utils::pos(8, 5), Some(0)).unwrap();
+        utils::create_entity(world, "soldier", utils::cell(8, 5), Some(0)).unwrap();
 
     // A friendly target without collect/store intent resolves to a follow.
     utils::select(&mut app, follower_id);
@@ -43,7 +43,7 @@ fn follow_tracks_moving_target() {
     utils::run_ticks(&mut app, 20);
     {
         let world = app.world_mut();
-        assert!(utils::cell_of(world, leader) == CellPos::new(14, 9));
+        assert!(utils::anchor_of(world, leader) == CellPos::new(14, 9));
         assert!(utils::within(world, follower, leader, 1));
     }
 

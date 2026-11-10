@@ -1750,7 +1750,7 @@ impl ContentRegistry {
                     }
                 };
                 match effect.target() {
-                    EntityCastTarget::Position { reach }
+                    EntityCastTarget::Ground { reach }
                     | EntityCastTarget::Standing { reach, .. }
                     | EntityCastTarget::Fallen { reach, .. } => match reach {
                         Reach::Within(cells) => require(cells, "reach"),
@@ -3337,7 +3337,7 @@ impl ContentRegistry {
             | EntityCastTarget::Fallen { kinds, .. } => {
                 self.validate_kinds(&format!("skill '{name}'"), "aims at", kinds);
             }
-            EntityCastTarget::Caster | EntityCastTarget::Position { .. } => {}
+            EntityCastTarget::Caster | EntityCastTarget::Ground { .. } => {}
         }
     }
 

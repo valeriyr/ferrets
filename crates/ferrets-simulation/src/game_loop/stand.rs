@@ -39,7 +39,7 @@ pub fn perform_standing_acts(world: &mut World) {
         let Some(player) = entity_def::owner(world, entity) else {
             continue;
         };
-        let footprint = entity_def::occupied_rect(world, entity);
+        let footprint = entity_def::location(world, entity).footprint();
         let acts = entity_def::of(world, entity).on_stand.clone();
         for act in acts {
             match act {

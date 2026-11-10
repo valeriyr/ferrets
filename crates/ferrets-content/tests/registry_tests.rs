@@ -325,7 +325,7 @@ fn validate_accepts_attachments_offered_by_their_jobs() {
                     WorkPresence::Attached(Attachment::new(
                         "rim",
                         BerthStance::Roaming {
-                            speed: FixedU64::lit("0.25"),
+                            speed: utils::fixed("0.25"),
                             dwell: 2,
                         },
                     )),
@@ -1621,7 +1621,7 @@ fn register_rejects_non_positive_speed() {
     registry.register(
         utils::standing("worker", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ZERO,
-            FixedU64::from_num(0.5),
+            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -1856,7 +1856,7 @@ fn register_rejects_fractional_attack_period() {
     let mut registry = utils::ground_registry();
     registry.register(
         utils::standing("worker", utils::GROUND_DOMAIN)
-            .with_stat(EntityStatId::ATTACK_PERIOD, FixedU64::from_num(0.5)),
+            .with_stat(EntityStatId::ATTACK_PERIOD, utils::fixed("0.5")),
     );
 }
 
@@ -3165,7 +3165,7 @@ fn register_rejects_energy_paid_repair_without_pool() {
                     crew: CrewLimit::ONE,
                 },
                 false,
-                RepairCost::Energy(FixedU64::from_num(0.5)),
+                RepairCost::Energy(utils::fixed("0.5")),
                 None,
             ),
     );
@@ -3461,8 +3461,8 @@ fn validate_rejects_annex_that_moves() {
     let mut registry = utils::ground_registry();
     registry.register(primary(["lookout"]));
     registry.register(annex("lookout", CellSize::ONE).with_movement(
-        FixedU64::from_num(0.5),
-        FixedU64::from_num(0.5),
+        utils::fixed("0.5"),
+        utils::fixed("0.5"),
         FixedU64::ONE,
         FixedU64::from_num(360),
         FixedU64::from_num(360),
@@ -3740,8 +3740,8 @@ fn validate_rejects_docks_on_type_that_moves() {
                 utils::GROUND,
             )
             .with_movement(
-                FixedU64::from_num(0.5),
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5568,7 +5568,7 @@ fn validate_accepts_one_way_transition() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5578,7 +5578,7 @@ fn validate_accepts_one_way_transition() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            FixedU64::from_num(0.5),
+            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -5717,7 +5717,7 @@ fn validate_rejects_transition_into_unregistered_type() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5739,7 +5739,7 @@ fn validate_rejects_nearby_landing_into_form_that_cannot_move() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5769,7 +5769,7 @@ fn validate_accepts_transition_with_odd_footprint_difference() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5797,7 +5797,7 @@ fn validate_accepts_transition_with_even_footprint_difference() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5828,7 +5828,7 @@ fn validate_rejects_transition_with_unresolved_requirement() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5848,7 +5848,7 @@ fn validate_rejects_transition_with_unresolved_requirement() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            FixedU64::from_num(0.5),
+            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -5870,7 +5870,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5890,7 +5890,7 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            FixedU64::from_num(0.5),
+            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -5911,7 +5911,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5931,7 +5931,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            FixedU64::from_num(0.5),
+            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -5952,7 +5952,7 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5972,7 +5972,7 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            FixedU64::from_num(0.5),
+            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -6102,7 +6102,7 @@ fn validate_accepts_transition_with_payable_costs() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -6132,7 +6132,7 @@ fn validate_accepts_transition_with_payable_costs() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            FixedU64::from_num(0.5),
+            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -6750,7 +6750,7 @@ fn register_rejects_watch_that_lasts_no_time() {
                 costs: Vec::new(),
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Watch {
-                    at: Spot::Cell {
+                    at: Spot::Ground {
                         reach: Reach::Wherever,
                     },
                     radius: Quantity::Constant(3),
@@ -6822,7 +6822,7 @@ fn validate_rejects_annexed_requirement_naming_type_that_is_no_annex() {
 }
 
 #[test]
-fn register_accepts_position_cast_with_field_effect() {
+fn register_accepts_ground_cast_with_field_effect() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register_skill(
@@ -6833,7 +6833,7 @@ fn register_accepts_position_cast_with_field_effect() {
                 costs: Vec::new(),
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Field {
-                    at: Spot::Cell {
+                    at: Spot::Ground {
                         reach: Reach::Wherever,
                     },
                     field: creep,
@@ -7001,7 +7001,7 @@ fn register_accepts_summon_aimed_at_caster_and_at_cell() {
     registry.register_skill("guard_me", summons(SummonAt::Caster));
     registry.register_skill(
         "guard_there",
-        summons(SummonAt::Cell {
+        summons(SummonAt::Ground {
             reach: Reach::Wherever,
         }),
     );
@@ -7043,7 +7043,7 @@ fn register_accepts_exact_summon_of_one_at_aimed_cell() {
     let mut registry = utils::ground_registry();
     registry.register(utils::standing("burrow", utils::GROUND_DOMAIN));
     let burrow = registry.type_id("burrow").expect("just registered");
-    let at = SummonAt::Cell {
+    let at = SummonAt::Ground {
         reach: Reach::Wherever,
     };
     registry.register_skill("raise_burrow", summoning_exactly(burrow, at, 1));
@@ -7057,7 +7057,7 @@ fn register_rejects_exact_summon_of_several() {
     let mut registry = utils::ground_registry();
     registry.register(utils::standing("burrow", utils::GROUND_DOMAIN));
     let burrow = registry.type_id("burrow").expect("just registered");
-    let at = SummonAt::Cell {
+    let at = SummonAt::Ground {
         reach: Reach::Wherever,
     };
     registry.register_skill("raise_burrows", summoning_exactly(burrow, at, 2));
@@ -7230,7 +7230,7 @@ fn register_rejects_summon_count_by_stat_caster_lacks() {
 fn register_rejects_summon_count_by_stat_with_floor_under_one() {
     let mut registry = utils::ground_registry();
     // A floor of one half truncates to no skeleton at all.
-    let host_size = registry.register_entity_stat("host_size", FixedU64::lit("0.5"));
+    let host_size = registry.register_entity_stat("host_size", utils::fixed("0.5"));
     let raise_host = summoning(&mut registry, host_size);
     registry.register_skill("raise_host", raise_host);
 }
@@ -7485,7 +7485,7 @@ fn register_rejects_cast_on_foreign_field() {
                 costs: Vec::new(),
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Field {
-                    at: Spot::Cell {
+                    at: Spot::Ground {
                         reach: Reach::Wherever,
                     },
                     field: creep,
@@ -7676,7 +7676,7 @@ fn register_rejects_watch_detecting_unregistered_layer() {
                 costs: Vec::new(),
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Watch {
-                    at: Spot::Cell {
+                    at: Spot::Ground {
                         reach: Reach::Wherever,
                     },
                     radius: Quantity::Constant(3),
@@ -7893,8 +7893,8 @@ fn validate_rejects_bred_type_that_can_move() {
     let mut registry = utils::ground_registry();
     registry.register(hatch("hatch", 3, 2));
     registry.register(grub("grub").with_movement(
-        FixedU64::from_num(0.5),
-        FixedU64::from_num(0.5),
+        utils::fixed("0.5"),
+        utils::fixed("0.5"),
         FixedU64::ONE,
         FixedU64::from_num(360),
         FixedU64::from_num(360),
@@ -8565,7 +8565,7 @@ fn watching(radius: Quantity, duration: Quantity) -> SkillDef {
             costs: Vec::new(),
             casting: Casting::Instant,
             effect: EntityCastEffect::Watch {
-                at: Spot::Cell {
+                at: Spot::Ground {
                     reach: Reach::Wherever,
                 },
                 radius,
@@ -8672,7 +8672,7 @@ fn own_anything() -> Whom {
 
 /// An aimed cell, cast from wherever the caster stands.
 fn cell() -> Away {
-    Away::Cell {
+    Away::Ground {
         reach: Reach::Wherever,
     }
 }
@@ -8717,7 +8717,7 @@ fn summoning_end(entity_type: EntityTypeId, count: u32) -> SkillDef {
             costs: Vec::new(),
             casting: Casting::Instant,
             effect: EntityCastEffect::Summon {
-                at: SummonAt::Cell {
+                at: SummonAt::Ground {
                     reach: Reach::Wherever,
                 },
                 entity_type,

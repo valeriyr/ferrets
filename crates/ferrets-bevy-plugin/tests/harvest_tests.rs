@@ -10,8 +10,6 @@ use ferrets_content::{
     registry::ContentRegistry, resource::DepletionPolicy,
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_physics::body;
 use ferrets_simulation::{
     beside::Beside,
     command::{PlayerCommand, SelectMode},
@@ -40,7 +38,7 @@ fn collect_harvests_until_source_depletes() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -78,7 +76,7 @@ fn visible_harvest_marks_carrier() {
     let mut app = utils::orders_app();
     let (lumberjack, lumberjack_id) = utils::create_owned(&mut app, "lumberjack", 5, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -118,7 +116,7 @@ fn hidden_harvest_marks_carrier_inside_source() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -150,7 +148,7 @@ fn hidden_carrier_holds_no_location_and_returns_beside_its_source() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -199,26 +197,26 @@ fn carrier_inside_drained_source_searches_from_source() {
     let mut app = utils::continuous_orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 14, 5, 0);
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
         .amount = 20;
     utils::create_owned(&mut app, "depot", 2, 20, 0);
 
-    // Walked to a spot across two cells: standing on (10.6, 5) the worker
-    // holds cells 10 and 11 of row 5, in reach of the geyser at 9.
-    let corner = utils::part_way("10.6", "5");
+    // Walked to a spot across two cells: with its middle at (11.1, 5.5) the
+    // worker lies over cells 10 and 11 of row 5, in reach of the geyser at 9.
+    let spot = utils::point("11.1", "5.5");
     utils::select(&mut app, worker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Move {
-            target: corner,
+            target: spot,
             flush: true,
         },
     );
     utils::run_ticks(&mut app, 20);
-    assert_eq!(utils::position_of(app.world_mut(), worker), corner);
+    assert_eq!(utils::position_of(app.world_mut(), worker), spot);
 
     utils::select(&mut app, worker_id);
     utils::push_command(
@@ -237,7 +235,7 @@ fn carrier_inside_drained_source_searches_from_source() {
             .expect("the worker went in")
             .went_in
             .position,
-        corner,
+        spot,
         "in reach already, it went in without a step"
     );
 
@@ -247,9 +245,9 @@ fn carrier_inside_drained_source_searches_from_source() {
     // searched from the drained geyser's cell, 9, the western one is two
     // cells off and the eastern five.
     let (east, _) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(14, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(14, 5), None).unwrap();
     let (west, west_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(7, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(7, 5), None).unwrap();
     for seam in [east, west] {
         app.world_mut()
             .get_mut::<ResourceSourceComponent>(seam)
@@ -308,9 +306,9 @@ fn carrier_inside_source_that_walks_comes_out_beside_it() {
     // seam on the side it went in from, (15, 5), before walking its load off
     // to the depot.
     utils::run_ticks(&mut app, 18);
-    assert_eq!(utils::cell_of(app.world(), seam), CellPos::new(16, 5));
+    assert_eq!(utils::anchor_of(app.world(), seam), CellPos::new(16, 5));
     assert!(!entity_def::hidden(app.world(), worker));
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(15, 5));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(15, 5));
 }
 
 #[test]
@@ -341,7 +339,7 @@ fn carrier_inside_walked_source_destroyed_comes_out_beside_it() {
         },
     );
     utils::run_ticks(&mut app, 16);
-    assert_eq!(utils::cell_of(app.world(), seam), CellPos::new(16, 5));
+    assert_eq!(utils::anchor_of(app.world(), seam), CellPos::new(16, 5));
     assert!(entity_def::hidden(app.world(), worker));
 
     // The seam, which has no dying phase, is razed with the digger inside: it
@@ -349,7 +347,7 @@ fn carrier_inside_walked_source_destroyed_comes_out_beside_it() {
     // from, (15, 5) — not back where it went in, (8, 5).
     spawn::destroy_entity(app.world_mut(), seam);
     assert!(!entity_def::hidden(app.world(), worker));
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(15, 5));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(15, 5));
 }
 
 #[test]
@@ -357,7 +355,7 @@ fn carrier_draining_source_to_death_from_inside_stands_as_it_dies() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "siphon", 8, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -396,7 +394,7 @@ fn carrier_draining_source_to_death_from_inside_stands_as_it_dies() {
             .is_none()
     );
     assert!(!entity_def::hidden(app.world(), worker));
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(8, 5));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(8, 5));
 }
 
 #[test]
@@ -404,7 +402,7 @@ fn carrier_boxed_in_at_trip_end_frees_source_and_waits_off_map() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -459,7 +457,7 @@ fn carrier_boxed_in_at_trip_end_frees_source_and_waits_off_map() {
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::hidden(app.world(), worker));
     assert!(!entity_def::pending_reveal(app.world(), worker));
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(8, 5));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(8, 5));
     assert!(app.world().get::<HarvestComponent>(worker).is_some());
     assert_eq!(carried(&app, worker), 5);
     assert_eq!(source_amount(&app, geyser), 15);
@@ -470,7 +468,7 @@ fn carrier_boxed_in_with_last_load_still_destroys_spent_source() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "lone_digger", 5, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -505,7 +503,7 @@ fn carrier_boxed_in_with_last_load_still_destroys_spent_source() {
     // The spent mine's cell is the one that frees, and the carrier stands on
     // it.
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(9, 5));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(9, 5));
 }
 
 #[test]
@@ -516,7 +514,7 @@ fn waiting_carrier_returns_beside_its_source_not_where_it_went_in() {
     // (8, 5): the return searches beside the geyser and takes (10, 5).
     free(&mut app, [CellPos::new(10, 5), CellPos::new(7, 5)]);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(10, 5));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(10, 5));
 }
 
 #[test]
@@ -528,7 +526,7 @@ fn waiting_carrier_returns_on_ring_cell_nearest_where_it_went_in() {
     // toward where it went in.
     free(&mut app, [CellPos::new(10, 5), CellPos::new(8, 4)]);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(8, 4));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(8, 4));
 }
 
 #[test]
@@ -568,7 +566,66 @@ fn waiting_carrier_whose_source_is_removed_returns_where_source_stood() {
     );
     free(&mut app, [CellPos::new(9, 5), CellPos::new(7, 5)]);
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::cell_of(app.world(), worker), CellPos::new(9, 5));
+    assert_eq!(utils::anchor_of(app.world(), worker), CellPos::new(9, 5));
+}
+
+#[test]
+fn wide_carrier_waiting_beside_removed_source_at_far_edge_is_held_on_map() {
+    // A 2×2 digger works a seam in the last column, (31, 5), and is boxed in
+    // as it comes out; the seam is razed while it waits. It is said to be
+    // where the seam stood, held on the 32-wide map: anchored at
+    // (32 − 2, 5) = (30, 5), its middle (31, 6).
+    let mut app = utils::orders_app();
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        let mut wide_digger = registry
+            .entity("lone_digger")
+            .expect("the orders content declares a lone digger")
+            .clone()
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::new(2, 2),
+                Solidity::Solid,
+                utils::GROUND,
+            );
+        wide_digger.name = "wide_digger".to_string();
+        registry.register(wide_digger);
+    }
+    let (worker, worker_id) = utils::create_owned(&mut app, "wide_digger", 27, 5, 0);
+    let (seam, seam_id) = utils::create_owned(&mut app, "roaming_seam", 31, 5, 0);
+    app.world_mut()
+        .get_mut::<ResourceSourceComponent>(seam)
+        .unwrap()
+        .amount = 40;
+    utils::create_owned(&mut app, "depot", 20, 4, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SendToEntity {
+            target: seam_id,
+            flush: true,
+        },
+    );
+    let mut waiting = false;
+    for _ in 0..80 {
+        utils::run_ticks(&mut app, 1);
+        if entity_def::hidden(app.world(), worker) {
+            utils::set_all_cells_statically_occupied(app.world_mut(), true);
+        }
+        if entity_def::pending_reveal(app.world(), worker) {
+            waiting = true;
+            break;
+        }
+    }
+    assert!(waiting, "the digger waits to come out");
+
+    spawn::destroy_entity(app.world_mut(), seam);
+    utils::run_ticks(&mut app, 1);
+    assert!(app.world().resource::<EntityIndex>().any(seam_id).is_none());
+    assert_eq!(
+        entity_def::whereabouts(app.world(), worker),
+        utils::point("31", "6")
+    );
 }
 
 #[test]
@@ -576,7 +633,7 @@ fn worker_that_dies_inside_source_dies_off_map() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -631,7 +688,7 @@ fn source_destroyed_under_worker_lets_it_out() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -667,7 +724,7 @@ fn source_emptied_mid_trip_lets_carrier_out() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -709,7 +766,7 @@ fn persistent_source_stays_on_map_when_depleted() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -744,7 +801,7 @@ fn boxed_in_cancel_defers_reveal_until_cell_frees() {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(7, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(7, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -786,13 +843,13 @@ fn harvest_range_reaches_source_but_not_drop_off() {
     // Three cells short of the mine, which its harvest_range of 3 already covers.
     let (prospector, prospector_id) = utils::create_owned(&mut app, "prospector", 6, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
         .amount = 5;
     let (depot, _) = utils::create_owned(&mut app, "depot", 2, 4, 0);
-    let stood_at = utils::cell_of(app.world_mut(), prospector);
+    let stood_at = utils::anchor_of(app.world_mut(), prospector);
 
     utils::select(&mut app, prospector_id);
     utils::push_command(
@@ -811,7 +868,7 @@ fn harvest_range_reaches_source_but_not_drop_off() {
         "the trip is under way"
     );
     assert_eq!(
-        utils::cell_of(app.world_mut(), prospector),
+        utils::anchor_of(app.world_mut(), prospector),
         stood_at,
         "a longer reach means no step toward the mine at all"
     );
@@ -833,7 +890,7 @@ fn crew_shares_one_source() {
     let (first, first_id) = utils::create_owned(&mut app, "logger", 8, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "logger", 10, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -854,7 +911,7 @@ fn worked_source_records_crew_until_last_carrier_leaves() {
     let (first, first_id) = utils::create_owned(&mut app, "logger", 8, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "logger", 10, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -895,7 +952,7 @@ fn carrier_that_works_alone_waits_for_source_another_holds() {
     let (first, first_id) = utils::create_owned(&mut app, "lumberjack", 8, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "lumberjack", 10, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -935,17 +992,17 @@ fn carrier_part_way_across_cells_delivers_from_corner_it_stands_on() {
     // Walked to the spot rather than placed on it: a point move lands on the
     // ordered position to the bit, and only a walk leaves a body off the
     // lattice with its claims in order.
-    let corner = utils::part_way("12.6", "10.6");
+    let spot = utils::point("13.1", "11.1");
     utils::select(&mut app, worker_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Move {
-            target: corner,
+            target: spot,
             flush: true,
         },
     );
     utils::run_ticks(&mut app, 20);
-    assert_eq!(utils::position_of(app.world_mut(), worker), corner);
+    assert_eq!(utils::position_of(app.world_mut(), worker), spot);
     load_with_gold(&mut app, worker);
 
     utils::select(&mut app, worker_id);
@@ -961,7 +1018,7 @@ fn carrier_part_way_across_cells_delivers_from_corner_it_stands_on() {
     assert_eq!(utils::gold(app.world()), 5, "the load went into the depot");
     assert_eq!(
         utils::position_of(app.world_mut(), worker),
-        corner,
+        spot,
         "already in reach, so nothing was walked"
     );
 }
@@ -1010,7 +1067,7 @@ fn carrier_delivers_only_to_storage_it_can_reach() {
     let mut app = utils::orders_app();
     let (_, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -1039,17 +1096,17 @@ fn carrier_delivers_only_to_storage_it_can_reach() {
 
 #[test]
 fn carrier_delivers_to_storage_it_reaches_from_cell_beside_any_cell_it_stands_on() {
-    // A barge, a storage afloat, rests at (10.5, 5) under the continuous model,
-    // across water cells (10, 5) and (11, 5); the land starts at column 12.
-    // The drudge walks land alone: it reaches the barge only from (12, 5), one
-    // cell from (11, 5) — two from (10, 5), the cell the barge's position
-    // floors into.
+    // A barge, a storage afloat, rests with its middle at (11, 5.5) under the
+    // continuous model, across water cells (10, 5) and (11, 5); the land starts
+    // at column 12. The drudge walks land alone: it reaches the barge only from
+    // (12, 5), one cell from (11, 5) — two from (10, 5), the cell the barge's
+    // low edge floors into.
     let mut app = barge_app();
     let (barge, _) = utils::create_owned(&mut app, "barge", 10, 5, 0);
-    utils::walk_onto(&mut app, barge, utils::part_way("10.5", "5"), 10);
+    utils::walk_onto(&mut app, barge, utils::point("11", "5.5"), 10);
     let (_, drudge_id) = utils::create_owned(&mut app, "drudge", 14, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(16, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(16, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -1075,19 +1132,19 @@ fn carrier_delivers_to_storage_it_reaches_from_cell_beside_any_cell_it_stands_on
 
 #[test]
 fn carrier_delivers_to_storage_nearest_by_cells_it_stands_on() {
-    // The barge rests at (10.5, 5), across (10, 5) and (11, 5); a depot stands
-    // at (16..17, 5..6), placed first. From the loaded drudge at (13, 5) the
-    // depot is three cells off and so is the barge's floored cell, but the
-    // barge stands on (11, 5), two off: the drudge banks at the barge, from
-    // (12, 5), rather than at the depot, from (14.5, 4.25), a tick later.
+    // The barge rests with its middle at (11, 5.5), across (10, 5) and (11, 5);
+    // a depot stands at (16..17, 5..6), placed first. From the loaded drudge at
+    // (13, 5) the depot is three cells off and so is the barge's floored cell,
+    // but the barge stands on (11, 5), two off: the drudge banks at the barge,
+    // from (12, 5), rather than at the depot, a tick later.
     let mut app = barge_app();
     utils::create_owned(&mut app, "depot", 16, 5, 0);
     let (barge, _) = utils::create_owned(&mut app, "barge", 10, 5, 0);
-    utils::walk_onto(&mut app, barge, utils::part_way("10.5", "5"), 10);
+    utils::walk_onto(&mut app, barge, utils::point("11", "5.5"), 10);
     let (drudge, drudge_id) = utils::create_owned(&mut app, "drudge", 13, 5, 0);
     load_with_gold(&mut app, drudge);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(13, 12), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(13, 12), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -1153,14 +1210,14 @@ fn carrier_switches_to_nearby_source_when_ordered_one_unreachable() {
     // The ordered mine sits inside a boulder ring; another gold source stands
     // in the open beside it.
     let (walled, walled_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(20, 20), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
         .amount = 10;
     wall_in(&mut app, 20, 20, 1);
     let (open, _) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(16, 20), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(16, 20), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(open)
         .unwrap()
@@ -1201,13 +1258,14 @@ fn carrier_looks_for_replacement_source_around_itself() {
     // off. The open mine lies ten cells back from there, beyond the twelve-cell
     // search around the walled mine but within the one around the worker.
     let (walled, walled_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(20, 12), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(20, 12), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
         .amount = 10;
     wall_in(&mut app, 14, 6, 13);
-    let (open, _) = utils::create_entity(app.world_mut(), "mine", utils::pos(2, 12), None).unwrap();
+    let (open, _) =
+        utils::create_entity(app.world_mut(), "mine", utils::cell(2, 12), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(open)
         .unwrap()
@@ -1237,7 +1295,7 @@ fn carrier_waits_in_place_when_unreachable_source_is_only_one_around() {
     utils::create_owned(&mut app, "depot", 2, 4, 0);
 
     let (walled, walled_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(20, 20), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
@@ -1268,7 +1326,7 @@ fn waiting_carrier_resumes_when_way_to_source_opens() {
     utils::create_owned(&mut app, "depot", 2, 4, 0);
 
     let (walled, walled_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(20, 20), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(20, 20), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(walled)
         .unwrap()
@@ -1305,7 +1363,7 @@ fn carrier_picks_next_source_only_among_those_it_can_reach() {
     utils::create_owned(&mut app, "depot", 2, 4, 0);
     let mine = |app: &mut App, x, y, amount| {
         let (mine, id) =
-            utils::create_entity(app.world_mut(), "mine", utils::pos(x, y), None).unwrap();
+            utils::create_entity(app.world_mut(), "mine", utils::cell(x, y), None).unwrap();
         app.world_mut()
             .get_mut::<ResourceSourceComponent>(mine)
             .unwrap()
@@ -1359,7 +1417,7 @@ fn foreign_load_is_wasted_at_first_transfer_not_delivered() {
     let (forager, forager_id) = utils::create_owned(&mut app, "forager", 5, 5, 0);
     utils::create_owned(&mut app, "depot", 2, 4, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -1401,12 +1459,13 @@ fn order_locked_to_wood_does_not_switch_to_gold() {
 
     // One tree holding exactly one load, with a gold mine right beside it.
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
         .amount = 5;
-    let (mine, _) = utils::create_entity(app.world_mut(), "mine", utils::pos(10, 5), None).unwrap();
+    let (mine, _) =
+        utils::create_entity(app.world_mut(), "mine", utils::cell(10, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -1480,7 +1539,7 @@ fn attached_carrier_sits_in_tree_and_banks_wood_without_felling_it() {
     let mut app = utils::orders_app();
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -1501,7 +1560,7 @@ fn attached_carrier_sits_in_tree_and_banks_wood_without_felling_it() {
     assert!(entity_def::attached(app.world(), sylph));
     assert!(!entity_def::hidden(app.world(), sylph));
     assert!(entity_def::harvesting(app.world(), sylph));
-    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(8, 5));
+    assert_eq!(utils::anchor_of(app.world(), sylph), CellPos::new(8, 5));
     let grid = app.world().resource::<Map>().nav_grid();
     assert!(
         !grid.is_claimed(utils::GROUND, CellPos::new(7, 5)),
@@ -1538,7 +1597,7 @@ fn attached_carriers_fill_berths_of_one_vein_and_drain_it_together() {
     let (first, first_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "sylph", 7, 6, 0);
     let (vein, vein_id) =
-        utils::create_entity(app.world_mut(), "vein", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "vein", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(vein)
         .unwrap()
@@ -1552,10 +1611,15 @@ fn attached_carriers_fill_berths_of_one_vein_and_drain_it_together() {
         "both sit on the vein at once"
     );
     // Each with its middle on the rim berth nearest to where it stood, the
-    // two west points (8.5, 5.5) and (8.5, 6.5) — positions name the corner,
-    // half a cell up and left of the middle.
-    assert_eq!(utils::position_of(app.world(), first), point("8.0", "5.0"));
-    assert_eq!(utils::position_of(app.world(), second), point("8.0", "6.0"));
+    // two west points (8.5, 5.5) and (8.5, 6.5).
+    assert_eq!(
+        utils::position_of(app.world(), first),
+        utils::point("8.5", "5.5")
+    );
+    assert_eq!(
+        utils::position_of(app.world(), second),
+        utils::point("8.5", "6.5")
+    );
 
     // First load, two ticks in: 5 + 5 banked, 2 left in the vein. Second
     // load: the lower id takes the 2, the other finds nothing and stops.
@@ -1580,8 +1644,8 @@ fn attached_carriers_fill_berths_of_one_vein_and_drain_it_together() {
         assert!(utils::order_queue_is_empty(app.world_mut(), carrier));
     }
     assert_ne!(
-        utils::cell_of(app.world(), first),
-        utils::cell_of(app.world(), second),
+        utils::anchor_of(app.world(), first),
+        utils::anchor_of(app.world(), second),
         "each takes a cell of its own"
     );
 }
@@ -1595,7 +1659,7 @@ fn attached_carrier_waits_for_free_berth() {
     let (_, second_id) = utils::create_owned(&mut app, "sylph", 7, 6, 0);
     let (third, third_id) = utils::create_owned(&mut app, "sylph", 7, 7, 0);
     let (vein, vein_id) =
-        utils::create_entity(app.world_mut(), "vein", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "vein", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(vein)
         .unwrap()
@@ -1626,7 +1690,7 @@ fn attached_carrier_waits_for_free_berth() {
     utils::force_cancel_orders(app.world_mut(), first);
     utils::run_ticks(&mut app, 2);
     assert!(entity_def::attached(app.world(), third));
-    assert_eq!(utils::cell_of(app.world(), third), CellPos::new(8, 5));
+    assert_eq!(utils::anchor_of(app.world(), third), CellPos::new(8, 5));
     assert_eq!(
         crew_of(&app, vein),
         Some(BTreeSet::from([second_id, third_id]))
@@ -1642,7 +1706,7 @@ fn berth_group_seats_no_more_than_its_slots() {
     let (_, second_id) = utils::create_owned(&mut app, "sylph", 7, 6, 0);
     let (third, third_id) = utils::create_owned(&mut app, "sylph", 7, 7, 0);
     let (lode, lode_id) =
-        utils::create_entity(app.world_mut(), "lode", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "lode", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(lode)
         .unwrap()
@@ -1675,7 +1739,7 @@ fn attached_carrier_turned_away_by_source_without_its_berths() {
     let mut app = utils::orders_app();
     let (sylph, _) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -1699,7 +1763,7 @@ fn roaming_carrier_crosses_straight_to_berth_of_its_own_pick() {
     let mut app = utils::orders_app();
     let (roamer, roamer_id) = utils::create_owned(&mut app, "roamer", 7, 5, 0);
     let (lode, lode_id) =
-        utils::create_entity(app.world_mut(), "lode", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "lode", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(lode)
         .unwrap()
@@ -1713,24 +1777,29 @@ fn roaming_carrier_crosses_straight_to_berth_of_its_own_pick() {
             flush: true,
         },
     );
-    // Seated on the third tick with its middle on the nearest berth, (8.5, 5.5)
-    // — a position names the footprint's corner, so it reads half a cell up
-    // and left of that. Its stay starts one tick along — the first simulation
-    // id's mix, 1364076727, is odd, against a two-tick dwell — so that same
-    // tick its two ticks are up; of the two free berths its mix picks the
-    // second, the south-east one at (9.5, 6.5), and it sets off straight
-    // across the diagonal: one cell of ground under the isometric metric, a
-    // quarter a tick, so a quarter of the way on the fourth tick and there on
-    // the seventh.
+    // Seated on the third tick with its middle on the nearest berth,
+    // (8.5, 5.5). Its stay starts one tick along — the first simulation id's
+    // mix, 1364076727, is odd, against a two-tick dwell — so that same tick its
+    // two ticks are up; of the two free berths its mix picks the second, the
+    // south-east one at (9.5, 6.5), and it sets off straight across the
+    // diagonal: one cell of ground under the isometric metric, a quarter a
+    // tick, so a quarter of the way on the fourth tick and there on the
+    // seventh.
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(utils::position_of(app.world(), roamer), point("8.0", "5.0"));
+    assert_eq!(
+        utils::position_of(app.world(), roamer),
+        utils::point("8.5", "5.5")
+    );
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         utils::position_of(app.world(), roamer),
-        point("8.25", "5.25")
+        utils::point("8.75", "5.75")
     );
     utils::run_ticks(&mut app, 3);
-    assert_eq!(utils::position_of(app.world(), roamer), point("9.0", "6.0"));
+    assert_eq!(
+        utils::position_of(app.world(), roamer),
+        utils::point("9.5", "6.5")
+    );
     assert!(
         entity_def::harvesting(app.world(), roamer),
         "moving between the berths never interrupts the work"
@@ -1742,7 +1811,7 @@ fn circling_carrier_walks_loop_to_next_berth() {
     let mut app = utils::orders_app();
     let (circler, circler_id) = utils::create_owned(&mut app, "circler", 7, 5, 0);
     let (lode, lode_id) =
-        utils::create_entity(app.world_mut(), "lode", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "lode", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(lode)
         .unwrap()
@@ -1768,27 +1837,27 @@ fn circling_carrier_walks_loop_to_next_berth() {
     utils::run_ticks(&mut app, utils::APPLY);
     assert_eq!(
         utils::position_of(app.world(), circler),
-        point("8.0", "5.0")
+        utils::point("8.5", "5.5")
     );
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         utils::position_of(app.world(), circler),
-        point("8.25", "5.25")
+        utils::point("8.75", "5.75")
     );
     utils::run_ticks(&mut app, 3);
     assert_eq!(
         utils::position_of(app.world(), circler),
-        point("9.0", "6.0")
+        utils::point("9.5", "6.5")
     );
     utils::run_ticks(&mut app, 3);
     assert_eq!(
         utils::position_of(app.world(), circler),
-        point("8.75", "6.0")
+        utils::point("9.25", "6.5")
     );
     utils::run_ticks(&mut app, 3);
     assert_eq!(
         utils::position_of(app.world(), circler),
-        point("8.0", "6.0")
+        utils::point("8.5", "6.5")
     );
 }
 
@@ -1797,7 +1866,7 @@ fn orbiting_carrier_circles_its_berth_without_leaving_it() {
     let mut app = utils::orders_app();
     let (hoverer, hoverer_id) = utils::create_owned(&mut app, "hoverer", 7, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -1811,8 +1880,7 @@ fn orbiting_carrier_circles_its_berth_without_leaving_it() {
             flush: true,
         },
     );
-    // Seated with its middle on the canopy, (8.5, 5.5), on the third tick —
-    // read half a cell up and left, where the footprint's corner is. Its
+    // Seated with its middle on the canopy, (8.5, 5.5), on the third tick. Its
     // circuit starts three quarter turns round — the first simulation id's
     // mix, 1364076727, is 3 past a multiple of four — and turns another
     // quarter that tick, so its middle is north of the berth by the
@@ -1821,27 +1889,24 @@ fn orbiting_carrier_circles_its_berth_without_leaving_it() {
     utils::run_ticks(&mut app, utils::APPLY);
     assert_eq!(
         utils::position_of(app.world(), hoverer),
-        point("8.0", "4.75")
+        utils::point("8.5", "5.25")
     );
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         utils::position_of(app.world(), hoverer),
-        point("8.25", "5.0")
+        utils::point("8.75", "5.5")
     );
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         utils::position_of(app.world(), hoverer),
-        point("8.0", "5.25")
+        utils::point("8.5", "5.75")
     );
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         utils::position_of(app.world(), hoverer),
-        point("7.75", "5.0")
+        utils::point("8.25", "5.5")
     );
-    assert_eq!(
-        body::anchor(utils::position_of(app.world(), hoverer)),
-        CellPos::new(8, 5)
-    );
+    assert_eq!(utils::anchor_of(app.world(), hoverer), CellPos::new(8, 5));
     // Two ticks a load, five wood a load, banked as it hovers: on the fourth
     // tick and the sixth.
     assert_eq!(utils::wood(app.world()), 10);
@@ -1857,7 +1922,7 @@ fn circling_crew_spreads_round_loop() {
     let (first, first_id) = utils::create_owned(&mut app, "circler", 7, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "circler", 10, 5, 0);
     let (ring, ring_id) =
-        utils::create_entity(app.world_mut(), "ring", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "ring", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(ring)
         .unwrap()
@@ -1865,8 +1930,14 @@ fn circling_crew_spreads_round_loop() {
 
     send_both_to(&mut app, first_id, second_id, ring_id);
     utils::run_ticks(&mut app, utils::APPLY);
-    assert_eq!(utils::position_of(app.world(), first), point("8.0", "5.0"));
-    assert_eq!(utils::position_of(app.world(), second), point("9.0", "5.0"));
+    assert_eq!(
+        utils::position_of(app.world(), first),
+        utils::point("8.5", "5.5")
+    );
+    assert_eq!(
+        utils::position_of(app.world(), second),
+        utils::point("9.5", "5.5")
+    );
 
     // The first's stay is a tick along already and its mix is odd, so it
     // leaves that tick backward round the loop: the south-west spot, one leg
@@ -1876,9 +1947,15 @@ fn circling_crew_spreads_round_loop() {
     // south-east — both a step from the first's new spot, takes the nearer
     // ahead, the south-east, reached on the eighth.
     utils::run_ticks(&mut app, 4);
-    assert_eq!(utils::position_of(app.world(), first), point("8.0", "6.0"));
+    assert_eq!(
+        utils::position_of(app.world(), first),
+        utils::point("8.5", "6.5")
+    );
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::position_of(app.world(), second), point("9.0", "6.0"));
+    assert_eq!(
+        utils::position_of(app.world(), second),
+        utils::point("9.5", "6.5")
+    );
 }
 
 #[test]
@@ -1887,7 +1964,7 @@ fn roaming_carriers_never_share_berth() {
     let (first, first_id) = utils::create_owned(&mut app, "roamer", 7, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "roamer", 7, 6, 0);
     let (vein, vein_id) =
-        utils::create_entity(app.world_mut(), "vein", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "vein", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(vein)
         .unwrap()
@@ -1898,8 +1975,8 @@ fn roaming_carriers_never_share_berth() {
     for _ in 0..4 {
         utils::run_ticks(&mut app, 4);
         let (a, b) = (
-            utils::cell_of(app.world(), first),
-            utils::cell_of(app.world(), second),
+            utils::anchor_of(app.world(), first),
+            utils::anchor_of(app.world(), second),
         );
         assert_ne!(a, b, "two carriers in one berth");
         assert!([CellPos::new(8, 5), CellPos::new(8, 6)].contains(&a));
@@ -1912,7 +1989,7 @@ fn attached_carrier_can_be_killed_at_work() {
     let mut app = utils::orders_app();
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -1961,7 +2038,7 @@ fn attached_carrier_is_walked_through_and_never_pushed_under_continuous_model() 
     let mut app = utils::continuous_orders_app();
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -1990,7 +2067,7 @@ fn attached_carrier_is_walked_through_and_never_pushed_under_continuous_model() 
         },
     );
     utils::run_ticks(&mut app, 30);
-    assert_eq!(utils::cell_of(app.world(), soldier), CellPos::new(7, 5));
+    assert_eq!(utils::anchor_of(app.world(), soldier), CellPos::new(7, 5));
     assert!(utils::order_queue_is_empty(app.world_mut(), soldier));
     assert_eq!(
         utils::position_of(app.world(), sylph),
@@ -2011,7 +2088,7 @@ fn carrier_seated_inside_its_source_steps_out_of_whole_footprint() {
     });
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 6, 0);
     let (vein, vein_id) =
-        utils::create_entity(app.world_mut(), "core_vein", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "core_vein", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(vein)
         .unwrap()
@@ -2027,14 +2104,14 @@ fn carrier_seated_inside_its_source_steps_out_of_whole_footprint() {
     );
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(entity_def::attached(app.world(), sylph));
-    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(9, 6));
+    assert_eq!(utils::anchor_of(app.world(), sylph), CellPos::new(9, 6));
 
     utils::force_cancel_orders(app.world_mut(), sylph);
     utils::run_ticks(&mut app, 1);
 
     assert!(!entity_def::attached(app.world(), sylph));
     assert!(!entity_def::hidden(app.world(), sylph));
-    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(9, 4));
+    assert_eq!(utils::anchor_of(app.world(), sylph), CellPos::new(9, 4));
 }
 
 #[test]
@@ -2042,7 +2119,7 @@ fn stopped_attached_carrier_steps_back_beside_source() {
     let mut app = utils::orders_app();
     let (sylph, sylph_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -2064,7 +2141,7 @@ fn stopped_attached_carrier_steps_back_beside_source() {
     assert!(!entity_def::attached(app.world(), sylph));
     assert!(!entity_def::harvesting(app.world(), sylph));
     utils::assert_adjacent_to_footprint(app.world_mut(), sylph, tree);
-    let cell = utils::cell_of(app.world(), sylph);
+    let cell = utils::anchor_of(app.world(), sylph);
     let grid = app.world().resource::<Map>().nav_grid();
     assert!(grid.is_claimed(utils::GROUND, cell));
 }
@@ -2076,7 +2153,7 @@ fn direct_carrier_steps_back_when_source_runs_dry() {
     // A geyser holds its ground when emptied, so the drained source is still
     // standing there when the carrier looks for its next one.
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -2111,7 +2188,7 @@ fn direct_carrier_steps_back_when_source_runs_dry() {
     assert_eq!(crew_of(&app, geyser), None);
     assert!(utils::order_queue_is_empty(app.world_mut(), sylph));
     // Back on the grid, holding a cell of its own again.
-    let cell = utils::cell_of(app.world(), sylph);
+    let cell = utils::anchor_of(app.world(), sylph);
     assert!(
         app.world()
             .resource::<Map>()
@@ -2127,13 +2204,13 @@ fn direct_carrier_leaves_dry_source_behind_when_it_moves_on() {
     // Two geysers: the near one runs dry and holds its ground, so the carrier
     // has to give it up before it can take the far one.
     let (near, near_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(near)
         .unwrap()
         .amount = 3;
     let (far, _) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(12, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(12, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(far)
         .unwrap()
@@ -2165,7 +2242,7 @@ fn drain_takes_less_from_source_than_carrier_banks() {
     let mut app = utils::orders_app();
     let (_, tapper_id) = utils::create_owned(&mut app, "tapper", 8, 5, 0);
     let (vein, vein_id) =
-        utils::create_entity(app.world_mut(), "vein", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "vein", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(vein)
         .unwrap()
@@ -2196,7 +2273,7 @@ fn carrier_destroyed_in_berth_gives_it_back() {
     let mut app = utils::orders_app();
     let (first, first_id) = utils::create_owned(&mut app, "sylph", 7, 5, 0);
     let (tree, tree_id) =
-        utils::create_entity(app.world_mut(), "tree", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "tree", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(tree)
         .unwrap()
@@ -2240,7 +2317,7 @@ fn roaming_carrier_called_off_steps_out_by_berth_it_holds() {
     let mut app = utils::orders_app();
     let (roamer, roamer_id) = utils::create_owned(&mut app, "roamer", 7, 5, 0);
     let (lode, lode_id) =
-        utils::create_entity(app.world_mut(), "lode", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "lode", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(lode)
         .unwrap()
@@ -2260,7 +2337,10 @@ fn roaming_carrier_called_off_steps_out_by_berth_it_holds() {
     utils::run_ticks(&mut app, 1);
     utils::push_command(&mut app, PlayerCommand::Stop);
     utils::run_ticks(&mut app, utils::APPLY - 1);
-    assert_eq!(utils::position_of(app.world(), roamer), point("8.0", "5.0"));
+    assert_eq!(
+        utils::position_of(app.world(), roamer),
+        utils::point("8.5", "5.5")
+    );
     utils::run_ticks(&mut app, 1);
 
     // Called off before it has moved, it comes out by the berth it holds, cell
@@ -2281,7 +2361,7 @@ fn wide_carrier_called_off_steps_out_beside_every_cell_it_sat_on() {
     // reach no pocket and come out across the slab instead.
     let mut app = wide_sylph_app(&[("0.0", "1.5")]);
     let (slab, slab_id) =
-        utils::create_entity(app.world_mut(), "slab", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "slab", utils::cell(10, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(slab)
         .unwrap()
@@ -2297,7 +2377,10 @@ fn wide_carrier_called_off_steps_out_beside_every_cell_it_sat_on() {
     );
     utils::run_ticks(&mut app, 14);
     assert!(entity_def::attached(app.world(), sylph));
-    assert_eq!(utils::position_of(app.world(), sylph), point("9.0", "10.5"));
+    assert_eq!(
+        utils::position_of(app.world(), sylph),
+        utils::point("10", "11.5")
+    );
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
     for (x, y) in [
         (9, 10),
@@ -2320,7 +2403,10 @@ fn wide_carrier_called_off_steps_out_beside_every_cell_it_sat_on() {
     utils::run_ticks(&mut app, 2);
     assert!(entity_def::attached(app.world(), sylph));
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::position_of(app.world(), sylph), utils::pos(7, 8));
+    assert_eq!(
+        utils::position_of(app.world(), sylph),
+        utils::point("8", "9")
+    );
 }
 
 #[test]
@@ -2333,7 +2419,7 @@ fn wide_carrier_takes_berth_its_body_sits_nearest() {
     // first would win the tie.
     let mut app = wide_sylph_app(&[("1.0", "0.0"), ("2.0", "1.0")]);
     let (slab, slab_id) =
-        utils::create_entity(app.world_mut(), "slab", utils::pos(10, 10), None).unwrap();
+        utils::create_entity(app.world_mut(), "slab", utils::cell(10, 10), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(slab)
         .unwrap()
@@ -2349,10 +2435,16 @@ fn wide_carrier_takes_berth_its_body_sits_nearest() {
     );
     // Standing on (8, 13) on the eleventh tick, seated on the twelfth.
     utils::run_ticks(&mut app, 11);
-    assert_eq!(utils::position_of(app.world(), sylph), utils::pos(8, 13));
+    assert_eq!(
+        utils::position_of(app.world(), sylph),
+        utils::point("9", "14")
+    );
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::attached(app.world(), sylph));
-    assert_eq!(utils::position_of(app.world(), sylph), utils::pos(11, 10));
+    assert_eq!(
+        utils::position_of(app.world(), sylph),
+        utils::point("12", "11")
+    );
 }
 
 //
@@ -2366,7 +2458,7 @@ fn hidden_crew_of_two_admits_two_and_leaves_third_waiting() {
     let (second, second_id) = utils::create_owned(&mut app, "paired_digger", 10, 5, 0);
     let (third, third_id) = utils::create_owned(&mut app, "paired_digger", 9, 6, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -2406,7 +2498,7 @@ fn carrier_that_works_alone_shuts_out_one_that_would_share() {
     let (lone, lone_id) = utils::create_owned(&mut app, "lone_digger", 8, 5, 0);
     let (paired, paired_id) = utils::create_owned(&mut app, "paired_digger", 10, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -2450,7 +2542,7 @@ fn carrier_turns_down_source_its_kind_does_not_list() {
     let mut app = utils::orders_app();
     let (tapper, tapper_id) = utils::create_owned(&mut app, "geyser_tapper", 8, 5, 0);
     let (mine, mine_id) =
-        utils::create_entity(app.world_mut(), "mine", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "mine", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -2482,7 +2574,7 @@ fn carrier_turns_down_source_its_kind_does_not_list() {
 
     // A geyser is, and the same order works it.
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(7, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(7, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()
@@ -2503,11 +2595,6 @@ fn carrier_turns_down_source_its_kind_does_not_list() {
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
-
-/// A position from decimal strings, in cells.
-fn point(x: &str, y: &str) -> FixedUVec2 {
-    FixedUVec2::new(utils::fixed(x), utils::fixed(y))
-}
 
 /// Fills `carrier`'s hands with a full load of gold, so the next thing its trip
 /// does is look for somewhere to put it.
@@ -2602,7 +2689,8 @@ fn wall_in(app: &mut App, x: u32, y: u32, size: u32) -> Vec<Entity> {
             }
             let (bx, by) = ((x as i32 + dx) as u32, (y as i32 + dy) as u32);
             let (boulder, _) =
-                utils::create_entity(app.world_mut(), "boulder", utils::pos(bx, by), None).unwrap();
+                utils::create_entity(app.world_mut(), "boulder", utils::cell(bx, by), None)
+                    .unwrap();
             walls.push(boulder);
         }
     }
@@ -2682,7 +2770,7 @@ fn carrier_boxed_in_at_geyser() -> (App, Entity) {
     let mut app = utils::orders_app();
     let (worker, worker_id) = utils::create_owned(&mut app, "worker", 5, 5, 0);
     let (geyser, geyser_id) =
-        utils::create_entity(app.world_mut(), "geyser", utils::pos(9, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "geyser", utils::cell(9, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(geyser)
         .unwrap()

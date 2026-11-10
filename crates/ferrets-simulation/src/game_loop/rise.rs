@@ -105,7 +105,7 @@ pub fn lose_outside_fields(world: &mut World) {
                 entity_def::of(world, entity),
                 within.iter().map(FieldPlacement::field),
             );
-            let footprint = entity_def::footprint_rect(world, entity);
+            let footprint = entity_def::location(world, entity).footprint();
             (!fields::rules_allow(world, entity_def::owner(world, entity), within, footprint))
                 .then_some((entity, origin))
         })

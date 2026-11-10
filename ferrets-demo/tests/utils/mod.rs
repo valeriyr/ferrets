@@ -4,7 +4,7 @@ use bevy::{app::FixedMain, ecs::system::RunSystemOnce, prelude::*};
 use ferrets_bevy_plugin::{PendingInput, SimulationPlugin};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_demo::{content::CONTENT, minimap, render, ruleset, scenario, view};
-use ferrets_geometry::projection::Projection;
+use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
 
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_script::{content, engine::lua::LuaEngine};
@@ -14,6 +14,7 @@ use ferrets_simulation::{
         location::LocationComponent,
         rise::{RiseAttendance, RiseOrigin},
     },
+    entity_def,
     input::{InputFrames, PlayerFrame},
     map::Map,
     map_data::MapData,
@@ -24,40 +25,40 @@ use ferrets_simulation::{
         player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
-    spawn::{self, Arrival, FieldReach},
+    spawn::{self, Arrival, At, FieldReach},
 };
 
-/// Creates an entity of `type_name` at `position` for `owner`, its field
-/// sources at their initial reach, announcing nothing.
+/// Creates an entity of `type_name` anchored at `anchor` for `owner`, its
+/// field sources at their initial reach, announcing nothing.
 pub fn create_entity(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    anchor: CellPos,
     owner: Option<PlayerId>,
 ) -> Option<(Entity, SimulationId)> {
     spawn::create_entity(
         world,
         type_name,
-        position,
+        At::Cell(anchor),
         owner,
         FieldReach::Initial,
         Arrival::Standing { starts: &[] },
     )
 }
 
-/// Spawns `type_name` still rising at `position` for `owner` as a founded
-/// site `owner` paid for, worked by a crew nobody has joined yet, announcing
-/// nothing.
+/// Spawns `type_name` still rising anchored at `anchor` for `owner` as a
+/// founded site `owner` paid for, worked by a crew nobody has joined yet,
+/// announcing nothing.
 pub fn create_rising(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    anchor: CellPos,
     owner: Option<PlayerId>,
 ) -> Option<(Entity, SimulationId)> {
     spawn::create_entity(
         world,
         type_name,
-        position,
+        At::Cell(anchor),
         owner,
         FieldReach::Initial,
         Arrival::Rising {
@@ -136,17 +137,14 @@ pub fn land_app_as(role: LocalRole, model: MovementModel) -> App {
     two_seat_app(role, data)
 }
 
-/// The cell a position falls in, as a `(x, y)` pair for terse assertions.
-pub fn cell_of(position: FixedUVec2) -> (u32, u32) {
-    (
-        position.x.floor().to_num::<u32>(),
-        position.y.floor().to_num::<u32>(),
-    )
+/// The cell at `(x, y)`.
+pub fn cell(x: u32, y: u32) -> CellPos {
+    CellPos::new(x, y)
 }
 
-/// A position at a cell's origin corner, which is where a unit at rest stands.
-pub fn at_cell(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
+/// The middle of the cell at `(x, y)`.
+pub fn pos(x: u32, y: u32) -> FixedUVec2 {
+    cell(x, y).middle()
 }
 
 /// Advances the app by `ticks` fixed steps, feeding an idle frame for every
@@ -197,9 +195,13 @@ pub fn position_of(world: &mut World, entity: Entity) -> FixedUVec2 {
     world.get::<LocationComponent>(entity).unwrap().position
 }
 
-/// A position written as decimals rather than floats, so the position is the one
-/// the digits name.
-pub fn part_way(x: &str, y: &str) -> FixedUVec2 {
+/// The cell the entity is anchored at where it stands.
+pub fn anchor_of(world: &World, entity: Entity) -> CellPos {
+    entity_def::location(world, entity).anchor()
+}
+
+/// A point on the map, written as decimals.
+pub fn point(x: &str, y: &str) -> FixedUVec2 {
     FixedUVec2::new(cells(x), cells(y))
 }
 

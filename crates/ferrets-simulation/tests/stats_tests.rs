@@ -1,5 +1,7 @@
 //! Tests for the stat store's modifier fold.
 
+mod utils;
+
 use ferrets_content::{
     entity_stats::{EntityStatDef, EntityStatId},
     player_stats::PlayerStatId,
@@ -37,7 +39,7 @@ fn flat_and_percent_fold_as_base_plus_flat_times_percent() {
     );
     assert_eq!(
         store.effective(EntityStatId::DAMAGE),
-        Some(FixedU64::from_num(22.5))
+        Some(utils::fixed("22.5"))
     );
 }
 
@@ -131,13 +133,13 @@ fn fractional_stat_is_not_raised_to_whole_number() {
     store.recompute(&[], &stat_defs());
     assert_eq!(
         store.effective(EntityStatId::SPEED),
-        Some(FixedU64::from_num(0.3))
+        Some(utils::fixed("0.3"))
     );
 
     store.recompute(&[percent(EntityStatId::SPEED, "1")], &stat_defs());
     assert_eq!(
         store.effective(EntityStatId::SPEED),
-        Some(FixedU64::from_num(0.6))
+        Some(utils::fixed("0.6"))
     );
 }
 
@@ -189,7 +191,7 @@ fn harvest_range_folds_like_any_other_reach() {
     );
     assert_eq!(
         store.effective(EntityStatId::HARVEST_RANGE),
-        Some(FixedU64::from_num(3.5))
+        Some(utils::fixed("3.5"))
     );
     assert_eq!(store.effective_as_u32(EntityStatId::HARVEST_RANGE), Some(3));
 }

@@ -146,7 +146,7 @@ fn rising_provider_feeds_nobody() {
         PlayerCommand::BuildEntity {
             builder: pioneer_id,
             type_name: "camp".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );

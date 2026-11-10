@@ -5,19 +5,18 @@ use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
 
 /// World position and facing of an entity in fixed-point grid units.
 ///
-/// One unit = one grid cell. Sub-unit precision supports smooth movement between
-/// cells; integer values land on cell origin corners.
+/// One unit = one grid cell.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct LocationComponent {
-    /// Where the entity stands, in simulation coordinates.
+    /// The body's middle, in simulation coordinates with sub-cell precision.
     ///
-    /// Under the cell movement model, positions keep to the cell lattice: an
-    /// entity at rest stands exactly on a cell's origin corner, and a
-    /// mid-crossing entity lies on the straight segment between the origin
-    /// corners of its crossing's two cells — every write outside the
-    /// movement step must preserve this. Under the continuous model a
-    /// mover's position is any in-bounds point; entities that cannot move
-    /// keep to cell origins in both models.
+    /// Under the cell movement model a body keeps to the cell lattice: lined up
+    /// on its cells, its middle is its anchored position, and mid-crossing it
+    /// lies on the straight segment between the anchored positions of its
+    /// crossing's two anchors — every write outside the movement step must
+    /// preserve this. Under the continuous model a mover's position is any
+    /// point that keeps its body on the map; entities that cannot move keep to
+    /// anchored positions in both models.
     pub position: FixedUVec2,
     /// Which way the body itself points. A weapon that bears independently of the
     /// body keeps its own.
@@ -25,7 +24,7 @@ pub struct LocationComponent {
 }
 
 impl LocationComponent {
-    /// Creates a new `LocationComponent` with the given data.
+    /// A location with its body's middle at `position`, facing `facing`.
     #[inline]
     pub fn new(position: FixedUVec2, facing: Facing) -> Self {
         Self { position, facing }

@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     layer_id::LayerId,
@@ -27,10 +26,6 @@ pub const WATER: TerrainId = TerrainId::new(2);
 
 /// The holder a test route is sought for; the claims tests add are another's.
 pub const SEEKER: u32 = 0;
-
-pub fn world(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::new(FixedU64::from_num(x), FixedU64::from_num(y))
-}
 
 pub fn nav(x: u32, y: u32) -> CellPos {
     CellPos::new(x, y)

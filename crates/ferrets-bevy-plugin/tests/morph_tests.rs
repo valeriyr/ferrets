@@ -25,7 +25,7 @@ use ferrets_content::{
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
-use ferrets_math::{FixedU64, facing::Facing, fixed_uvec2::FixedUVec2};
+use ferrets_math::FixedU64;
 use ferrets_nav_grid::{layer_mask::LayerMask, nav_grid::NavGrid};
 use ferrets_simulation::{
     beside::Lean,
@@ -45,7 +45,7 @@ use ferrets_simulation::{
     game_loop::damage,
     ground,
     map::Map,
-    movement_model::{self, MovementModel},
+    movement_model::MovementModel,
     occupancy::OccupancyClass,
     order::Order,
     rally,
@@ -102,7 +102,7 @@ fn growth_asks_idle_ally_off_its_ground_and_waits_for_it() {
 
     assert_eq!(type_name_of(&app, whelp), "giant");
     assert_eq!(
-        utils::cell_of(app.world_mut(), bystander),
+        utils::anchor_of(app.world_mut(), bystander),
         CellPos::new(12, 11)
     );
 }
@@ -138,15 +138,16 @@ fn change_ordered_over_idle_ally_is_accepted_and_lands() {
 fn change_into_mover_form_asks_off_only_bodies_its_claims_meet() {
     // Under the continuous model the whelp grows into a giant on
     // (9..11, 9..11), a body on the claim plane. One idle whelp rests on
-    // (11, 11), its claim on the ground; another at (11.7, 10) holds (12, 10),
-    // its body reaching 0.3 onto it. A placement on the claim plane measures
-    // bodies by their claims: the first is asked off on the first tick, the
-    // second never, and stays where it rests.
+    // (11, 11), its claim on the ground; another with its middle at
+    // (12.2, 10.5) holds (12, 10), its body reaching 0.3 onto it. A
+    // placement on the claim plane measures bodies by their claims: the first
+    // is asked off on the first tick, the second never, and stays where it
+    // rests.
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     let (inside, _) = utils::create_owned(&mut app, "whelp", 11, 11, 0);
     let (lying, _) = utils::create_owned(&mut app, "whelp", 14, 10, 0);
-    utils::walk_onto(&mut app, lying, utils::part_way("11.7", "10"), 20);
+    utils::walk_onto(&mut app, lying, utils::point("12.2", "10.5"), 20);
 
     utils::order_morph(&mut app, whelp, "giant");
     utils::run_ticks(&mut app, 1);
@@ -155,7 +156,7 @@ fn change_into_mover_form_asks_off_only_bodies_its_claims_meet() {
     utils::run_ticks(&mut app, 3);
     assert_eq!(
         utils::position_of(app.world(), lying),
-        utils::part_way("11.7", "10")
+        utils::point("12.2", "10.5")
     );
 }
 
@@ -206,7 +207,7 @@ fn growth_its_owner_cannot_pay_asks_nobody_off_its_ground() {
     assert!(utils::order_queue_is_empty(world, whelp));
     assert!(world.get::<MorphComponent>(whelp).is_none());
     assert!(utils::order_queue_is_empty(world, bystander));
-    assert_eq!(utils::cell_of(world, bystander), CellPos::new(11, 11));
+    assert_eq!(utils::anchor_of(world, bystander), CellPos::new(11, 11));
 }
 
 #[test]
@@ -277,9 +278,10 @@ fn growth_gives_up_on_ally_with_nowhere_to_go() {
 
 #[test]
 fn odd_growth_settles_on_lattice_under_cell_model() {
-    // 1x1 -> 2x2 recenters the anchor by half a cell, to 9.5; the cell model
-    // keeps every body on the lattice, so the ogre settles on the nearest
-    // point, 10, and holds cells 10..=11 — at rest, free to move on.
+    // 1x1 -> 2x2 keeps the middle at 10.5, its low corner at 10.5 − 1 = 9.5;
+    // the cell model keeps every body on the lattice, so the ogre settles
+    // anchored at 10, the cell 9.5 rounds to, its middle at 10 + 1 = 11, and
+    // holds cells 10..=11 — lined up on them, free to move on.
     let mut app = utils::morph_app(MovementModel::Cell);
     let (whelp, whelp_id) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
 
@@ -287,7 +289,10 @@ fn odd_growth_settles_on_lattice_under_cell_model() {
     utils::run_ticks(&mut app, 15);
 
     assert_eq!(type_name_of(&app, whelp), "ogre");
-    assert_eq!(utils::position_of(app.world(), whelp), utils::pos(10, 10));
+    assert_eq!(
+        utils::position_of(app.world(), whelp),
+        utils::point("11", "11")
+    );
     utils::select(&mut app, whelp_id);
     utils::push_command(
         &mut app,
@@ -297,13 +302,16 @@ fn odd_growth_settles_on_lattice_under_cell_model() {
         },
     );
     utils::run_ticks(&mut app, utils::APPLY + 4);
-    assert_ne!(utils::position_of(app.world(), whelp), utils::pos(10, 10));
+    assert_ne!(
+        utils::position_of(app.world(), whelp),
+        utils::point("11", "11")
+    );
 }
 
 #[test]
 fn odd_growth_keeps_middle_under_continuous_model() {
-    // Continuous bodies rest anywhere: the ogre settles at the recentered
-    // 9.5, its middle exactly where the whelp's was.
+    // Continuous bodies rest anywhere: the ogre's middle stays exactly where
+    // the whelp's was, 10.5.
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     utils::run_ticks(&mut app, 1);
@@ -314,8 +322,77 @@ fn odd_growth_keeps_middle_under_continuous_model() {
     assert_eq!(type_name_of(&app, whelp), "ogre");
     assert_eq!(
         utils::position_of(app.world(), whelp),
-        FixedUVec2::new(FixedU64::from_num(9.5), FixedU64::from_num(9.5))
+        utils::point("10.5", "10.5")
     );
+}
+
+#[test]
+fn growth_at_origin_settles_on_map() {
+    // A whelp on cell (0, 4) has its middle at (0.5, 4.5); a 3×3 giant there
+    // would reach 0.5 − 3/2 before the origin. Held at x 3/2 = 1.5, the
+    // giant is anchored at (0, 3) — low edges 1.5 − 1.5 = 0 and
+    // 4.5 − 1.5 = 3 — with its middle at (1.5, 4.5), under either model.
+    for model in [MovementModel::Cell, MovementModel::Continuous] {
+        let mut app = utils::morph_app(model);
+        let (whelp, _) = utils::create_owned(&mut app, "whelp", 0, 4, 0);
+        utils::run_ticks(&mut app, 1);
+
+        utils::order_morph(&mut app, whelp, "giant");
+        utils::run_ticks(&mut app, 15);
+
+        assert_eq!(type_name_of(&app, whelp), "giant", "{model:?}");
+        assert_eq!(
+            utils::anchor_of(app.world(), whelp),
+            CellPos::new(0, 3),
+            "{model:?}"
+        );
+        assert_eq!(
+            utils::position_of(app.world(), whelp),
+            utils::point("1.5", "4.5"),
+            "{model:?}"
+        );
+    }
+}
+
+#[test]
+fn rooting_back_and_forth_keeps_anchor() {
+    // A 1×1 sapling on (5, 5) has its middle at (5.5, 5.5). Rooted into a
+    // 2×2 grove, its low edges 5.5 − 1 = 4.5 lie halfway between 4 and 5:
+    // the tie goes to 5, its old anchor, the grove covering cells 5–6 with
+    // its middle at 5 + 1 = 6. Uprooted, the low edges 6 − 1/2 = 5.5 lie
+    // halfway between 5 and 6: the tie goes to 5, the grove's anchor, and
+    // the cell-model sapling stands on (5, 5) again. A continuous sapling
+    // rests anywhere and keeps the grove's middle (6, 6), from which the
+    // next grove's low edges 6 − 1 = 5 are no tie. Neither drifts, ten
+    // times over.
+    for (model, sapling_rests) in [
+        (MovementModel::Cell, utils::point("5.5", "5.5")),
+        (MovementModel::Continuous, utils::point("6", "6")),
+    ] {
+        let mut app = rooting_app(model);
+        let (sapling, _) = utils::create_owned(&mut app, "sapling", 5, 5, 0);
+        utils::run_ticks(&mut app, 1);
+
+        for round in 0..10 {
+            utils::order_morph(&mut app, sapling, "grove");
+            utils::run_ticks(&mut app, 5);
+            assert_eq!(type_name_of(&app, sapling), "grove", "{model:?} {round}");
+            assert_eq!(
+                utils::position_of(app.world(), sapling),
+                utils::point("6", "6"),
+                "{model:?} {round}"
+            );
+
+            utils::order_morph(&mut app, sapling, "sapling");
+            utils::run_ticks(&mut app, 5);
+            assert_eq!(type_name_of(&app, sapling), "sapling", "{model:?} {round}");
+            assert_eq!(
+                utils::position_of(app.world(), sapling),
+                sapling_rests,
+                "{model:?} {round}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -407,7 +484,11 @@ fn changed_trainer_is_not_sent_to_its_own_rally_point() {
 
     assert_eq!(type_name_of(&app, shrine), "golem");
     assert!(entity_def::orders(app.world(), shrine).is_empty());
-    assert_eq!(utils::position_of(app.world(), shrine), utils::pos(10, 10));
+    // The 2×2 golem anchored at (10, 10): its middle at 10 + 1 = 11.
+    assert_eq!(
+        utils::position_of(app.world(), shrine),
+        utils::point("11", "11")
+    );
 }
 
 #[test]
@@ -481,7 +562,7 @@ fn queued_committed_change_drops_before_it_starts() {
         .unwrap()
         .push(
             Order::Move {
-                target: FixedUVec2::new(FixedU64::from_num(20), FixedU64::from_num(10)),
+                target: utils::pos(20, 10),
                 size: ferrets_geometry::cell_size::CellSize::ONE,
                 range: 0,
             },
@@ -532,9 +613,9 @@ fn interim_form_settles_onto_cell_mover_stood_on() {
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     utils::grant_gold(&mut app, 10);
-    // Part way across a cell boundary: the body rounds onto (11, 10) while the
-    // position floors into (10, 10).
-    movement_model::move_body(app.world_mut(), whelp, utils::part_way("10.6", "10.3"));
+    // Part way across a cell boundary: the body's low edge (10.6, 10.3) rounds
+    // onto (11, 10) and floors into (10, 10).
+    utils::move_body(&mut app, whelp, utils::point("11.1", "10.8"));
 
     utils::order_morph(&mut app, whelp, "wyrm");
     utils::run_ticks(&mut app, 1);
@@ -542,7 +623,7 @@ fn interim_form_settles_onto_cell_mover_stood_on() {
     assert_eq!(type_name_of(&app, whelp), "chrysalis");
     assert_eq!(
         utils::position_of(app.world(), whelp),
-        FixedUVec2::from(CellPos::new(11, 10)),
+        utils::pos(11, 10),
         "the chrysalis settles onto the cell it holds, not the fraction the whelp walked on"
     );
     let map = app.world().resource::<Map>();
@@ -836,7 +917,7 @@ fn rooting_off_lattice_settles_position_onto_its_cells() {
     app.world_mut()
         .get_mut::<LocationComponent>(shaft)
         .unwrap()
-        .position = FixedUVec2::new(utils::fixed("10.4"), utils::fixed("10.0"));
+        .position = utils::point("10.9", "10.5");
 
     utils::command_morph(&mut app, shaft_id, "shaft_house");
     utils::run_ticks(&mut app, utils::APPLY + 5);
@@ -849,24 +930,18 @@ fn rooting_off_lattice_settles_position_onto_its_cells() {
         "it rooted"
     );
 
-    // The cells it holds round to ten, and the position settles onto them
-    // from 10.4: nothing is left drawing or measuring the building off the
-    // cells it stands on.
-    assert_eq!(
-        entity_def::occupied_rect(app.world(), shaft).origin,
-        CellPos::new(10, 10)
-    );
-    assert_eq!(
-        entity_def::position(app.world(), shaft),
-        FixedUVec2::new(utils::fixed("10.0"), utils::fixed("10.0"))
-    );
+    // The cell it holds, its low edge 10.4 rounded, is ten, and the position
+    // snaps onto the cell it is anchored at from 10.9: nothing is left drawing
+    // or measuring the building off the cells it stands on.
+    assert_eq!(utils::anchor_of(app.world(), shaft), CellPos::new(10, 10));
+    assert_eq!(entity_def::position(app.world(), shaft), utils::pos(10, 10));
 }
 
 #[test]
 fn change_between_cells_keeps_position_of_form_that_moves() {
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
-    movement_model::move_body(app.world_mut(), whelp, utils::part_way("10.6", "10.3"));
+    utils::move_body(&mut app, whelp, utils::point("11.1", "10.8"));
 
     // Ten ticks of changing, and both forms claim a single cell, so nothing
     // recenters either.
@@ -878,7 +953,7 @@ fn change_between_cells_keeps_position_of_form_that_moves() {
     // survives the change.
     assert_eq!(
         utils::position_of(app.world(), whelp),
-        utils::part_way("10.6", "10.3")
+        utils::point("11.1", "10.8")
     );
 }
 
@@ -898,7 +973,7 @@ fn lowered_gate_is_walked_over() {
     assert_eq!(type_name_of(&app, gate), "gate_lowered");
     utils::order_move(&mut app, digger, 11, 10);
     utils::run_ticks(&mut app, 20);
-    assert_eq!(utils::cell_of(app.world(), digger), CellPos::new(11, 10));
+    assert_eq!(utils::anchor_of(app.world(), digger), CellPos::new(11, 10));
 }
 
 #[test]
@@ -914,7 +989,7 @@ fn raising_gate_asks_own_walker_off() {
     assert_eq!(type_name_of(&app, gate), "gate");
     // The nearest cell off the gate's 2×2 at (10, 10): (11, 9) north, its tie
     // with (12, 10) east going to the lower row.
-    assert_eq!(utils::cell_of(app.world(), digger), CellPos::new(11, 9));
+    assert_eq!(utils::anchor_of(app.world(), digger), CellPos::new(11, 9));
 }
 
 #[test]
@@ -930,7 +1005,7 @@ fn raising_gate_asks_off_walker_that_moves_before_it() {
     utils::run_ticks(&mut app, 30);
     assert_eq!(type_name_of(&app, gate), "gate");
     // The nearest cell off the gate, as under the cell model.
-    assert_eq!(utils::cell_of(app.world(), digger), CellPos::new(11, 9));
+    assert_eq!(utils::anchor_of(app.world(), digger), CellPos::new(11, 9));
 }
 
 #[test]
@@ -946,7 +1021,7 @@ fn raising_gate_is_refused_while_enemy_stands_on_it() {
     assert!(utils::order_queue_is_empty(app.world_mut(), gate));
     utils::run_ticks(&mut app, 60);
     assert_eq!(type_name_of(&app, gate), "gate_lowered");
-    assert_eq!(utils::cell_of(app.world(), digger), CellPos::new(11, 10));
+    assert_eq!(utils::anchor_of(app.world(), digger), CellPos::new(11, 10));
 }
 
 #[test]
@@ -1024,6 +1099,41 @@ fn change_into_static_form_is_refused_over_terrain_it_does_not_take() {
 }
 
 #[test]
+fn change_into_form_wider_than_map_is_refused() {
+    // The map is 32 cells across: a 40×40 colossus has no place on it, and the
+    // sapling keeps its form.
+    let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Cell);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register(
+            utils::walker("sapling", utils::GROUND_DOMAIN)
+                .with_pool(Pool::health(20))
+                .with_morphs([change("colossus", MorphPlacement::Revalidate, Vec::new())]),
+        );
+        registry.register(
+            EntityTypeDef::new("colossus")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(40, 40),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(20)),
+        );
+        registry.validate();
+    }
+    utils::start_game(&mut app);
+    let (sapling, _) = utils::create_owned(&mut app, "sapling", 10, 10, 0);
+
+    utils::order_morph(&mut app, sapling, "colossus");
+    utils::run_ticks(&mut app, 6);
+
+    assert_eq!(type_name_of(&app, sapling), "sapling");
+    assert!(!entity_def::changing(app.world(), sapling));
+}
+
+#[test]
 fn change_landing_nearby_stands_only_where_new_form_steps_from_old() {
     // Mid-pool at (10,10) every cell beside the wader is water, none a settler
     // steps onto from there: the change finds no room and the wader keeps its
@@ -1039,7 +1149,7 @@ fn change_landing_nearby_stands_only_where_new_form_steps_from_old() {
 
     assert_eq!(type_name_of(&app, afloat), "wader");
     assert_eq!(type_name_of(&app, at_edge), "settler");
-    assert_eq!(utils::cell_of(app.world(), at_edge), CellPos::new(10, 8));
+    assert_eq!(utils::anchor_of(app.world(), at_edge), CellPos::new(10, 8));
 }
 
 #[test]
@@ -1070,7 +1180,7 @@ fn worker_seated_inside_its_job_steps_out_of_whole_footprint_to_change() {
         registry.register(shifter);
     });
     let (vein, vein_id) =
-        utils::create_entity(app.world_mut(), "core_vein", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "core_vein", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(vein)
         .unwrap()
@@ -1086,14 +1196,14 @@ fn worker_seated_inside_its_job_steps_out_of_whole_footprint_to_change() {
     );
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(entity_def::attached(app.world(), shifter));
-    assert_eq!(utils::cell_of(app.world(), shifter), CellPos::new(9, 6));
+    assert_eq!(utils::anchor_of(app.world(), shifter), CellPos::new(9, 6));
 
     utils::command_morph(&mut app, shifter_id, "sylph");
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert!(!entity_def::attached(app.world(), shifter));
     assert!(entity_def::changing(app.world(), shifter));
-    assert_eq!(utils::cell_of(app.world(), shifter), CellPos::new(9, 4));
+    assert_eq!(utils::anchor_of(app.world(), shifter), CellPos::new(9, 4));
 }
 
 #[test]
@@ -1154,12 +1264,12 @@ fn canceled_change_of_berthed_worker_leaves_it_on_land_it_takes() {
     utils::command_morph(&mut app, sylph_id, "wet_sylph");
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(!entity_def::attached(app.world(), sylph));
-    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(9, 11));
+    assert_eq!(utils::anchor_of(app.world(), sylph), CellPos::new(9, 11));
 
     utils::soft_cancel_orders(app.world_mut(), sylph);
     utils::run_ticks(&mut app, 1);
     assert_eq!(type_name_of(&app, sylph), "dry_sylph");
-    assert_eq!(utils::cell_of(app.world(), sylph), CellPos::new(9, 11));
+    assert_eq!(utils::anchor_of(app.world(), sylph), CellPos::new(9, 11));
 }
 
 //
@@ -1173,7 +1283,7 @@ fn reserving_change_claims_layers_its_standing_claim_lacks_under_it() {
     // holding the ground; the other three cells are claimed on both.
     let mut app = titan_app();
     let (keeper, keeper_id) = utils::create_owned(&mut app, "keeper", 10, 10, 0);
-    let own = utils::cell_of(app.world(), keeper);
+    let own = utils::anchor_of(app.world(), keeper);
 
     utils::order_morph(&mut app, keeper, "titan");
     utils::run_ticks(&mut app, 1);
@@ -1217,7 +1327,7 @@ fn placement_on_ground_reserved_for_change_is_refused() {
     // covered by one; a cell clear of the reservation takes it.
     let mut app = titan_app();
     let (keeper, keeper_id) = utils::create_owned(&mut app, "keeper", 10, 10, 0);
-    let own = utils::cell_of(app.world(), keeper);
+    let own = utils::anchor_of(app.world(), keeper);
     utils::order_morph(&mut app, keeper, "titan");
     utils::run_ticks(&mut app, 1);
 
@@ -1235,7 +1345,7 @@ fn placement_on_ground_reserved_for_change_is_refused() {
     let placed_on = |cell: CellPos| {
         ground::can_place(
             world,
-            &LocationComponent::new(FixedUVec2::from(cell), Facing::SOUTH),
+            cell,
             keeper_location,
             OccupancyClass::Claim,
             &[],
@@ -1269,7 +1379,7 @@ fn building_reserving_change_keeps_ground_only_by_its_reservation() {
         .expect("the shrine stands somewhere");
     assert!(ground::can_place(
         world,
-        &LocationComponent::new(utils::pos(12, 10), Facing::SOUTH),
+        utils::cell(12, 10),
         shrine_location,
         OccupancyClass::Static,
         &[],
@@ -1287,18 +1397,18 @@ fn body_changing_on_reserved_ground_stands_against_contact() {
 
     // A whelp pressed into the keeper's body: the contact pushes the whelp
     // off, and the keeper stands where its change reserved its ground.
-    movement_model::move_body(app.world_mut(), shover, utils::part_way("10.4", "10"));
+    utils::move_body(&mut app, shover, utils::point("10.9", "10.5"));
     utils::run_ticks(&mut app, 1);
 
     // Two radii of 0.5, 0.4 apart, overlap by 0.5 + 0.5 - 0.4 = 0.6; at equal
     // weight each body's share is half, 0.3: the whelp's moves it on to
-    // 10.4 + 0.3 = 10.7, the keeper's is dropped. The whelp takes only its
+    // 10.9 + 0.3 = 11.2, the keeper's is dropped. The whelp takes only its
     // own share until a standing body is a wall to it (plan Q105), when it
-    // would take all 0.6, to 11.0.
+    // would take all 0.6, to 11.5.
     assert_eq!(utils::position_of(app.world(), keeper), utils::pos(10, 10));
     assert_eq!(
         utils::position_of(app.world(), shover),
-        utils::part_way("10.7", "10")
+        utils::point("11.2", "10.5")
     );
 }
 
@@ -1508,6 +1618,36 @@ fn underfoot_app_on(model: MovementModel) -> App {
             "gate",
             MorphPlacement::Reserve,
         ));
+        registry.validate();
+    }
+    utils::start_game(&mut app);
+    app
+}
+
+/// One human on a map of `model` with a 1×1 `sapling` walker that roots in
+/// place into a static 2×2 `grove`, and the grove that uproots back into the
+/// sapling, both judged as they land. Session started.
+fn rooting_app(model: MovementModel) -> App {
+    let mut app = utils::make_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    utils::install_map(&mut app, Projection::Isometric, model);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        registry.register(
+            utils::walker("sapling", utils::GROUND_DOMAIN)
+                .with_pool(Pool::health(20))
+                .with_morphs([change("grove", MorphPlacement::Revalidate, Vec::new())]),
+        );
+        registry.register(
+            EntityTypeDef::new("grove")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(20))
+                .with_morphs([change("sapling", MorphPlacement::Revalidate, Vec::new())]),
+        );
         registry.validate();
     }
     utils::start_game(&mut app);

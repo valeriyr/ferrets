@@ -4,6 +4,7 @@
 mod utils;
 
 use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize};
+use ferrets_math::fixed_urect::FixedURect;
 
 //
 // ─── Construction ─────────────────────────────────────────────────────────────
@@ -22,6 +23,61 @@ fn cell_covers_single_cell() {
     assert_eq!(
         CellRect::cell(utils::nav(7, 2)),
         CellRect::new(utils::nav(7, 2), CellSize::ONE)
+    );
+}
+
+//
+// ─── bounds ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn bounds_span_cells_corner_to_far_corner() {
+    // Cells 5–7 by 5–6 span 5 to 5 + 3 = 8 on x and 5 to 5 + 2 = 7 on y.
+    assert_eq!(
+        CellRect::new(utils::nav(5, 5), CellSize::new(3, 2)).bounds(),
+        FixedURect::new(utils::world(5, 5), utils::world(8, 7))
+    );
+}
+
+//
+// ─── covering ─────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn covering_aligned_bounds_takes_their_cells() {
+    // 5–7 on both axes lies over cells 5 and 6.
+    assert_eq!(
+        CellRect::covering(FixedURect::new(utils::world(5, 5), utils::world(7, 7))),
+        CellRect::new(utils::nav(5, 5), CellSize::new(2, 2))
+    );
+}
+
+#[test]
+fn covering_off_lattice_bounds_takes_every_cell_shared() {
+    // x 5.3–7.3 shares area with cells 5, 6 and 7; y 5–7 with 5 and 6.
+    assert_eq!(
+        CellRect::covering(FixedURect::new(
+            utils::point("5.3", "5"),
+            utils::point("7.3", "7")
+        )),
+        CellRect::new(utils::nav(5, 5), CellSize::new(3, 2))
+    );
+}
+
+#[test]
+fn covering_own_bounds_gives_back_rect() {
+    // The bounds (5, 5)..(5 + 3, 5 + 2) = (8, 7) cover x 5..7 and y 5..6.
+    let rect = CellRect::new(utils::nav(5, 5), CellSize::new(3, 2));
+    assert_eq!(CellRect::covering(rect.bounds()), rect);
+}
+
+#[test]
+fn covering_point_takes_cell_it_lies_in() {
+    // 4.25 floors to 4, 9.75 to 9.
+    let point = utils::point("4.25", "9.75");
+    assert_eq!(
+        CellRect::covering(FixedURect::new(point, point)),
+        CellRect::cell(utils::nav(4, 9))
     );
 }
 

@@ -298,7 +298,7 @@ pub fn run() {
                     render::draw_rally,
                     (render::draw_work_links, render::draw_brood_ties),
                     render::draw_annex_bonds,
-                    render::draw_watch_patches,
+                    render::draw_watch_reach,
                     render::draw_work_markers,
                     render::draw_status_bars,
                     (render::shade_sprites, render::fade_remains),

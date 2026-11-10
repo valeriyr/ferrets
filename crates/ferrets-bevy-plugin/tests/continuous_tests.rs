@@ -17,12 +17,11 @@ use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
 };
 use ferrets_math::FixedU64;
-use ferrets_physics::body;
 use ferrets_simulation::{
     command::PlayerCommand,
     entity_def,
     map::Map,
-    movement_model::{self, MovementModel},
+    movement_model::MovementModel,
     order::AttackTarget,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
 };
@@ -45,7 +44,7 @@ fn continuous_walk_reaches_goal() {
     utils::run_ticks(&mut app, 200);
 
     assert_eq!(
-        utils::cell_of(app.world_mut(), soldier),
+        utils::anchor_of(app.world_mut(), soldier),
         CellPos::new(20, 14)
     );
     // The uncrowded walk lands exactly on the lattice: the final step hits
@@ -78,19 +77,12 @@ fn overlapping_bodies_push_apart() {
     let world = app.world_mut();
     let a = utils::position_of(world, first.0);
     let b = utils::position_of(world, second.0);
-    // Bodies are circles on every projection, so rest separation is
-    // Euclidean regardless of the map's own metric.
-    let separation = a.distance(b);
-    assert!(
-        separation >= FixedU64::from_num(0.99),
-        "bodies must rest a full body apart: separation {separation}"
-    );
     // The exact equilibrium: both walks touch the contested spot the same
     // tick and finish there; the pushing pass parts the coincident pair
     // half a body each way, so they rest a full diameter apart, each
     // holding its own cell.
-    assert_eq!(a, utils::position_bits(0x4_8000_0000, 0x5_0000_0000));
-    assert_eq!(b, utils::position_bits(0x5_8000_0000, 0x5_0000_0000));
+    assert_eq!(a, utils::point("5", "5.5"));
+    assert_eq!(b, utils::point("6", "5.5"));
 }
 
 #[test]
@@ -123,7 +115,7 @@ fn pushing_never_commits_onto_terrain_off_its_domain() {
     let world = app.world_mut();
     let cells: Vec<CellPos> = landlubbers
         .iter()
-        .map(|(landlubber, _)| body::anchor(utils::position_of(world, *landlubber)))
+        .map(|(landlubber, _)| utils::anchor_of(world, *landlubber))
         .collect();
     assert_eq!(
         cells,
@@ -135,13 +127,13 @@ fn pushing_never_commits_onto_terrain_off_its_domain() {
             CellPos::new(7, 3),
         ]
     );
-    // Each rests flush against the water: at x = 7 it reaches to 7 + 1 = 8,
-    // the water's edge.
+    // Each rests flush against the water: its middle at x = 7.5 reaches to
+    // 7.5 + 0.5 = 8, the water's edge.
     let edges: Vec<FixedU64> = landlubbers
         .iter()
         .map(|(landlubber, _)| utils::position_of(world, *landlubber).x)
         .collect();
-    assert_eq!(edges, vec![FixedU64::from_num(7); 5]);
+    assert_eq!(edges, vec![utils::fixed("7.5"); 5]);
 }
 
 #[test]
@@ -182,7 +174,7 @@ fn pushing_never_commits_into_walls() {
         let world = app.world_mut();
         let cells: Vec<CellPos> = soldiers
             .iter()
-            .map(|(soldier, _)| body::anchor(utils::position_of(world, *soldier)))
+            .map(|(soldier, _)| utils::anchor_of(world, *soldier))
             .collect();
         assert_eq!(
             cells,
@@ -201,8 +193,9 @@ fn pushing_never_commits_into_walls() {
     for (soldier, _) in soldiers {
         let world = app.world_mut();
         let position = utils::position_of(world, soldier);
-        let half = FixedU64::from_num(0.5);
-        let center = (position.x + half, position.y + half);
+        let half = utils::fixed("0.5");
+        let middle = (position.x, position.y);
+        let low = (position.x - half, position.y - half);
         let radius = half;
         let cells_of = |value: FixedU64| {
             let first = value.floor().to_num::<u32>();
@@ -212,13 +205,13 @@ fn pushing_never_commits_into_walls() {
                 first..=first + 1
             }
         };
-        for y in cells_of(position.y) {
-            for x in cells_of(position.x) {
+        for y in cells_of(low.1) {
+            for x in cells_of(low.0) {
                 let nearest = |value: FixedU64, cell: u32| {
                     value.clamp(FixedU64::from_num(cell), FixedU64::from_num(cell + 1))
                 };
-                let off_x = center.0.abs_diff(nearest(center.0, x)).to_bits() as u128;
-                let off_y = center.1.abs_diff(nearest(center.1, y)).to_bits() as u128;
+                let off_x = middle.0.abs_diff(nearest(middle.0, x)).to_bits() as u128;
+                let off_y = middle.1.abs_diff(nearest(middle.1, y)).to_bits() as u128;
                 let reach = radius.to_bits() as u128;
                 if off_x * off_x + off_y * off_y >= reach * reach {
                     continue;
@@ -277,8 +270,8 @@ fn head_on_bodies_flow_past_each_other() {
         min_distance = min_distance.min(distance);
     }
 
-    assert_eq!(utils::cell_of(app.world_mut(), left), CellPos::new(9, 5));
-    assert_eq!(utils::cell_of(app.world_mut(), right), CellPos::new(2, 5));
+    assert_eq!(utils::anchor_of(app.world_mut(), left), CellPos::new(9, 5));
+    assert_eq!(utils::anchor_of(app.world_mut(), right), CellPos::new(2, 5));
     // The pair never comes a single bit closer than a full body diameter:
     // the swerve parts them exactly at contact.
     assert_eq!(min_distance, FixedU64::ONE);
@@ -331,19 +324,12 @@ fn crowded_group_settles_and_stops_milling() {
         "a settled crowd must rest, not mill around"
     );
 
-    // And rest means separated bodies: no pair closer than a body diameter.
-    for (index, a) in settled.iter().enumerate() {
-        for b in settled.iter().skip(index + 1) {
-            let separation = a.distance(*b);
-            assert!(
-                separation >= FixedU64::from_num(0.99),
-                "settled bodies must not overlap: separation {separation}"
-            );
-        }
-    }
     // The exact settle: a compact block around the contested point, one
     // body per cell.
-    let mut cells: Vec<CellPos> = settled.iter().map(|&body| body::anchor(body)).collect();
+    let mut cells: Vec<CellPos> = soldiers
+        .iter()
+        .map(|(soldier, _)| utils::anchor_of(app.world(), *soldier))
+        .collect();
     cells.sort_unstable();
     assert_eq!(
         cells,
@@ -390,7 +376,7 @@ fn crowd_of_ten_rests_one_per_cell() {
     }
     let mut cells: Vec<CellPos> = soldiers
         .iter()
-        .map(|(soldier, _)| body::anchor(utils::position_of(world, *soldier)))
+        .map(|(soldier, _)| utils::anchor_of(world, *soldier))
         .collect();
     cells.sort_unstable();
     cells.dedup();
@@ -447,21 +433,15 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
     utils::run_ticks(&mut app, 400);
 
     let world = app.world_mut();
-    let cell = utils::cell_of(world, idle);
+    let cell = utils::anchor_of(world, idle);
     assert!(
         cell.x > 6 && cell.y == 5,
         "idle body must be plowed down the corridor: rests on {cell:?}"
     );
     // The exact end state: the walker ring-accepts beside its contested
     // goal, the idle body plowed one cell past it.
-    assert_eq!(
-        body::anchor(utils::position_of(world, idle)),
-        CellPos::new(12, 5)
-    );
-    assert_eq!(
-        body::anchor(utils::position_of(world, walker)),
-        CellPos::new(11, 5)
-    );
+    assert_eq!(utils::anchor_of(world, idle), CellPos::new(12, 5));
+    assert_eq!(utils::anchor_of(world, walker), CellPos::new(11, 5));
     assert!(
         !world
             .resource::<Map>()
@@ -470,24 +450,24 @@ fn pushed_idle_body_claims_cell_it_settles_on() {
         "pushed body must release the cell it was shoved off"
     );
 
-    // The claim plane holds one cell per body — the cell under its center,
+    // The claim plane holds one cell per body — the cell under its middle,
     // the one it visually stands on: every corridor cell is claimed exactly
-    // when it is some body's center cell, however the bodies straddle
+    // when it is some body's middle cell, however the bodies straddle
     // borders.
-    let bodies: Vec<_> = [idle, walker]
+    let bodies: Vec<CellPos> = [idle, walker]
         .iter()
-        .map(|&entity| utils::position_of(world, entity))
+        .map(|&entity| utils::anchor_of(world, entity))
         .collect();
     for x in 1..13 {
         let cell = CellPos::new(x, 5);
-        let expected = bodies.iter().any(|&body| body::anchor(body) == cell);
+        let expected = bodies.contains(&cell);
         assert_eq!(
             world
                 .resource::<Map>()
                 .nav_grid()
                 .is_claimed(utils::GROUND, cell),
             expected,
-            "claim on {cell:?} must be the cell under a body's center"
+            "claim on {cell:?} must be the cell under a body's middle"
         );
     }
 }
@@ -519,21 +499,91 @@ fn wide_body_claims_whole_footprint() {
 #[test]
 fn push_never_sets_footprint_past_map_edge() {
     // A slim wagon — 2×2, its circle of radius 0.4 well inside its footprint
-    // — rests against the east edge of the 32-cell map, anchored at (30, 5).
-    // A soldier set inside its west half pushes it east, where its circle
-    // would still sit on the map but its rounded footprint would reach past
-    // the edge: that push is refused, and the wagon keeps its anchor.
+    // — rests against the east edge of the 32-cell map, anchored at (30, 5),
+    // its middle at (31, 6). A soldier set inside its north-west quarter
+    // pushes it south-east, where its circle would still sit on the map but
+    // its body would reach past the edge: the push's east share is held at
+    // x 32 − 2/2 = 31, and its south share slides the wagon along the edge
+    // into row 6, its footprint still ending on column 31.
     let mut app = slim_wagon_app();
     let (wagon, _) = utils::create_owned(&mut app, "slim_wagon", 30, 5, 0);
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
-    movement_model::move_body(app.world_mut(), soldier, utils::pos(30, 5));
+    utils::move_body(&mut app, soldier, utils::pos(30, 5));
 
     utils::run_ticks(&mut app, 300);
 
     assert_eq!(
-        body::anchor(utils::position_of(app.world_mut(), wagon)),
-        CellPos::new(30, 5)
+        utils::anchor_of(app.world_mut(), wagon),
+        CellPos::new(30, 6)
     );
+}
+
+#[test]
+fn continuous_claim_form_counts_held_cells_not_snapped_ones() {
+    // A continuous 2×2 wagon anchored at (9, 9) has its middle at (10, 10).
+    // Judged as a one-cell soldier, a claim form a continuous body holds as
+    // it is: its low corner 10 − 1/2 = 9.5 rounds up, so it counts (10, 10)
+    // — not (9, 9), which snapping the tie toward the wagon's own anchor
+    // would give.
+    let mut app = utils::continuous_orders_app();
+    let (wagon, _) =
+        utils::create_entity(app.world_mut(), "wagon", utils::cell(9, 9), Some(0)).unwrap();
+
+    let world = app.world();
+    let soldier = world
+        .resource::<ContentRegistry>()
+        .entity("soldier")
+        .expect("the orders content declares a soldier");
+    assert_eq!(
+        entity_def::footprint_as(world, wagon, soldier),
+        CellRect::cell(CellPos::new(10, 10))
+    );
+}
+
+//
+// ─── Map edges ────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn point_move_before_origin_holds_body_on_map() {
+    // A soldier ordered to (0.2, 3.3) would reach 0.2 − 1/2 before the
+    // origin: the walk aims at x 1/2 instead and finishes there, y kept.
+    let mut app = utils::continuous_orders_app();
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 5, 3, 0);
+    utils::order_move_onto(&mut app, soldier, utils::point("0.2", "3.3"));
+
+    utils::run_ticks(&mut app, 200);
+
+    assert!(utils::order_queue_is_empty(app.world(), soldier));
+    assert_eq!(
+        utils::position_of(app.world(), soldier),
+        utils::point("0.5", "3.3")
+    );
+}
+
+#[test]
+fn wide_point_move_past_either_edge_holds_body_on_map() {
+    // A slim wagon — 2×2, its circle of radius 0.4 — fits by its circle with
+    // its middle 0.4 from an edge, but its body reaches a whole cell either
+    // side: ordered to x 0.5 it finishes at 2/2 = 1, and to x 31.8 on the
+    // 32-wide map at 32 − 1 = 31.
+    for (ordered, rests) in [("0.5", "1"), ("31.8", "31")] {
+        let mut app = slim_wagon_app();
+        let (wagon, _) = utils::create_owned(&mut app, "slim_wagon", 15, 5, 0);
+        utils::order_move_onto(&mut app, wagon, utils::point(ordered, "6"));
+
+        utils::run_ticks(&mut app, 400);
+
+        assert!(
+            utils::order_queue_is_empty(app.world(), wagon),
+            "ordered to x {ordered}"
+        );
+        assert_eq!(
+            utils::position_of(app.world(), wagon),
+            utils::point(rests, "6"),
+            "ordered to x {ordered}"
+        );
+    }
 }
 
 #[test]
@@ -541,35 +591,28 @@ fn mixed_size_bodies_push_apart() {
     let mut app = utils::orders_app();
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
     // A soldier spawned inside a resting wagon's footprint: contact runs
-    // center to center — the wagon's circle sits half its size past the
-    // anchor, deeper in than a same-anchor small body's — so the pair parts
+    // middle to middle — the wagon's sits half its size past its anchor's
+    // corner, deeper in than a same-anchor small body's — so the pair parts
     // by the sum of their radii instead of missing the overlap or phantom
     // pushing on one side.
     let (wagon, _) = utils::create_owned(&mut app, "wagon", 5, 5, 0);
     // Spawned clear — placement rightly refuses the claimed footprint — and
     // moved into the overlap directly, its claim following it.
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
-    movement_model::move_body(app.world_mut(), soldier, utils::pos(6, 6));
+    utils::move_body(&mut app, soldier, utils::pos(6, 6));
 
     utils::run_ticks(&mut app, 300);
 
     let world = app.world_mut();
-    let wagon_center = body::center(utils::position_of(world, wagon), CellSize::new(2, 2));
-    let soldier_center = body::center(utils::position_of(world, soldier), CellSize::ONE);
-    let separation = wagon_center.distance(soldier_center);
-    assert!(
-        separation >= FixedU64::from_num(1.49),
-        "centers must part by the radii sum 1.5: separation {separation}"
-    );
     // The exact equilibrium: the pair parts along the diagonal through both
-    // centers, each carried half the overlap per pass until contact clears.
+    // middles, each carried half the overlap per pass until contact clears.
     assert_eq!(
         utils::position_of(world, wagon),
-        utils::position_bits(0x4_b83c_499a, 0x4_b83c_499a)
+        utils::position_bits(0x5_b83c_499a, 0x5_b83c_499a)
     );
     assert_eq!(
         utils::position_of(world, soldier),
-        utils::position_bits(0x6_47c3_b666, 0x6_47c3_b666)
+        utils::position_bits(0x6_c7c3_b666, 0x6_c7c3_b666)
     );
 }
 
@@ -584,17 +627,13 @@ fn heavier_body_is_carried_less_than_lighter_of_same_size() {
     // Spawned clear — placement rightly refuses the claimed cell — then set
     // half a cell into the ox, half the radii sum of the two bodies.
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
-    movement_model::move_body(
-        app.world_mut(),
-        soldier,
-        utils::position_bits(0x5_8000_0000, 0x5_0000_0000),
-    );
+    utils::move_body(&mut app, soldier, utils::point("6", "5.5"));
 
     utils::run_ticks(&mut app, 300);
 
     let world = app.world_mut();
-    let ox_gave = FixedU64::from_num(5) - utils::position_of(world, ox).x;
-    let soldier_gave = utils::position_of(world, soldier).x - FixedU64::from_num(5.5);
+    let ox_gave = utils::fixed("5.5") - utils::position_of(world, ox).x;
+    let soldier_gave = utils::position_of(world, soldier).x - FixedU64::from_num(6);
     assert!(
         soldier_gave > ox_gave * FixedU64::from_num(3),
         "the soldier must give far more ground than the ox it met: \
@@ -644,7 +683,7 @@ fn claim_follows_walking_body() {
     // The claim follows the body: the cell under it is claimed, the spawn
     // cell released.
     let world = app.world_mut();
-    let cell = utils::cell_of(world, soldier);
+    let cell = utils::anchor_of(world, soldier);
     assert_eq!(cell, CellPos::new(12, 2));
     assert!(
         world
@@ -696,7 +735,7 @@ fn attacker_takes_free_cell_beside_body_holding_its_goal() {
     assert_eq!(utils::health_as_u32(&app, rampart), 390);
     assert_eq!(
         utils::position_of(app.world_mut(), soldier),
-        utils::part_way("10", "8.5")
+        utils::point("10.5", "9")
     );
 }
 
@@ -738,9 +777,9 @@ fn buffed_radius_is_held_to_half_its_footprint() {
 
 #[test]
 fn body_shrunk_to_no_radius_covers_cell_its_middle_lies_in() {
-    // The soldier's half-cell radius taken away whole: 0.5 − 0.5 = 0. Resting
-    // at (5.5, 5.5), its middle (6, 6) lies on the corner four cells share,
-    // in (6, 6), the one cell its body covers.
+    // The soldier's half-cell radius taken away whole: 0.5 − 0.5 = 0. Its
+    // middle walked onto (6, 6), the corner four cells share, lies in (6, 6),
+    // the one cell its body covers.
     let mut app = utils::continuous_orders_app();
     let shrunk = utils::register_entity_buff(
         &mut app,
@@ -751,7 +790,7 @@ fn body_shrunk_to_no_radius_covers_cell_its_middle_lies_in() {
         None,
     );
     let (soldier, _) = utils::create_owned(&mut app, "soldier", 5, 5, 0);
-    utils::walk_onto(&mut app, soldier, utils::part_way("5.5", "5.5"), 10);
+    utils::walk_onto(&mut app, soldier, utils::point("6", "6"), 10);
     utils::apply_buff(app.world_mut(), soldier, shrunk);
     utils::run_ticks(&mut app, 1);
 
@@ -782,7 +821,7 @@ fn slim_wagon_app() -> App {
                 utils::GROUND,
             )
             .with_movement(
-                FixedU64::from_num(0.5),
+                utils::fixed("0.5"),
                 utils::fixed("0.4"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),

@@ -1,7 +1,7 @@
 mod utils;
 
 use ferrets_math::{
-    FixedI64, FixedU64,
+    FixedI64,
     facing::{self, Facing},
     fixed_vec2::FixedVec2,
 };
@@ -36,8 +36,8 @@ fn bearing_reads_direction_not_length() {
     );
     assert_eq!(
         Facing::of(FixedVec2::new(
-            FixedI64::lit("0.01"),
-            FixedI64::lit("-0.01")
+            utils::signed_fixed("0.01"),
+            utils::signed_fixed("-0.01")
         )),
         Facing::of(utils::vec2(1, -1))
     );
@@ -70,9 +70,15 @@ fn bearings_grow_clockwise_through_quarter() {
 #[test]
 fn approximated_bearings_stay_within_tenth_of_degree() {
     // tan 30° and tan 60°, the worst that a polynomial exact at 0° and 45° can do.
-    let thirty = Facing::of(FixedVec2::new(FixedI64::lit("0.57735"), -FixedI64::ONE));
-    let sixty = Facing::of(FixedVec2::new(FixedI64::ONE, -FixedI64::lit("0.57735")));
-    let tolerance = facing::units_of_degrees(FixedU64::lit("0.1"));
+    let thirty = Facing::of(FixedVec2::new(
+        utils::signed_fixed("0.57735"),
+        -FixedI64::ONE,
+    ));
+    let sixty = Facing::of(FixedVec2::new(
+        FixedI64::ONE,
+        -utils::signed_fixed("0.57735"),
+    ));
+    let tolerance = facing::units_of_degrees(utils::fixed("0.1"));
 
     assert!(
         thirty.unwrap().distance(exactly(30)) <= tolerance,
@@ -213,11 +219,11 @@ fn whole_turn_of_degrees_is_whole_turn_of_units() {
 #[test]
 fn fractional_degrees_convert() {
     assert_eq!(
-        facing::units_of_degrees(FixedU64::lit("22.5")),
+        facing::units_of_degrees(utils::fixed("22.5")),
         facing::PER_TURN / 16
     );
     assert_eq!(
-        facing::units_of_degrees(FixedU64::lit("0.5")),
+        facing::units_of_degrees(utils::fixed("0.5")),
         facing::PER_TURN / 720
     );
 }
@@ -256,9 +262,10 @@ fn unit_offset_between_vertices_lies_on_their_edge() {
     // quarter turn along): the midpoint of the edge between (0, -1) and
     // (0.38268343236, -0.92387953251).
     let unit = Facing::from_bits((facing::PER_TURN / 32) as u16).unit();
-    assert_eq!(unit.x, FixedI64::lit("0.38268343236") / 2);
+    assert_eq!(unit.x, utils::signed_fixed("0.38268343236") / 2);
     assert_eq!(
         unit.y,
-        FixedI64::lit("-1") + (FixedI64::lit("-0.92387953251") - FixedI64::lit("-1")) / 2
+        FixedI64::from_num(-1)
+            + (utils::signed_fixed("-0.92387953251") - FixedI64::from_num(-1)) / 2
     );
 }

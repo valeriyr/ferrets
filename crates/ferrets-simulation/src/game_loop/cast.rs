@@ -15,7 +15,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{
     attack::Slain,
     entity_buffs::Interruption,
-    entity_type_def::EntityTypeId,
+    entity_type_def::{EntityTypeDef, EntityTypeId},
     field::FieldPlacement,
     kinds::Kinds,
     landing::Landing,
@@ -29,8 +29,8 @@ use ferrets_content::{
         Refund, Shortfall, SkillCaster, SkillDef, SkillId, SummonArrival, SummonPlacement, Whom,
     },
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
+use ferrets_math::fixed_urect::FixedURect;
 
 use super::{
     buffs::{self, Bearing},
@@ -60,7 +60,7 @@ use crate::{
     resources::{self, PlayerResources},
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
-    spawn::{self, Arrival, FieldReach},
+    spawn::{self, Arrival, At, FieldReach},
     supply, tunnels,
     visibility::{self, Senses},
     watches,
@@ -173,7 +173,6 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
             // that declares no reach lands from wherever the caster stands, so
             // there is nothing to close on and nothing to turn toward.
             if let Some(range) = reach_of(world, entity, &def) {
-                let (goal_position, goal_size) = aimed_footprint(world, aim);
                 let destination = match aim {
                     CastAim::Entity(target) | CastAim::Remains(target) => chase::advance_to_entity(
                         &mut state.last_chase,
@@ -182,12 +181,11 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
                         target,
                         range,
                     ),
-                    CastAim::Cell(_) => chase::advance_to_point(
+                    CastAim::Cell(cell) => chase::advance_to_rect(
                         &mut state.last_chase,
                         world,
                         entity,
-                        goal_position,
-                        goal_size,
+                        CellRect::cell(cell),
                         range,
                     ),
                 };
@@ -206,7 +204,8 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
                     }
                     Destination::Arrived => {}
                 }
-                chase::face(world, entity, goal_position, goal_size);
+                let aim_bounds = aimed_bounds(world, aim);
+                chase::face(world, entity, aim_bounds);
             }
             // The caster is where it needs to be: its first tick of casting
             // pays what the cast pays at its start, or ends the order unpaid.
@@ -334,7 +333,7 @@ pub fn judge_issue(
     }
     let target = match effect.target() {
         EntityCastTarget::Caster => None,
-        EntityCastTarget::Position { .. }
+        EntityCastTarget::Ground { .. }
         | EntityCastTarget::Standing { .. }
         | EntityCastTarget::Fallen { .. } => match (casting, aiming) {
             (Casting::Transient, Aiming::Picked(target)) => target,
@@ -570,7 +569,7 @@ fn casting(world: &World, caster: Entity, def: &SkillDef) -> (u32, u32) {
 fn reach_of(world: &World, caster: Entity, def: &SkillDef) -> Option<u32> {
     match &def.caster {
         SkillCaster::Entity { effect, .. } => match effect.target() {
-            EntityCastTarget::Position { reach }
+            EntityCastTarget::Ground { reach }
             | EntityCastTarget::Standing { reach, .. }
             | EntityCastTarget::Fallen { reach, .. } => match reach {
                 Reach::Wherever => None,
@@ -701,9 +700,9 @@ fn carry_out(
         // on: naming the body would name something already gone.
         CastAim::Remains(remains) => {
             let (spent, lay) = spend_remains(world, caster_id, remains);
-            (SkillTarget::Position(lay), Some(spent))
+            (SkillTarget::Cell(lay), Some(spent))
         }
-        CastAim::Cell(cell) => (SkillTarget::Position(FixedUVec2::from(cell)), None),
+        CastAim::Cell(cell) => (SkillTarget::Cell(cell), None),
     };
     perform(world, player, caster, skill, aim, effect, plan, spent);
     landed_on
@@ -765,23 +764,15 @@ fn resolve(
             takes(world, caster, effect)?;
             Ok(CastAim::Entity(caster))
         }
-        EntityCastTarget::Position { .. } => {
-            let Some(SkillTarget::Position(position)) = target else {
+        EntityCastTarget::Ground { .. } => {
+            let Some(SkillTarget::Cell(cell)) = target else {
                 return Err(AimRefusal::Unaimed);
             };
-            let cell = CellPos::from(position);
             if !world.resource::<Map>().contains(cell) {
                 return Err(AimRefusal::OffMap);
             }
             match lands_at_aim(effect) {
-                Some(landing)
-                    if !landing::sees(
-                        world,
-                        player,
-                        landing,
-                        CellRect::new(cell, CellSize::ONE),
-                    ) =>
-                {
+                Some(landing) if !landing::sees(world, player, landing, CellRect::cell(cell)) => {
                     Err(AimRefusal::LandingUnseen)
                 }
                 Some(_) | None => Ok(CastAim::Cell(cell)),
@@ -958,16 +949,17 @@ fn judge(
 }
 
 /// Settles where a summon of `count` units of `entity_type` sets each one
-/// down, or `None` when it cannot set every one down: no headroom in the
-/// owner's supply, or not ground enough around the aim.
+/// down, or `None` when it cannot set every one down: a type wider or taller
+/// than the map, no headroom in the owner's supply, or not ground enough
+/// around the aim.
 ///
-/// The units stand where they may — on the aimed cell for an exact
-/// placement, or for a type raised over a source on the source under it;
-/// nearest the aim for a nearby one; over the ground of remains aimed at,
-/// which the cast spends first: the same ground, placement
-/// rules, landing and order a relocation lands by, inside the summon's
-/// `within` field rules; a type raised over a source lands only over a
-/// source of its type, which it covers.
+/// The units stand where they may — on the aimed cell or centered on the aimed
+/// body for an exact placement, or for a type raised over a source on the
+/// source under it; nearest the aim for a nearby one; over the ground of
+/// remains aimed at, which the cast spends first: the same ground, placement
+/// rules, landing and order a relocation lands by, inside the summon's `within`
+/// field rules; a type raised over a source lands only over a source of its
+/// type, which it covers.
 #[allow(clippy::too_many_arguments)]
 fn summoning(
     world: &World,
@@ -983,6 +975,14 @@ fn summoning(
 ) -> Option<CastPlan> {
     let count = entity_def::quantity_count(world, caster, count);
     let def = world.resource::<ContentRegistry>().def(entity_type);
+    // A body wider or taller than the map has no place on it.
+    let size = def
+        .location
+        .expect("a summoned type stands somewhere")
+        .size();
+    if !world.resource::<Map>().fits(size) {
+        return None;
+    }
     if !supply::allows_all(world, player, def, count as usize) {
         return None;
     }
@@ -990,7 +990,7 @@ fn summoning(
     if tunnels::refuses_raising(world, caster, def) {
         return None;
     }
-    let around = aimed_standing_rect(world, aim);
+    let around = aimed_patch(world, aim);
     // Remains aimed at are spent before the bodies land, so their ground is
     // free for them.
     let (lifted, ignored) = match aim {
@@ -1003,13 +1003,14 @@ fn summoning(
     let mut landings = Landings::new(player, landing, within, &lifted, &ignored);
     let from = aimed_source(world, aim);
     // An exact body raised over a source anchors on the source under the
-    // aimed cell; any other on the aimed cell itself.
+    // aimed cell; any other on the aimed cell, or centered on what it was
+    // aimed at.
     let bound = match (placement, def.overbuilds.as_deref()) {
         (SummonPlacement::Exact, Some(over)) => {
             let source = overbuild::source_covering(world, over, around.origin)?;
-            Bound::At(entity_def::footprint_rect(world, source).origin)
+            Bound::At(entity_def::location(world, source).anchor())
         }
-        (SummonPlacement::Exact, None) => Bound::At(around.origin),
+        (SummonPlacement::Exact, None) => Bound::At(exact_anchor(world, aim, def)),
         (SummonPlacement::Nearby, _) => Bound::Radius,
     };
     let lander = Lander {
@@ -1052,8 +1053,13 @@ fn relocation(
     landing: Landing,
     aim: CastAim,
 ) -> Option<CastPlan> {
+    // A journey goes to or gathers around a body's footprint; a home is
+    // searched for nearest the cells a body stands across.
     let caster_rect = entity_def::standing_rect(world, caster);
     let aim_rect = aimed_standing_rect(world, aim);
+    let caster_patch = entity_def::location(world, caster).footprint();
+    let aim_patch = aimed_patch(world, aim);
+    let footprint = |entity: Entity| entity_def::location(world, entity).footprint();
     let aimed = match aim {
         CastAim::Entity(entity) => Some(entity),
         CastAim::Cell(_) | CastAim::Remains(_) => None,
@@ -1081,16 +1087,10 @@ fn relocation(
         Journey::FromCaster { party, to } => {
             // The body a journey goes to is never among those it moves.
             let (destination, goes_to) = match to {
-                FromCasterTo::Aim(_) => ((aim_rect, aimed_source(world, aim)), aimed),
+                FromCasterTo::Aim(_) => ((aim_patch, aimed_source(world, aim)), aimed),
                 FromCasterTo::Home(kinds) => {
                     let home = home(world, player, kinds, caster_rect, &[caster])?;
-                    (
-                        (
-                            entity_def::standing_rect(world, home),
-                            ComesFrom::of(world, home),
-                        ),
-                        Some(home),
-                    )
+                    ((footprint(home), ComesFrom::of(world, home)), Some(home))
                 }
             };
             let not_gathered: Vec<Entity> = [Some(caster), goes_to].into_iter().flatten().collect();
@@ -1100,7 +1100,7 @@ fn relocation(
                     player,
                     caster,
                     gathering,
-                    entity_def::standing_rect(world, caster),
+                    caster_patch,
                     &not_gathered,
                 );
                 Some((bodies, destination, gathering.shortfall))
@@ -1120,29 +1120,16 @@ fn relocation(
                 AimParty::Around { .. } => Vec::new(),
             };
             let (destination, goes_to) = match to {
-                FromAimTo::Caster => ((caster_rect, ComesFrom::of(world, caster)), caster),
+                FromAimTo::Caster => ((caster_patch, ComesFrom::of(world, caster)), caster),
                 FromAimTo::Home(kinds) => {
                     let home = home(world, player, kinds, aim_rect, &not_home)?;
-                    (
-                        (
-                            entity_def::standing_rect(world, home),
-                            ComesFrom::of(world, home),
-                        ),
-                        home,
-                    )
+                    ((footprint(home), ComesFrom::of(world, home)), home)
                 }
             };
             match party {
                 AimParty::Target { .. } => (vec![(target(), destination)], None),
                 AimParty::Around { gathering, .. } => {
-                    let bodies = gather(
-                        world,
-                        player,
-                        caster,
-                        gathering,
-                        aimed_standing_rect(world, aim),
-                        &[goes_to],
-                    );
+                    let bodies = gather(world, player, caster, gathering, aim_patch, &[goes_to]);
                     (Vec::new(), Some((bodies, destination, gathering.shortfall)))
                 }
             }
@@ -1150,11 +1137,10 @@ fn relocation(
         // Each lands nearest where the other stood.
         Journey::Swap { .. } => {
             let target = aimed.expect("a swap is aimed at an entity");
-            let target_rect = entity_def::standing_rect(world, target);
             (
                 vec![
-                    (caster, (target_rect, ComesFrom::of(world, target))),
-                    (target, (caster_rect, ComesFrom::of(world, caster))),
+                    (caster, (footprint(target), ComesFrom::of(world, target))),
+                    (target, (caster_patch, ComesFrom::of(world, caster))),
                 ],
                 None,
             )
@@ -1190,7 +1176,7 @@ fn relocation(
             from,
             bound: Bound::Radius,
             around,
-            toward: entity_def::footprint_rect(world, entity),
+            toward: entity_def::location(world, entity).footprint(),
         };
         landing::land(world, &mut landings, lander)
     };
@@ -1213,7 +1199,7 @@ fn relocation(
     Some(CastPlan::Relocate { moves })
 }
 
-/// The bodies `gathering` takes around the cells `center`, nearest first,
+/// The bodies `gathering` takes around the cells `patch`, nearest first,
 /// ties by id, up to its count: each one that can be moved, standing within
 /// its radius by map distance, on its side judged from `player`, of its kinds,
 /// and made out by `player` where its sight asks. None of `not_gathered` is
@@ -1223,7 +1209,7 @@ fn gather(
     player: PlayerId,
     caster: Entity,
     gathering: &Gathering,
-    center: CellRect,
+    patch: CellRect,
     not_gathered: &[Entity],
 ) -> Vec<Entity> {
     let radius = entity_def::quantity_cells(world, caster, gathering.radius);
@@ -1238,7 +1224,7 @@ fn gather(
                 return None;
             }
             let standing = entity_def::standing_rect(world, entity);
-            if !projection.in_range_for_rects(standing, center, radius) {
+            if !projection.in_range_for_rects(standing, patch, radius) {
                 return None;
             }
             let owner = entity_def::owner(world, entity);
@@ -1250,7 +1236,7 @@ fn gather(
                         visibility::sees(world, player, entity, Senses::SeatDeclared)
                     }
                 };
-            admitted.then(|| (projection.distance_for_rects(standing, center), id, entity))
+            admitted.then(|| (projection.distance_for_rects(standing, patch), id, entity))
         })
         .collect();
     found.sort_unstable_by_key(|&(distance, id, _)| (distance, id));
@@ -1290,11 +1276,11 @@ fn home(
         .map(|(_, entity)| entity)
 }
 
-/// The cells a resolved `aim` is reached at: the aimed cell, or every cell
-/// the aimed body stands on.
+/// The cells a resolved `aim` is reached at and measured from: the aimed
+/// cell, or every cell the aimed body stands on.
 fn aimed_standing_rect(world: &World, aim: CastAim) -> CellRect {
     match aim {
-        CastAim::Cell(cell) => CellRect::new(cell, CellSize::ONE),
+        CastAim::Cell(cell) => CellRect::cell(cell),
         CastAim::Entity(target) | CastAim::Remains(target) => {
             entity_def::standing_rect(world, target)
         }
@@ -1312,16 +1298,15 @@ fn aimed_source(world: &World, aim: CastAim) -> ComesFrom {
 
 /// Takes `remains` off the map, announcing what spent them and where they lay.
 ///
-/// Returns their id and that ground: the id for the summon that comes out of
-/// them, the ground for the cast that names where it landed. Both are read
-/// here because both are gone the moment the body is.
+/// Returns their id and the cell they were anchored at.
 fn spend_remains(
     world: &mut World,
     caster: SimulationId,
     remains: Entity,
-) -> (SimulationId, FixedUVec2) {
+) -> (SimulationId, CellPos) {
     let id = entity_def::simulation_id(world, remains);
     let position = entity_def::position(world, remains);
+    let anchor = entity_def::location(world, remains).anchor();
     world
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::RemainsSpent {
@@ -1330,7 +1315,7 @@ fn spend_remains(
             by: caster,
         });
     spawn::despawn_remains(world, remains);
-    (id, position)
+    (id, anchor)
 }
 
 /// Carries out a judged cast of `skill` at `aim`.
@@ -1360,7 +1345,6 @@ fn perform(
             // What comes out of a body remembers the body it came from; what is
             // called up out of nothing names only its caster.
             for (cell, cover) in cells {
-                let position = FixedUVec2::from(cell);
                 // What a cast calls up is as new as anything trained: its
                 // field sources start at their initial reach.
                 let reach = FieldReach::Initial;
@@ -1379,7 +1363,7 @@ fn perform(
                     Some(from) => spawn::spawn_raised(
                         world,
                         &type_name,
-                        position,
+                        At::Cell(cell),
                         Some(player),
                         reach,
                         arrival,
@@ -1389,7 +1373,7 @@ fn perform(
                     None => spawn::spawn_summoned(
                         world,
                         &type_name,
-                        position,
+                        At::Cell(cell),
                         Some(player),
                         reach,
                         arrival,
@@ -1441,8 +1425,8 @@ fn apply_effect(
     effect: &EntityCastEffect,
 ) {
     // The two effects that act on a patch of ground rather than on a thing:
-    // both read the aim as a cell, whether it was aimed there or at something
-    // standing there.
+    // both read the aim as cells, the one aimed at or the footprint of
+    // something standing there.
     match effect {
         &EntityCastEffect::Field {
             field,
@@ -1450,9 +1434,9 @@ fn apply_effect(
             action,
             ..
         } => {
-            let center = aimed_cell(world, aim);
+            let patch = aimed_patch(world, aim);
             let radius = entity_def::quantity_cells(world, caster, radius);
-            fields::apply_action(world, player, field, center, radius, action);
+            fields::apply_action_around(world, player, field, patch, radius, action);
             return;
         }
         &EntityCastEffect::Watch {
@@ -1461,13 +1445,11 @@ fn apply_effect(
             detection,
             ..
         } => {
-            let center = aimed_cell(world, aim);
+            let patch = aimed_patch(world, aim);
             let radius = entity_def::quantity_cells(world, caster, radius);
             let duration = entity_def::quantity_ticks(world, caster, duration);
             let caster_id = entity_def::simulation_id(world, caster);
-            watches::open(
-                world, player, caster_id, center, radius, duration, detection,
-            );
+            watches::open(world, player, caster_id, patch, radius, duration, detection);
             return;
         }
         EntityCastEffect::ApplyBuff { .. }
@@ -1519,22 +1501,48 @@ fn apply_effect(
     }
 }
 
-/// The cell a cast acts on: the one it was aimed at, or the one its target
-/// stands in.
-fn aimed_cell(world: &World, aim: CastAim) -> CellPos {
+/// Where an exact summon of `def` is anchored for a resolved `aim`: on the
+/// aimed cell, or centered on the aimed body's middle and snapped onto the
+/// cells, a half between two cells taking the one nearer the body's own
+/// anchor — remains read while they still lie there.
+fn exact_anchor(world: &World, aim: CastAim, def: &EntityTypeDef) -> CellPos {
     match aim {
         CastAim::Cell(cell) => cell,
         CastAim::Entity(target) | CastAim::Remains(target) => {
-            CellPos::from(entity_def::position(world, target))
+            let size = def
+                .location
+                .expect("a summoned type stands somewhere")
+                .size();
+            let aimed = entity_def::location(world, target);
+            world
+                .resource::<Map>()
+                .location_clamped(aimed.middle(), size)
+                .snapped_toward(aimed.anchor())
+                .anchor()
         }
     }
 }
 
-/// The footprint the caster closes on for a resolved `aim`.
-fn aimed_footprint(world: &World, aim: CastAim) -> (FixedUVec2, CellSize) {
+/// The cells a cast acts around: the one it was aimed at, or its target's
+/// footprint — remains read while they still lie there, before they are
+/// spent.
+fn aimed_patch(world: &World, aim: CastAim) -> CellRect {
     match aim {
-        CastAim::Entity(target) | CastAim::Remains(target) => entity_def::footprint(world, target),
-        CastAim::Cell(cell) => (FixedUVec2::from(cell), CellSize::ONE),
+        CastAim::Cell(cell) => CellRect::cell(cell),
+        CastAim::Entity(target) | CastAim::Remains(target) => {
+            entity_def::location(world, target).footprint()
+        }
+    }
+}
+
+/// The rectangle a caster turns to for a resolved `aim`: a target's bounds,
+/// or the cell's.
+fn aimed_bounds(world: &World, aim: CastAim) -> FixedURect {
+    match aim {
+        CastAim::Entity(target) | CastAim::Remains(target) => {
+            entity_def::location(world, target).bounds()
+        }
+        CastAim::Cell(cell) => CellRect::cell(cell).bounds(),
     }
 }
 

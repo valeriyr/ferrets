@@ -1,18 +1,22 @@
-//! Shared chase logic for orders that walk toward a destination footprint.
+//! Shared chase logic for orders that walk toward a destination.
 //!
-//! Orders that close on a destination do it the same way: arrive if already in
-//! range, otherwise walk toward it, otherwise give up when the previous walk made
-//! no progress.
+//! An order that closes on a footprint or a cell does it the same way: arrive
+//! if already in range, otherwise walk toward it, otherwise give up when the
+//! previous walk made no progress. One that closes on a point walks once.
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_math::{FixedI64, facing::Facing, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
-use ferrets_physics::body;
+use ferrets_math::{
+    FixedI64, FixedU64, facing::Facing, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2,
+    fixed_vec2::FixedVec2,
+};
 
-use super::turn;
+use super::{orders, turn};
 use crate::{
     components::chase::{ChaseRound, ChaseState},
     entity_def,
+    map::Map,
+    movement_model,
     order::Order,
     reach,
 };
@@ -28,23 +32,20 @@ pub enum Destination {
     OutOfReach,
 }
 
-/// Decides whether `chaser` is within `range` of the point `destination`, a
-/// footprint of `destination_size` reached at the cells it lies in from its
-/// floored corner, and otherwise whether to walk toward it or give up.
-pub fn advance_to_point(
+/// Decides whether `chaser` is within `range` of the cells of `goal`, and
+/// otherwise whether to walk toward it or give up.
+pub fn advance_to_rect(
     last_chase: &mut ChaseState,
     world: &World,
     chaser: Entity,
-    destination: FixedUVec2,
-    destination_size: CellSize,
+    goal: CellRect,
     range: u32,
 ) -> Destination {
-    let goal = CellRect::new(CellPos::from(destination), destination_size);
-    close_on(last_chase, world, chaser, goal, destination, range)
+    close_on(last_chase, world, chaser, goal, range)
 }
 
-/// Like [`advance_to_point`], toward the target entity `destination`, a body
-/// reached at every cell it stands on ([`body::standing_rect`]).
+/// Like [`advance_to_rect`], toward the target entity `destination`, a
+/// body reached at every cell it stands on ([`entity_def::standing_rect`]).
 pub fn advance_to_entity(
     last_chase: &mut ChaseState,
     world: &World,
@@ -53,115 +54,107 @@ pub fn advance_to_entity(
     range: u32,
 ) -> Destination {
     let goal = entity_def::standing_rect(world, destination);
-    close_on(
-        last_chase,
-        world,
-        chaser,
-        goal,
-        FixedUVec2::from(goal.origin),
-        range,
-    )
+    close_on(last_chase, world, chaser, goal, range)
 }
 
-/// Decides whether `chaser` stands exactly on the point `destination`, and
-/// otherwise whether to walk onto it or give up.
-pub fn advance_onto_point(
+/// Decides whether `chaser` stands lined up anchored at `cell`, and otherwise
+/// whether to walk there or give up.
+///
+/// Panics if `chaser`'s body anchored at `cell` would not lie wholly on the
+/// map: the cell is one its body can be anchored at.
+pub fn advance_onto_cell(
     last_chase: &mut ChaseState,
     world: &World,
     chaser: Entity,
-    destination: FixedUVec2,
+    cell: CellPos,
 ) -> Destination {
-    let position = entity_def::position(world, chaser);
-    if position == destination {
+    let standing = entity_def::location(world, chaser);
+    assert_eq!(
+        world
+            .resource::<Map>()
+            .location_at_clamped(cell, standing.size())
+            .anchor(),
+        cell,
+        "a cell a body is walked onto is one its body can be anchored at"
+    );
+    if !standing.is_mid_crossing() && standing.anchor() == cell {
         *last_chase = None;
         return Destination::Arrived;
     }
     if entity_def::held(world, chaser) {
         return Destination::OutOfReach;
     }
-    walk_or_give_up(
-        last_chase,
-        body::anchor(position),
-        destination,
-        CellSize::ONE,
-        0,
-    )
+    let walk = orders::move_onto_cell(world, chaser, cell);
+    walk_or_give_up(last_chase, world, chaser, cell, walk)
 }
 
-/// Turns `entity` to look at the footprint at `target`/`target_size`, from its own
-/// middle toward the nearest part of that footprint.
+/// Decides whether `chaser` stands where a point move to `target` leaves it
+/// ([`movement_model::at_point`]), and otherwise whether it walks there: once,
+/// the walk's end being the caller's, so no round is counted.
+pub fn advance_to_point(world: &World, chaser: Entity, target: FixedUVec2) -> Destination {
+    if movement_model::at_point(world, chaser, target) {
+        return Destination::Arrived;
+    }
+    if entity_def::held(world, chaser) {
+        return Destination::OutOfReach;
+    }
+    Destination::Walk(orders::move_to_point(target))
+}
+
+/// Turns `entity` to look at `target`, from its own middle toward the nearest
+/// point of `target`.
 ///
-/// A position names a footprint's first cell, so aiming at the position itself
-/// turns a unit toward one corner of a keep rather than at the keep. Aiming at the
-/// middle is no better for a long wall — it would face along the wall instead of at
-/// the stretch in front of it. The nearest point is both, and it is the same
-/// measure every range check already uses.
-///
-/// A no-op while the unit's middle is inside the footprint, so the previous look
-/// is kept rather than lost. Orders call this once in range so a unit faces what
-/// it acts on.
+/// A no-op while the unit's middle is inside `target`: the previous look is
+/// kept.
 ///
 /// Standing, so the body comes round at the rate it turns on the spot. A weapon
 /// that bears on its own is aimed instead of faced — see [`super::turret`].
-pub fn face(world: &mut World, entity: Entity, target: FixedUVec2, target_size: CellSize) {
-    if let Some(wanted) = bearing_to(world, entity, target, target_size) {
+pub fn face(world: &mut World, entity: Entity, target: FixedURect) {
+    if let Some(wanted) = bearing_to(world, entity, target) {
         turn::toward(world, entity, wanted, turn::Rate::Standing);
     }
 }
 
-/// Like [`face`], with the footprint taken from another entity.
+/// Like [`face`], toward the bounds of another entity.
 pub fn face_entity(world: &mut World, entity: Entity, target: Entity) {
-    let (target_position, target_size) = entity_def::footprint(world, target);
-    face(world, entity, target_position, target_size);
+    let bounds = entity_def::location(world, target).bounds();
+    face(world, entity, bounds);
 }
 
-/// The bearing from `entity`'s own middle to the nearest part of the footprint at
-/// `target`/`target_size`, or `None` while its middle is inside that footprint —
-/// where there is no direction to point.
-pub fn bearing_to(
-    world: &World,
-    entity: Entity,
-    target: FixedUVec2,
-    target_size: CellSize,
-) -> Option<Facing> {
-    let middle = center_of(entity_def::footprint(world, entity));
-    Facing::of(nearest_point_on(target, target_size, middle) - middle)
+/// The bearing from `entity`'s own middle to the nearest point of `target`,
+/// or `None` while its middle is inside `target` — where there is no
+/// direction to point.
+pub fn bearing_to(world: &World, entity: Entity, target: FixedURect) -> Option<Facing> {
+    let position = entity_def::position(world, entity);
+    let middle = FixedVec2::new(
+        position.x.to_num::<FixedI64>(),
+        position.y.to_num::<FixedI64>(),
+    );
+    Facing::of(nearest_point_on(target, middle) - middle)
 }
 
-/// The point of the footprint at `origin`/`size` closest to `from`, clamping each
-/// axis into the footprint's span. Continuous rather than per-cell, so a unit part
-/// way across a cell turns smoothly instead of in steps.
-fn nearest_point_on(origin: FixedUVec2, size: CellSize, from: FixedVec2) -> FixedVec2 {
-    let span = |start: FixedI64, cells: u32, value: FixedI64| {
-        value.clamp(start, start + FixedI64::from_num(cells))
+/// The point of `bounds` closest to `from`, clamping each axis into its span.
+/// Continuous rather than per-cell, so a unit part way across a cell turns
+/// smoothly instead of in steps.
+fn nearest_point_on(bounds: FixedURect, from: FixedVec2) -> FixedVec2 {
+    let span = |low: FixedU64, high: FixedU64, value: FixedI64| {
+        value.clamp(low.to_num::<FixedI64>(), high.to_num::<FixedI64>())
     };
     FixedVec2::new(
-        span(origin.x.to_num::<FixedI64>(), size.width, from.x),
-        span(origin.y.to_num::<FixedI64>(), size.height, from.y),
-    )
-}
-
-/// The middle of a footprint, in world units.
-fn center_of((origin, size): (FixedUVec2, CellSize)) -> FixedVec2 {
-    let half = |cells: u32| FixedI64::from_num(cells) / 2;
-    FixedVec2::new(
-        origin.x.to_num::<FixedI64>() + half(size.width),
-        origin.y.to_num::<FixedI64>() + half(size.height),
+        span(bounds.min().x, bounds.max().x, from.x),
+        span(bounds.min().y, bounds.max().y, from.y),
     )
 }
 
 /// Arrives when `chaser` reaches `goal` within `range`, else walks to within
-/// `range` of `goal` — named by `toward`, its first cell or the point an order
-/// names in it — or gives up when the last walk made no progress.
+/// `range` of `goal`, or gives up when the last walk made no progress.
 fn close_on(
     last_chase: &mut ChaseState,
     world: &World,
     chaser: Entity,
     goal: CellRect,
-    toward: FixedUVec2,
     range: u32,
 ) -> Destination {
-    let from = entity_def::position(world, chaser);
     // The chaser is judged by every cell it stands on. Judging a body by one
     // cell of the two it lies across leaves it a little past a corner reading
     // as out of range on one axis or the other however it is quantized, and a
@@ -182,22 +175,31 @@ fn close_on(
         return Destination::OutOfReach;
     }
 
-    walk_or_give_up(last_chase, body::anchor(from), toward, goal.size, range)
+    // A walk onto a single cell brings the chaser anchored there; any other
+    // goal is named by its first cell.
+    let walk = match (range, goal.size == CellSize::ONE) {
+        (0, true) => orders::move_onto_cell(world, chaser, goal.origin),
+        _ => Order::Move {
+            target: goal.origin.middle(),
+            size: goal.size,
+            range,
+        },
+    };
+    walk_or_give_up(last_chase, world, chaser, goal.origin, walk)
 }
 
-/// Walks from `own` to within `range` of the footprint at `destination`, of
-/// `destination_size`, or gives up when the last walk toward the same
-/// destination from the same cell made no progress.
+/// Sends `chaser` on `walk` toward `destination`, or gives up when the last
+/// walk toward the same destination from the same cell made no progress.
 fn walk_or_give_up(
     last_chase: &mut ChaseState,
-    own: CellPos,
-    destination: FixedUVec2,
-    destination_size: CellSize,
-    range: u32,
+    world: &World,
+    chaser: Entity,
+    destination: CellPos,
+    walk: Order,
 ) -> Destination {
-    let destination_cell = CellPos::from(destination);
+    let own = entity_def::location(world, chaser).anchor();
     match last_chase {
-        Some(round) if (round.own, round.destination) == (own, destination_cell) => {
+        Some(round) if (round.own, round.destination) == (own, destination) => {
             round.repeats += 1;
             if round.exhausted() {
                 return Destination::OutOfReach;
@@ -206,14 +208,10 @@ fn walk_or_give_up(
         _ => {
             *last_chase = Some(ChaseRound {
                 own,
-                destination: destination_cell,
+                destination,
                 repeats: 0,
             });
         }
     }
-    Destination::Walk(Order::Move {
-        target: destination,
-        size: destination_size,
-        range,
-    })
+    Destination::Walk(walk)
 }

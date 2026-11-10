@@ -4,7 +4,7 @@
 use std::cmp::Reverse;
 
 use bevy_ecs::{entity::Entity, query::Without, world::World};
-use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize, location::Location};
 use ferrets_math::{
     FixedI64, FixedU64,
     facing::{self, Facing},
@@ -82,12 +82,13 @@ pub fn nearest_free_seat(
     size: CellSize,
     from: CellRect,
 ) -> Option<(usize, FixedUVec2)> {
-    let projection = world.resource::<Map>().projection();
+    let map = world.resource::<Map>();
+    let projection = map.projection();
     free_seats(world, job, group)
         .into_iter()
         .map(|seat| (seat, seat_point(world, job, group, seat)))
         .min_by_key(|&(_, point)| {
-            let seated = body::standing_rect(centered_on(point, size), size);
+            let seated = body::standing_rect(map.location_clamped(point, size));
             projection.distance_for_rects(seated, from)
         })
 }
@@ -190,11 +191,12 @@ pub fn reseat(world: &mut World, job: Entity) -> Vec<Entity> {
     moved
 }
 
-/// The position that puts `worker`'s middle on `point`: half the worker's
-/// footprint comes off the point, since a position names the corner its
-/// footprint starts at.
-pub fn position_centered_on(world: &World, worker: Entity, point: FixedUVec2) -> FixedUVec2 {
-    centered_on(point, entity_def::location_size(world, worker))
+/// Where `worker` seated on `point` stands: its middle on the point, held so
+/// its body lies wholly on the map.
+pub fn seated_location(world: &World, worker: Entity, point: FixedUVec2) -> Location {
+    world
+        .resource::<Map>()
+        .location_clamped(point, entity_def::size(world, worker))
 }
 
 /// What the seated `worker` is set down beside: the berth it holds on its job,
@@ -209,12 +211,12 @@ pub(crate) fn seated_berth(world: &World, worker: Entity) -> Beside {
         .expect("only an attached worker holds a berth");
     let rect = match world.resource::<EntityIndex>().any(attached.job) {
         Some(job) => {
-            let seated = position_centered_on(
+            let seated = seated_location(
                 world,
                 worker,
                 seat_point(world, job, &attached.berths, attached.seat),
             );
-            body::standing_rect(seated, entity_def::location_size(world, worker))
+            body::standing_rect(seated)
         }
         None => entity_def::standing_rect(world, worker),
     };
@@ -527,8 +529,8 @@ fn point_between(
 /// middle sits. A point that would lie off the map is held at the middle of
 /// the map's edge cell.
 fn seat_point(world: &World, job: Entity, group: &str, seat: usize) -> FixedUVec2 {
-    let anchor = FixedUVec2::from(body::anchor(entity_def::position(world, job)));
-    let point = unsigned(signed(anchor) + group_points(world, job, group)[seat]);
+    let corner = FixedUVec2::from(entity_def::location(world, job).anchor());
+    let point = unsigned(signed(corner) + group_points(world, job, group)[seat]);
     let map = world.resource::<Map>();
     let half = FixedU64::ONE / 2;
     FixedUVec2::new(
@@ -609,14 +611,5 @@ fn unsigned(point: FixedVec2) -> FixedUVec2 {
     FixedUVec2::new(
         point.x.max(FixedI64::ZERO).to_num::<FixedU64>(),
         point.y.max(FixedI64::ZERO).to_num::<FixedU64>(),
-    )
-}
-
-/// The position that puts the middle of a footprint of `size` on `point`.
-fn centered_on(point: FixedUVec2, size: CellSize) -> FixedUVec2 {
-    let half = |cells: u32| FixedU64::from_num(cells) / 2;
-    FixedUVec2::new(
-        point.x.saturating_sub(half(size.width)),
-        point.y.saturating_sub(half(size.height)),
     )
 }

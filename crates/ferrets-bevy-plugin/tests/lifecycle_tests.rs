@@ -31,11 +31,9 @@ fn installing_game_resources_clears_last_games_state() {
             steps: 3,
         });
         world.resource_mut::<TickPacing>().exec_millis = FixedU64::from_num(10_000);
-        world.resource_mut::<PeerCapacities>().record(
-            1,
-            0,
-            GameSpeed::new(FixedU64::from_num(0.25)),
-        );
+        world
+            .resource_mut::<PeerCapacities>()
+            .record(1, 0, GameSpeed::new(utils::fixed("0.25")));
         world.insert_resource(Step);
         world.insert_resource(Seek(500));
     }

@@ -99,7 +99,7 @@ fn boarded_passenger_holds_no_location_and_marker_keeps_where_it_went_in() {
     // Beside the wagon, on the ring's first free cell: a ride's end leans
     // nowhere in particular.
     assert_eq!(
-        utils::cell_of(app.world(), rifleman),
+        utils::anchor_of(app.world(), rifleman),
         CellPos::new(10, 9),
         "set back down beside the holder"
     );
@@ -324,9 +324,9 @@ fn unit_loaded_mid_walk_stands_once_set_down() {
 
     utils::unload(&mut app, wagon_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    let set_down = utils::cell_of(app.world(), grunt);
+    let set_down = utils::anchor_of(app.world(), grunt);
     utils::run_ticks(&mut app, 10);
-    assert_eq!(utils::cell_of(app.world(), grunt), set_down);
+    assert_eq!(utils::anchor_of(app.world(), grunt), set_down);
     assert!(entity_def::orders(app.world(), grunt).is_empty());
 }
 
@@ -395,7 +395,7 @@ fn patient_that_boards_mid_repair_ends_mender_order() {
     utils::run_ticks(&mut app, 1);
 
     assert!(utils::order_queue_is_empty(app.world_mut(), orderly));
-    assert_eq!(utils::cell_of(app.world(), orderly), CellPos::new(12, 10));
+    assert_eq!(utils::anchor_of(app.world(), orderly), CellPos::new(12, 10));
     // Mended no further once aboard.
     utils::run_ticks(&mut app, 3);
     assert_eq!(utils::health_as_u32(&app, rifleman), boarded_at);
@@ -579,8 +579,11 @@ fn board_refuses_unit_that_cannot_ride_and_leaves_it_standing() {
     );
 
     // A refused passenger is untouched.
-    assert_eq!(utils::cell_of(app.world(), civilian), CellPos::new(11, 10));
-    assert_eq!(utils::cell_of(app.world(), grunt), CellPos::new(13, 12));
+    assert_eq!(
+        utils::anchor_of(app.world(), civilian),
+        CellPos::new(11, 10)
+    );
+    assert_eq!(utils::anchor_of(app.world(), grunt), CellPos::new(13, 12));
     assert!(!entity_def::hidden(app.world(), civilian));
     assert!(!entity_def::hidden(app.world(), grunt));
     assert_eq!(utils::passengers_of(app.world(), wagon), []);
@@ -995,7 +998,10 @@ fn burst_of_shot_at_dying_target_lands_where_it_lies() {
     // The stone leaves sent to (11, 10); the walker, ten ticks on, stands on
     // (11, 14) and is killed there, two ticks before the stone lands.
     utils::run_ticks(&mut app, 10);
-    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(11, 14));
+    assert_eq!(
+        utils::anchor_of(app.world(), rifleman),
+        CellPos::new(11, 14)
+    );
     spawn::despawn_killed(
         app.world_mut(),
         rifleman,
@@ -1049,6 +1055,76 @@ fn unload_period_meters_exits_in_id_order() {
     assert!(!entity_def::hidden(app.world(), second));
     assert!(utils::passengers_of(app.world(), wagon).is_empty());
     assert!(!entity_def::boarded(app.world(), first));
+}
+
+#[test]
+fn wide_passenger_unloaded_at_cell_walks_on_as_move_does() {
+    // Under the continuous model a 2×2 cart is unloaded from a raft with
+    // the cell (10, 10) named: it walks on as a move to that cell's middle
+    // does, its own middle to (10 + 0.5, 10 + 0.5) = (10.5, 10.5), not
+    // anchored there with its middle at (11, 11).
+    let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |registry, _| {
+        let mut cart = registry
+            .entity("wagon")
+            .expect("the orders content declares a wagon")
+            .clone()
+            .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE);
+        cart.name = "cart".to_string();
+        registry.register(cart);
+        registry.register(
+            EntityTypeDef::new("raft")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(100))
+                .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+                .with_stat(EntityStatId::LOAD_RANGE, FixedU64::from_num(3))
+                .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+                .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+                .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+                .with_transporter(
+                    Kinds::types(["cart"]),
+                    Affiliation::Own,
+                    PassengerFate::Eject,
+                    PassengerConduct::Shelter,
+                ),
+        );
+    });
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 4, 10, 0);
+    let (cart, cart_id) = utils::create_owned(&mut app, "cart", 6, 10, 0);
+    utils::send_to(&mut app, cart_id, raft_id);
+    utils::run_until_aboard(&mut app, raft, 1, 20);
+
+    utils::unload(&mut app, raft_id, Some(CellPos::new(10, 10)));
+    utils::run_ticks(&mut app, 40);
+
+    assert!(!entity_def::hidden(app.world(), cart));
+    assert!(utils::order_queue_is_empty(app.world(), cart));
+    assert_eq!(
+        utils::position_of(app.world(), cart),
+        utils::point("10.5", "10.5")
+    );
+}
+
+#[test]
+fn unload_off_map_is_refused() {
+    // The map is 32 cells wide: (40, 10) lies past its last column. The wagon
+    // takes no order, stays anchored at (10, 10), and keeps its rifleman.
+    let mut app = utils::transport_app();
+    let (wagon, wagon_id) = utils::create_owned(&mut app, "wagon", 10, 10, 0);
+    let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
+    utils::send_to(&mut app, rifleman_id, wagon_id);
+    utils::run_until_aboard(&mut app, wagon, 1, 10);
+
+    utils::unload(&mut app, wagon_id, Some(CellPos::new(40, 10)));
+    utils::run_ticks(&mut app, 10);
+
+    assert!(utils::order_queue_is_empty(app.world(), wagon));
+    assert_eq!(utils::anchor_of(app.world(), wagon), CellPos::new(10, 10));
+    assert!(entity_def::hidden(app.world(), rifleman));
 }
 
 #[test]
@@ -1150,11 +1226,11 @@ fn unload_at_point_walks_there_and_sends_passengers_on() {
     utils::send_to(&mut app, rifleman_id, wagon_id);
     utils::run_until_aboard(&mut app, wagon, 1, 10);
 
-    utils::unload(&mut app, wagon_id, Some(utils::pos(20, 5)));
+    utils::unload(&mut app, wagon_id, Some(utils::cell(20, 5)));
     utils::run_ticks(&mut app, 80);
 
     assert!(!entity_def::hidden(app.world(), rifleman));
-    let wagon_cell = utils::cell_of(app.world_mut(), wagon);
+    let wagon_cell = utils::anchor_of(app.world_mut(), wagon);
     assert!(
         app.world()
             .resource::<Map>()
@@ -1163,7 +1239,7 @@ fn unload_at_point_walks_there_and_sends_passengers_on() {
         "the wagon walked into unload range of the point, stands at {wagon_cell:?}"
     );
     // The freed passenger marches on toward the point itself.
-    let rifleman_cell = utils::cell_of(app.world_mut(), rifleman);
+    let rifleman_cell = utils::anchor_of(app.world_mut(), rifleman);
     assert!(
         app.world()
             .resource::<Map>()
@@ -1181,7 +1257,7 @@ fn immobile_holder_unloads_in_place_toward_point() {
     utils::send_to(&mut app, rifleman_id, bunker_id);
     utils::run_until_aboard(&mut app, bunker, 1, 30);
 
-    utils::unload(&mut app, bunker_id, Some(utils::pos(20, 10)));
+    utils::unload(&mut app, bunker_id, Some(utils::cell(20, 10)));
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert!(
@@ -1189,7 +1265,7 @@ fn immobile_holder_unloads_in_place_toward_point() {
         "a holder that cannot walk lets everyone out where it stands"
     );
     utils::run_ticks(&mut app, 60);
-    let rifleman_cell = utils::cell_of(app.world_mut(), rifleman);
+    let rifleman_cell = utils::anchor_of(app.world_mut(), rifleman);
     assert!(
         app.world()
             .resource::<Map>()
@@ -1209,10 +1285,15 @@ fn passenger_unloaded_toward_point_steps_out_on_its_side() {
     utils::run_until_aboard(&mut app, bunker, 1, 30);
 
     // Unloaded toward a point east: of the ring around the bunker's (10, 10)
-    // 2×2, the free cell nearest (20, 10) is (12, 10).
-    utils::unload(&mut app, bunker_id, Some(utils::pos(20, 10)));
+    // 2×2, the free cell nearest (20, 10) is (12, 10). Set down there, its
+    // middle at 12.5, it walks on toward the point the same tick, half a
+    // cell: 12.5 + 0.5 = 13.
+    utils::unload(&mut app, bunker_id, Some(utils::cell(20, 10)));
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(12, 10));
+    assert_eq!(
+        utils::position_of(app.world(), rifleman),
+        utils::point("13", "10.5")
+    );
 }
 
 #[test]
@@ -1228,7 +1309,7 @@ fn unloaded_passenger_stands_only_on_terrain_its_domain_takes() {
     utils::unload(&mut app, raft_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), marine), CellPos::new(10, 8));
+    assert_eq!(utils::anchor_of(app.world(), marine), CellPos::new(10, 8));
 }
 
 #[test]
@@ -1261,7 +1342,7 @@ fn passenger_unloads_on_ground_its_holder_reaches_across_water() {
     utils::unload(&mut app, raft_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), marine), CellPos::new(10, 8));
+    assert_eq!(utils::anchor_of(app.world(), marine), CellPos::new(10, 8));
 }
 
 #[test]
@@ -1284,7 +1365,7 @@ fn unload_range_reaches_past_placement_search_radius() {
     utils::unload(&mut app, raft_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), marine), CellPos::new(11, 1));
+    assert_eq!(utils::anchor_of(app.world(), marine), CellPos::new(11, 1));
 }
 
 #[test]
@@ -1328,7 +1409,7 @@ fn own_soldiers_holding_unload_range_make_way_for_passenger() {
     assert!(entity_def::boarded(app.world(), marine));
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::boarded(app.world(), marine));
-    assert_eq!(utils::cell_of(app.world(), marine), CellPos::new(10, 8));
+    assert_eq!(utils::anchor_of(app.world(), marine), CellPos::new(10, 8));
 }
 
 #[test]
@@ -1381,7 +1462,7 @@ fn passenger_ejected_with_no_ground_in_unload_range_dies() {
     utils::run_until_aboard(&mut app, ashore, 1, 30);
     spawn::destroy_entity(app.world_mut(), ashore);
 
-    assert_eq!(utils::cell_of(app.world(), saved), CellPos::new(10, 8));
+    assert_eq!(utils::anchor_of(app.world(), saved), CellPos::new(10, 8));
 }
 
 #[test]
@@ -1403,7 +1484,10 @@ fn entity_set_back_beside_stands_only_on_terrain_its_domain_takes() {
         SetDown::Placed
     );
 
-    assert_eq!(utils::cell_of(app.world(), landlubber), CellPos::new(10, 8));
+    assert_eq!(
+        utils::anchor_of(app.world(), landlubber),
+        CellPos::new(10, 8)
+    );
 }
 
 #[test]
@@ -1423,10 +1507,15 @@ fn passenger_unloaded_without_point_steps_out_toward_rally_point() {
     );
 
     // Unloaded with no point of its own: it steps out on the side of the
-    // rally point east, (12, 10), the ring cell nearest (20, 10).
+    // rally point east, (12, 10), the ring cell nearest (20, 10), its middle
+    // at 12.5, and walks on toward the rally point the same tick, half a
+    // cell: 12.5 + 0.5 = 13.
     utils::unload(&mut app, bunker_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(12, 10));
+    assert_eq!(
+        utils::position_of(app.world(), rifleman),
+        utils::point("13", "10.5")
+    );
 }
 
 #[test]
@@ -1447,7 +1536,7 @@ fn rally_point_sends_unloaded_passenger_on() {
     utils::unload(&mut app, wagon_id, None);
     utils::run_ticks(&mut app, 60);
 
-    let rifleman_cell = utils::cell_of(app.world_mut(), rifleman);
+    let rifleman_cell = utils::anchor_of(app.world_mut(), rifleman);
     assert!(
         app.world()
             .resource::<Map>()
@@ -1459,10 +1548,11 @@ fn rally_point_sends_unloaded_passenger_on() {
 
 #[test]
 fn passenger_unloads_within_range_of_every_cell_holder_stands_on() {
-    // Under the continuous model the wagon rests at (10.5, 5), across (10, 5)
-    // and (11, 5). Every cell but those and (12, 5) is walled — (10, 5), under
-    // the wagon, too. (12, 5) is one cell from (11, 5), two from (10, 5), the
-    // cell the wagon's position floors into: the rifleman is let out there.
+    // Under the continuous model the wagon rests with its middle at (11, 5.5),
+    // across (10, 5) and (11, 5). Every cell but those and (12, 5) is walled —
+    // (10, 5), under the wagon, too. (12, 5) is one cell from (11, 5), two from
+    // (10, 5), the cell the wagon's low edge floors into: the rifleman is let
+    // out there.
     let mut app = utils::transport_app();
     let projection = app.world().resource::<Map>().projection();
     utils::install_map(&mut app, projection, MovementModel::Continuous);
@@ -1470,7 +1560,7 @@ fn passenger_unloads_within_range_of_every_cell_holder_stands_on() {
     let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 5, 0);
     utils::send_to(&mut app, rifleman_id, wagon_id);
     utils::run_until_aboard(&mut app, wagon, 1, 10);
-    utils::walk_onto(&mut app, wagon, utils::part_way("10.5", "5"), 10);
+    utils::walk_onto(&mut app, wagon, utils::point("11", "5.5"), 10);
     utils::set_all_cells_statically_occupied(app.world_mut(), true);
     for x in [11, 12] {
         utils::free_cell(&mut app, CellPos::new(x, 5));
@@ -1634,7 +1724,7 @@ fn holder_destroyed_inside_job_sets_passengers_down_beside_job() {
     // The holder is inside the bunker, so the rider comes out beside the
     // bunker, on its ring's first free cell, (10, 9).
     assert!(!entity_def::boarded(app.world(), rifleman));
-    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(10, 9));
+    assert_eq!(utils::anchor_of(app.world(), rifleman), CellPos::new(10, 9));
 }
 
 //
@@ -1689,7 +1779,7 @@ fn captured_holder_with_eject_fate_sets_barred_passengers_down() {
     assert!(!entity_def::hidden(app.world(), rifleman));
     // Beside the bunker, on its ring's first free cell, (10, 9): a ride's end
     // leans nowhere in particular.
-    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(10, 9));
+    assert_eq!(utils::anchor_of(app.world(), rifleman), CellPos::new(10, 9));
     assert_eq!(utils::passengers_of(app.world(), bunker), []);
 }
 
@@ -1813,7 +1903,10 @@ fn garrison_of_holder_inside_job_holds_its_fire() {
     // side it went in from, (12, 9) — three cells from the grunt — and its
     // rifleman fires from it.
     utils::run_ticks(&mut app, 5);
-    assert_eq!(utils::cell_of(app.world(), ambulance), CellPos::new(12, 9));
+    assert_eq!(
+        utils::anchor_of(app.world(), ambulance),
+        CellPos::new(12, 9)
+    );
     utils::run_ticks(&mut app, 40);
     // 20 − 10: one shot lands, then the unarmed grunt flees past the
     // rifleman's range of 3.
@@ -1866,8 +1959,11 @@ fn worker_inside_walking_patient_is_with_patient_and_comes_out_beside_it() {
     assert!(!entity_def::hidden(app.world(), surgeon));
     // The rifleman stands on (11, 16), its walk done; of the cells around it
     // the free one nearest where the surgeon went in, (12, 10), is (12, 15).
-    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(11, 16));
-    assert_eq!(utils::cell_of(app.world(), surgeon), CellPos::new(12, 15));
+    assert_eq!(
+        utils::anchor_of(app.world(), rifleman),
+        CellPos::new(11, 16)
+    );
+    assert_eq!(utils::anchor_of(app.world(), surgeon), CellPos::new(12, 15));
 }
 
 #[test]
@@ -1895,7 +1991,10 @@ fn worker_inside_patient_killed_comes_out_beside_dying_patient() {
         },
     );
     utils::run_ticks(&mut app, 14);
-    assert_eq!(utils::cell_of(app.world(), rifleman), CellPos::new(11, 16));
+    assert_eq!(
+        utils::anchor_of(app.world(), rifleman),
+        CellPos::new(11, 16)
+    );
     assert!(entity_def::hidden(app.world(), surgeon));
 
     // The patient is killed with the surgeon inside: while it lies dying on
@@ -1913,7 +2012,7 @@ fn worker_inside_patient_killed_comes_out_beside_dying_patient() {
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::dying(app.world(), rifleman));
     assert!(!entity_def::hidden(app.world(), surgeon));
-    assert_eq!(utils::cell_of(app.world(), surgeon), CellPos::new(12, 15));
+    assert_eq!(utils::anchor_of(app.world(), surgeon), CellPos::new(12, 15));
 }
 
 #[test]
@@ -1941,7 +2040,7 @@ fn worker_inside_patient_that_boards_comes_out_beside_holder() {
     assert!(!entity_def::hidden(app.world(), surgeon));
     // Around the wagon on (11, 15), the free cell nearest where the surgeon
     // went in, (12, 10), is (12, 14).
-    assert_eq!(utils::cell_of(app.world(), surgeon), CellPos::new(12, 14));
+    assert_eq!(utils::anchor_of(app.world(), surgeon), CellPos::new(12, 14));
 }
 
 //
@@ -1985,12 +2084,12 @@ fn turret_only_passenger_sits_ride_out() {
     let mut app = utils::transport_app();
     let world = app.world_mut();
     let (bunker, bunker_id) =
-        utils::create_entity(world, "bunker", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "bunker", utils::cell(10, 10), Some(0)).unwrap();
     let (rider, rider_id) =
-        utils::create_entity(world, "gun_rider", utils::pos(9, 10), Some(0)).unwrap();
+        utils::create_entity(world, "gun_rider", utils::cell(9, 10), Some(0)).unwrap();
     // In the gun's reach from the bunker AND from the rider's own boarding cell,
     // so a shot wrongly fired from either place would land.
-    let (foe, _) = utils::create_entity(world, "civilian", utils::pos(12, 10), Some(2)).unwrap();
+    let (foe, _) = utils::create_entity(world, "civilian", utils::cell(12, 10), Some(2)).unwrap();
 
     utils::select(&mut app, rider_id);
     utils::push_command(

@@ -63,11 +63,12 @@ pub struct RemainsView {
 pub struct EntityView {
     pub id: u32,
     pub type_name: String,
-    /// Cell coordinates of where the entity is: its position, or, off the
-    /// map, the cell of what it is inside — its holder, its job, or the
-    /// container a waiting return is set down beside — when the brain sides
-    /// with or sights that, else the cell it went in by; waiting beside a
-    /// container gone from the world, the footprint its return last searched.
+    /// Cell coordinates of where the entity is: its anchor — the top-left cell
+    /// of its footprint — or, off the map, the cell of what it is inside — its
+    /// holder, its job, or the container a waiting return is set down beside —
+    /// when the brain sides with or sights that, else the cell it went in by;
+    /// waiting beside a container gone from the world, the footprint its return
+    /// last searched.
     pub x: u32,
     pub y: u32,
     /// `None` when the type has no health.

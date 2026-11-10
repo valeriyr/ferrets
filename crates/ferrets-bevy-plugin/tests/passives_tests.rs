@@ -74,7 +74,7 @@ fn passive_holds_under_line_and_lapses_over_it() {
 
     // Lifted to 51: the next refit finds the line cleared and ends the buff,
     // and that tick drains nothing more — 51 holds.
-    pools::restore(app.world_mut(), shed, PoolId::HEALTH, utils::fixed("4"));
+    pools::restore(app.world_mut(), shed, PoolId::HEALTH, FixedU64::from_num(4));
     assert_eq!(utils::health_as_u32(&app, shed), 51);
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), shed, on_fire));
@@ -113,7 +113,7 @@ fn burn_runs_pool_dry_as_decay_with_no_kill_credited() {
         app.world_mut(),
         killer,
         shed,
-        utils::fixed("97"),
+        FixedU64::from_num(97),
         Slain::Remains,
     );
     utils::run_ticks(&mut app, 1);
@@ -267,7 +267,7 @@ fn ownerless_bearer_meets_no_player_leaf() {
     let (mut app, _) = app();
     let (lantern, _) = utils::create_owned(&mut app, "lantern", 5, 5, 0);
     let (stray, _) =
-        utils::create_entity(app.world_mut(), "lantern", utils::pos(8, 8), None).unwrap();
+        utils::create_entity(app.world_mut(), "lantern", utils::cell(8, 8), None).unwrap();
     utils::run_ticks(&mut app, 1);
 
     // `lit` holds while the owner has a standing shed: the owned lantern
@@ -297,7 +297,12 @@ fn applied_while_buff_ends_when_its_requirement_lapses() {
     assert!(entity_def::bears(app.world(), lantern, on_fire));
     assert_eq!(utils::health_as_u32(&app, lantern), 38);
 
-    pools::restore(app.world_mut(), lantern, PoolId::HEALTH, utils::fixed("20"));
+    pools::restore(
+        app.world_mut(),
+        lantern,
+        PoolId::HEALTH,
+        FixedU64::from_num(20),
+    );
     utils::run_ticks(&mut app, 1);
     assert!(!entity_def::bears(app.world(), lantern, on_fire));
     assert_eq!(utils::health_as_u32(&app, lantern), 58);
@@ -487,7 +492,7 @@ fn change_of_form_keeps_last_hit() {
         app.world_mut(),
         rival,
         sapling,
-        utils::fixed("1"),
+        FixedU64::from_num(1),
         Slain::Remains,
     );
     utils::order_morph(&mut app, sapling, "oak");
@@ -714,7 +719,12 @@ fn energy_line_passive_reads_energy_pool() {
     let spent = utils::entity_buff_id(&app, "spent");
     assert!(!entity_def::bears(app.world(), troll, spent));
     assert_eq!(
-        pools::spend(app.world_mut(), troll, PoolId::ENERGY, utils::fixed("31")),
+        pools::spend(
+            app.world_mut(),
+            troll,
+            PoolId::ENERGY,
+            FixedU64::from_num(31)
+        ),
         Spending::Paid
     );
     utils::run_ticks(&mut app, 1);

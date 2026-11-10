@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use ferrets_content::{domain::DomainId, pool_def::PoolId, rise::RisePool};
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::{layer_id::LayerId, terrain_id::TerrainId};
 
 /// The layers the test content declares, in the order a registry mints them:
@@ -20,6 +20,17 @@ pub const GROUND_DOMAIN: DomainId = DomainId::new(0);
 pub fn fixed(text: &str) -> FixedU64 {
     text.parse()
         .unwrap_or_else(|_| panic!("'{text}' is a value"))
+}
+
+/// A signed fixed-point value parsed from decimal digits.
+pub fn signed_fixed(text: &str) -> FixedI64 {
+    text.parse()
+        .unwrap_or_else(|_| panic!("'{text}' is a signed value"))
+}
+
+/// A point on the map from decimal digits.
+pub fn point(x: &str, y: &str) -> FixedUVec2 {
+    FixedUVec2::new(fixed(x), fixed(y))
 }
 
 /// Each of `pools` held at its own initial while rising.

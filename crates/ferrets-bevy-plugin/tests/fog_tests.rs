@@ -24,7 +24,9 @@ use ferrets_content::{
     stats::ModifierOp,
     terrains::Terrains,
 };
-use ferrets_geometry::{cell_size::CellSize, projection::Projection};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_math::FixedU64;
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
@@ -56,7 +58,7 @@ use ferrets_simulation::{
 #[test]
 fn unit_reveals_cells_within_sight() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
-    utils::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::cell(5, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert!(visible(&app, 0, 5, 5));
@@ -67,7 +69,7 @@ fn unit_reveals_cells_within_sight() {
 #[test]
 fn structure_sees_from_its_whole_footprint() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
-    utils::create_entity(app.world_mut(), "keep", utils::pos(10, 10), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "keep", utils::cell(10, 10), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     // The keep covers (10..=12, 10..=12); sight 2 reaches two cells past every
@@ -83,7 +85,7 @@ fn structure_sees_from_its_whole_footprint() {
 fn exploration_persists_after_unit_moves_away() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let (_, scout) =
-        utils::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "scout", utils::cell(5, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, scout);
@@ -108,7 +110,7 @@ fn allies_share_vision() {
         PlayerSlot::occupied(1, PlayerType::Human, None, Some(1)),
     ]);
     // The ally (player 1) has the only unit; its sight reaches player 0.
-    utils::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(1)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::cell(5, 5), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     assert!(visible(&app, 0, 5, 5));
@@ -126,9 +128,9 @@ fn auto_attack_waits_for_team_vision() {
     ]);
     // The sniper out-ranges its own sight: the dummy is within weapon/acquire
     // range (8) but outside sight (3), so it stays unseen and unengaged.
-    utils::create_entity(app.world_mut(), "sniper", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "sniper", utils::cell(5, 5), Some(0)).unwrap();
     let (dummy, _) =
-        utils::create_entity(app.world_mut(), "dummy", utils::pos(11, 5), Some(1)).unwrap();
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(11, 5), Some(1)).unwrap();
     utils::run_ticks(&mut app, 20);
     assert!(
         app.world().get_entity(dummy).is_ok(),
@@ -136,7 +138,7 @@ fn auto_attack_waits_for_team_vision() {
     );
 
     // A scout reveals the dummy to the team; now the sniper engages it.
-    utils::create_entity(app.world_mut(), "scout", utils::pos(9, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::cell(9, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 30);
     utils::assert_despawned(app.world_mut(), dummy);
 }
@@ -151,8 +153,8 @@ fn ai_view_hides_fogged_enemies_only_when_fog_limited() {
         PlayerSlot::occupied(0, PlayerType::Human, None, None),
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
-    utils::create_entity(app.world_mut(), "scout", utils::pos(5, 5), Some(0)).unwrap();
-    utils::create_entity(app.world_mut(), "dummy", utils::pos(25, 25), Some(1)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::cell(5, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "dummy", utils::cell(25, 25), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     let world = app.world();
@@ -197,8 +199,9 @@ fn attack_refuses_target_in_weapon_range_but_out_of_sight() {
     // The sniper shoots to eight but sees to three: its target stands in
     // weapon range yet out of sight.
     let (sniper, sniper_id) =
-        utils::create_entity(world, "sniper", utils::pos(5, 5), Some(0)).unwrap();
-    let (mark, mark_id) = utils::create_entity(world, "dummy", utils::pos(5, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sniper", utils::cell(5, 5), Some(0)).unwrap();
+    let (mark, mark_id) =
+        utils::create_entity(world, "dummy", utils::cell(5, 10), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, sniper_id);
@@ -218,7 +221,7 @@ fn attack_refuses_target_in_weapon_range_but_out_of_sight() {
     );
 
     // A scout beside the mark lends the eyes; the same order now lands.
-    utils::create_entity(app.world_mut(), "scout", utils::pos(5, 12), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "scout", utils::cell(5, 12), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
     utils::push_command(
         &mut app,
@@ -264,8 +267,8 @@ fn guard_refuses_fogged_ward() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let world = app.world_mut();
     let (scout, scout_id) =
-        utils::create_entity(world, "scout", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, ward_id) = utils::create_entity(world, "dummy", utils::pos(25, 25), None).unwrap();
+        utils::create_entity(world, "scout", utils::cell(5, 5), Some(0)).unwrap();
+    let (_, ward_id) = utils::create_entity(world, "dummy", utils::cell(25, 25), None).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, scout_id);
@@ -290,8 +293,9 @@ fn follow_refuses_fogged_target() {
     ]);
     let world = app.world_mut();
     let (scout, scout_id) =
-        utils::create_entity(world, "scout", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, quarry_id) = utils::create_entity(world, "dummy", utils::pos(25, 25), Some(1)).unwrap();
+        utils::create_entity(world, "scout", utils::cell(5, 5), Some(0)).unwrap();
+    let (_, quarry_id) =
+        utils::create_entity(world, "dummy", utils::cell(25, 25), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, scout_id);
@@ -318,8 +322,9 @@ fn send_to_entity_refuses_fogged_target() {
     ]);
     let world = app.world_mut();
     let (scout, scout_id) =
-        utils::create_entity(world, "scout", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, target_id) = utils::create_entity(world, "dummy", utils::pos(25, 25), Some(1)).unwrap();
+        utils::create_entity(world, "scout", utils::cell(5, 5), Some(0)).unwrap();
+    let (_, target_id) =
+        utils::create_entity(world, "dummy", utils::cell(25, 25), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::select(&mut app, scout_id);
@@ -342,11 +347,11 @@ fn rally_refuses_fogged_entity_target() {
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
     let world = app.world_mut();
-    let (post, post_id) = utils::create_entity(world, "post", utils::pos(5, 5), Some(0)).unwrap();
+    let (post, post_id) = utils::create_entity(world, "post", utils::cell(5, 5), Some(0)).unwrap();
     // The post has no eyes; the scout beside it sees for its owner.
-    utils::create_entity(world, "scout", utils::pos(5, 6), Some(0)).unwrap();
-    let (_, far_id) = utils::create_entity(world, "dummy", utils::pos(25, 25), Some(1)).unwrap();
-    let (_, near_id) = utils::create_entity(world, "dummy", utils::pos(5, 8), Some(1)).unwrap();
+    utils::create_entity(world, "scout", utils::cell(5, 6), Some(0)).unwrap();
+    let (_, far_id) = utils::create_entity(world, "dummy", utils::cell(25, 25), Some(1)).unwrap();
+    let (_, near_id) = utils::create_entity(world, "dummy", utils::cell(5, 8), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     // Fogged: the rally point stays unset.
@@ -385,10 +390,10 @@ fn rally_on_entity_drops_when_owner_seat_loses_sight() {
         PlayerSlot::occupied(1, PlayerType::Human, None, None),
     ]);
     let world = app.world_mut();
-    let (post, post_id) = utils::create_entity(world, "post", utils::pos(5, 5), Some(0)).unwrap();
+    let (post, post_id) = utils::create_entity(world, "post", utils::cell(5, 5), Some(0)).unwrap();
     // The post has no eyes; the scout beside it sees six cells for its owner.
-    let (eyes, _) = utils::create_entity(world, "scout", utils::pos(5, 6), Some(0)).unwrap();
-    let (_, quarry_id) = utils::create_entity(world, "scout", utils::pos(5, 8), Some(1)).unwrap();
+    let (eyes, _) = utils::create_entity(world, "scout", utils::cell(5, 6), Some(0)).unwrap();
+    let (_, quarry_id) = utils::create_entity(world, "scout", utils::cell(5, 8), Some(1)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::push_command(
@@ -457,7 +462,7 @@ fn rally_on_entity_drops_when_owner_seat_loses_sight() {
 fn watch_reveals_patch_no_entity_can_see() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let (_, station) =
-        utils::create_entity(app.world_mut(), "station", utils::pos(2, 2), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "station", utils::cell(2, 2), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
     assert!(!visible(&app, 0, 20, 20), "the far cell starts dark");
 
@@ -476,7 +481,7 @@ fn watch_reveals_patch_no_entity_can_see() {
 fn watch_lapses_exactly_when_its_duration_runs_out() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let (_, station) =
-        utils::create_entity(app.world_mut(), "station", utils::pos(2, 2), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "station", utils::cell(2, 2), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     sweep_at(&mut app, station, 20, 20);
@@ -497,7 +502,7 @@ fn watch_lapses_exactly_when_its_duration_runs_out() {
 fn watch_reads_its_radius_and_duration_off_caster() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let (_, observatory) =
-        utils::create_entity(app.world_mut(), "observatory", utils::pos(2, 2), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "observatory", utils::cell(2, 2), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     utils::cast_at(&mut app, observatory, "far_sweep", 20, 20);
@@ -519,7 +524,7 @@ fn watch_outlives_caster_and_is_shared_with_allies() {
         PlayerSlot::occupied(1, PlayerType::Human, None, Some(0)),
     ]);
     let (station_entity, station) =
-        utils::create_entity(app.world_mut(), "station", utils::pos(2, 2), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "station", utils::cell(2, 2), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     sweep_at(&mut app, station, 20, 20);
@@ -541,10 +546,38 @@ fn watch_outlives_caster_and_is_shared_with_allies() {
 }
 
 #[test]
+fn watch_around_caster_reaches_from_its_whole_footprint() {
+    // The beacon covers (10..13, 10..13). Its watch of radius 2 reaches out
+    // from that footprint, 2 past each edge: x 13 + 2 = 15 is held, 16 is
+    // not, and 10 − 2 = 8 is held, 7 is not.
+    let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
+    let (_, beacon) =
+        utils::create_entity(app.world_mut(), "beacon", utils::cell(10, 10), Some(0)).unwrap();
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    utils::cast_self(&mut app, beacon, "beacon_sweep");
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    let watches = app.world().resource::<Watches>().in_force();
+    let [watch] = watches else {
+        panic!("one watch is in force");
+    };
+    assert_eq!(
+        watch.patch,
+        CellRect::new(CellPos::new(10, 10), CellSize::new(4, 4))
+    );
+    let cells = watch.cells();
+    assert!(cells.contains(&CellPos::new(15, 11)));
+    assert!(!cells.contains(&CellPos::new(16, 11)));
+    assert!(cells.contains(&CellPos::new(8, 11)));
+    assert!(!cells.contains(&CellPos::new(7, 11)));
+}
+
+#[test]
 fn run_out_watch_leaves_store() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let (_, station) =
-        utils::create_entity(app.world_mut(), "station", utils::pos(2, 2), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "station", utils::cell(2, 2), Some(0)).unwrap();
     utils::run_ticks(&mut app, utils::APPLY);
 
     sweep_at(&mut app, station, 20, 20);
@@ -574,7 +607,7 @@ fn run_out_watch_leaves_store() {
 #[test]
 fn relief_hides_higher_ground_from_viewer_below() {
     let mut app = relief_app(&["ground"]);
-    utils::create_entity(app.world_mut(), "watchman", utils::pos(4, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "watchman", utils::cell(4, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
 
     // Its eyes at 1, the low ground's level: the low ground shows, the
@@ -587,7 +620,7 @@ fn relief_hides_higher_ground_from_viewer_below() {
 #[test]
 fn viewer_on_high_ground_sees_low_ground() {
     let mut app = relief_app(&["ground"]);
-    utils::create_entity(app.world_mut(), "watchman", utils::pos(11, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "watchman", utils::cell(11, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
 
     // Its eyes at 2: the low ground at 1 shows, the cliff foot (7, 5) too.
@@ -599,7 +632,7 @@ fn viewer_on_high_ground_sees_low_ground() {
 #[test]
 fn sees_up_lifts_eyes_over_relief() {
     let mut app = relief_app(&["ground"]);
-    utils::create_entity(app.world_mut(), "lookout", utils::pos(4, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "lookout", utils::cell(4, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
 
     // Eyes at 1 + 1 = 2, the plateau's level.
@@ -610,7 +643,7 @@ fn sees_up_lifts_eyes_over_relief() {
 #[test]
 fn buffed_sees_up_lifts_eyes_over_relief() {
     let mut app = relief_app(&["ground"]);
-    let watchman = utils::create_entity(app.world_mut(), "watchman", utils::pos(4, 5), Some(0))
+    let watchman = utils::create_entity(app.world_mut(), "watchman", utils::cell(4, 5), Some(0))
         .unwrap()
         .0;
     let keen = utils::register_entity_buff(
@@ -633,7 +666,7 @@ fn buffed_sees_up_lifts_eyes_over_relief() {
 #[test]
 fn relief_blocking_no_one_hides_nothing() {
     let mut app = relief_app(&[]);
-    utils::create_entity(app.world_mut(), "watchman", utils::pos(4, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "watchman", utils::cell(4, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
 
     assert!(visible(&app, 0, 8, 5));
@@ -643,7 +676,7 @@ fn relief_blocking_no_one_hides_nothing() {
 #[test]
 fn relief_hides_its_cells_from_lower_layer_it_names() {
     let mut app = relief_app(&["deep", "ground"]);
-    utils::create_entity(app.world_mut(), "diver", utils::pos(4, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "diver", utils::cell(4, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
 
     // Its eyes at 0, under the ground everywhere: the low ground at 1 is
@@ -656,7 +689,7 @@ fn relief_hides_its_cells_from_lower_layer_it_names() {
 #[test]
 fn relief_never_hides_from_lower_layer_it_does_not_name() {
     let mut app = relief_app(&["ground"]);
-    utils::create_entity(app.world_mut(), "diver", utils::pos(4, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "diver", utils::cell(4, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
 
     assert!(visible(&app, 0, 4, 5));
@@ -670,8 +703,8 @@ fn relief_never_hides_from_lower_layer_it_does_not_name() {
 #[test]
 fn rock_on_plateau_shadows_lookout_below() {
     let mut app = relief_app(&["ground"]);
-    utils::create_entity(app.world_mut(), "rock", utils::pos(10, 5), None).unwrap();
-    utils::create_entity(app.world_mut(), "lookout", utils::pos(4, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "rock", utils::cell(10, 5), None).unwrap();
+    utils::create_entity(app.world_mut(), "lookout", utils::cell(4, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
 
     // Eyes at 1 + 1 = 2 see the plateau at 2; the rock standing on it rises
@@ -685,7 +718,7 @@ fn smoke_rises_from_level_of_each_cell_it_covers() {
     let mut app = relief_app(&["ground"]);
     utils::create_owned(&mut app, "smoke_pot", 5, 8, 0);
     utils::create_owned(&mut app, "smoke_pot", 10, 5, 0);
-    utils::create_entity(app.world_mut(), "lookout", utils::pos(5, 5), Some(0)).unwrap();
+    utils::create_entity(app.world_mut(), "lookout", utils::cell(5, 5), Some(0)).unwrap();
     utils::run_ticks(&mut app, 1);
 
     // Eyes at 1 + 1 = 2. Over low ground the smoke's top is 1 + 1 = 2, not
@@ -698,7 +731,7 @@ fn smoke_rises_from_level_of_each_cell_it_covers() {
 #[test]
 fn wide_viewer_across_cliff_sees_from_its_highest_cell() {
     let mut app = relief_app(&["ground"]);
-    utils::create_entity(app.world_mut(), "wide_strider", utils::pos(7, 5), Some(0))
+    utils::create_entity(app.world_mut(), "wide_strider", utils::cell(7, 5), Some(0))
         .expect("a strider stands across the cliff");
     utils::run_ticks(&mut app, 1);
 
@@ -932,7 +965,7 @@ fn boundless_sight_reaches_no_further_than_map() {
 #[test]
 fn dying_rock_shadows_until_gone() {
     let mut app = shadow_app();
-    let cairn = utils::create_entity(app.world_mut(), "cairn", utils::pos(6, 5), None)
+    let cairn = utils::create_entity(app.world_mut(), "cairn", utils::cell(6, 5), None)
         .unwrap()
         .0;
     utils::create_owned(&mut app, "eye", 4, 5, 0);
@@ -1109,8 +1142,9 @@ fn scripted_sniper_attacks_fogged_mark(vision: AiVision) -> (App, Entity, Entity
     ]);
     let world = app.world_mut();
     let (sniper, sniper_id) =
-        utils::create_entity(world, "sniper", utils::pos(5, 5), Some(1)).unwrap();
-    let (mark, mark_id) = utils::create_entity(world, "dummy", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "sniper", utils::cell(5, 5), Some(1)).unwrap();
+    let (mark, mark_id) =
+        utils::create_entity(world, "dummy", utils::cell(5, 10), Some(0)).unwrap();
     utils::run_ticks_commanding(
         &mut app,
         25,
@@ -1222,7 +1256,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                     costs: Vec::new(),
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Watch {
-                        at: Spot::Cell {
+                        at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
                         radius: Quantity::Constant(2),
@@ -1246,6 +1280,37 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_sight_range(2)
                 .with_skills([sweep]),
         );
+        // A 4×4 beacon that watches around itself.
+        let beacon_sweep = registry.register_skill(
+            "beacon_sweep",
+            SkillDef {
+                cooldown: 4,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    casting: Casting::Instant,
+                    effect: EntityCastEffect::Watch {
+                        at: Spot::Caster,
+                        radius: Quantity::Constant(2),
+                        duration: Quantity::Constant(5),
+                        detection: Detection::Blind,
+                    },
+                },
+                requires: Vec::new(),
+            },
+        );
+        registry.register(
+            EntityTypeDef::new("beacon")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(4, 4),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(50))
+                .with_dying(1, [])
+                .with_sight_range(1)
+                .with_skills([beacon_sweep]),
+        );
         // The same sweep reading its reach and its time off the caster.
         let scan_radius = registry.register_entity_stat("scan_radius", FixedU64::ZERO);
         let scan_time = registry.register_entity_stat("scan_time", FixedU64::ONE);
@@ -1257,7 +1322,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                     costs: Vec::new(),
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Watch {
-                        at: Spot::Cell {
+                        at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
                         radius: Quantity::Stat(scan_radius),
@@ -1339,7 +1404,7 @@ fn relief_app(ground_relief_blocks: &[&str]) -> App {
             .with_location(striding, CellSize::new(2, 2), Solidity::Solid, ground)
             .with_movement(
                 utils::fixed("0.5"),
-                utils::fixed("1"),
+                FixedU64::from_num(1),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -1561,6 +1626,6 @@ fn shadow_app() -> App {
 
 /// Places an unowned `type_name` anchored at `(x, y)`.
 fn place_unowned(app: &mut App, type_name: &str, x: u32, y: u32) {
-    utils::create_entity(app.world_mut(), type_name, utils::pos(x, y), None)
+    utils::create_entity(app.world_mut(), type_name, utils::cell(x, y), None)
         .unwrap_or_else(|| panic!("{type_name} fits at ({x}, {y})"));
 }

@@ -49,12 +49,12 @@ fn ghost_refuses_ground_held_by_what_side_makes_out_and_reveals_nothing_else() {
     let (swarmling, _) = utils::create_entity(
         app.world_mut(),
         "swarmling_burrowed",
-        utils::at_cell(22, 22),
+        utils::cell(22, 22),
         Some(1),
     )
     .expect("the demo content defines a burrowed swarmling");
     let (barracks, _) =
-        utils::create_entity(app.world_mut(), "barracks", utils::at_cell(25, 25), Some(1))
+        utils::create_entity(app.world_mut(), "barracks", utils::cell(25, 25), Some(1))
             .expect("the demo content defines a barracks");
 
     // A barracks anchored at (20, 20) reaches (22, 22).
@@ -94,7 +94,7 @@ fn ghost_refuses_ground_held_by_what_side_makes_out_and_reveals_nothing_else() {
 #[test]
 fn ghost_fits_over_what_side_does_not_make_out() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    utils::create_entity(app.world_mut(), "barracks", utils::at_cell(25, 25), Some(1))
+    utils::create_entity(app.world_mut(), "barracks", utils::cell(25, 25), Some(1))
         .expect("the demo content defines a barracks");
 
     // The rival's barracks claims the cells, but nothing of it is made out:
@@ -108,7 +108,7 @@ fn ghost_judges_field_rules_on_coverage_overlay_shows() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     // A rival's pylon powers its cells; the overlay shows only the player's
     // own power.
-    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(20, 20), Some(1))
+    utils::create_entity(app.world_mut(), "pylon", utils::cell(20, 20), Some(1))
         .expect("the demo content defines a pylon");
     utils::run_ticks(&mut app, 1);
     let power = app
@@ -140,7 +140,7 @@ fn ghost_reads_no_rival_field_in_cells_side_does_not_see() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     // A rival's hatchery spreads creep about itself; nothing of player 0's
     // sees there yet.
-    utils::create_entity(app.world_mut(), "hatchery", utils::at_cell(30, 30), Some(1))
+    utils::create_entity(app.world_mut(), "hatchery", utils::cell(30, 30), Some(1))
         .expect("the demo content defines a hatchery");
     utils::run_ticks(&mut app, 2);
     let creep = app
@@ -161,7 +161,7 @@ fn ghost_reads_no_rival_field_in_cells_side_does_not_see() {
     assert!(with_view(&app, &[], |view| view.allows(&off_creep, rect)));
 
     // Seen, it is.
-    utils::create_entity(app.world_mut(), "zealot", utils::at_cell(31, 36), Some(0))
+    utils::create_entity(app.world_mut(), "zealot", utils::cell(31, 36), Some(0))
         .expect("the demo content defines a zealot");
     utils::run_ticks(&mut app, 1);
     assert!(!with_view(&app, &[], |view| view.allows(&off_creep, rect)));
@@ -171,7 +171,7 @@ fn ghost_reads_no_rival_field_in_cells_side_does_not_see() {
 fn ghost_is_blocked_only_by_what_side_makes_out() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     let (barracks, _) =
-        utils::create_entity(app.world_mut(), "barracks", utils::at_cell(25, 25), Some(1))
+        utils::create_entity(app.world_mut(), "barracks", utils::cell(25, 25), Some(1))
             .expect("the demo content defines a barracks");
     let world = app.world();
     let info = world.get::<EntityInfoComponent>(barracks).expect("placed");
@@ -192,6 +192,7 @@ fn ghost_is_blocked_only_by_what_side_makes_out() {
     ] {
         let made_out = input::made_out_footprints(
             registry,
+            app.world().resource::<Map>(),
             [(info, location, &visibility, Some(sighted), None)].into_iter(),
         );
         assert_eq!(
@@ -208,11 +209,10 @@ fn ghost_of_body_that_claims_no_cells_is_refused_only_by_standing_footprints() {
     // grunt's cell and fits; over a seen barracks, a standing footprint, it
     // does not.
     let mut app = utils::demo_map_app(MovementModel::Cell);
-    let (grunt, _) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(25, 25), Some(1))
-            .expect("the demo content defines a grunt");
+    let (grunt, _) = utils::create_entity(app.world_mut(), "grunt", utils::cell(25, 25), Some(1))
+        .expect("the demo content defines a grunt");
     let (barracks, _) =
-        utils::create_entity(app.world_mut(), "barracks", utils::at_cell(28, 25), Some(1))
+        utils::create_entity(app.world_mut(), "barracks", utils::cell(28, 25), Some(1))
             .expect("the demo content defines a barracks");
 
     assert!(fits(&app, "corpse", CellPos::new(25, 25), &[grunt]));
@@ -224,7 +224,7 @@ fn ghost_of_building_is_refused_over_passable_body_another_passable_one_shares()
     // A corpse is passable: a seen one at (25, 25) keeps a farm off its cell,
     // and another corpse shares it.
     let mut app = utils::demo_map_app(MovementModel::Cell);
-    let (corpse, _) = utils::create_entity(app.world_mut(), "corpse", utils::at_cell(25, 25), None)
+    let (corpse, _) = utils::create_entity(app.world_mut(), "corpse", utils::cell(25, 25), None)
         .expect("the demo content defines a corpse");
 
     assert!(!fits(&app, "farm", CellPos::new(25, 25), &[corpse]));
@@ -398,15 +398,15 @@ fn ghost_reads_cells_of_units_making_way_as_free() {
     app.init_resource::<input::InputMode>()
         .init_resource::<input::Yielders>();
     let (_, idle) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(25, 25), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(25, 25), Some(0)).unwrap();
     // The enemy's grunt stands well out of the others' notice, so none of
     // them takes it on while the commands land.
     let (_, enemy) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(45, 25), Some(1)).unwrap();
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(45, 25), Some(1)).unwrap();
     let (_, standing) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(29, 25), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(29, 25), Some(0)).unwrap();
     let (_, walking) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(25, 29), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "grunt", utils::cell(25, 29), Some(0)).unwrap();
     utils::select(&mut app, standing, SelectMode::Replace);
     utils::push_command(
         &mut app,
@@ -418,7 +418,7 @@ fn ghost_reads_cells_of_units_making_way_as_free() {
     utils::push_command(
         &mut app,
         PlayerCommand::Move {
-            target: utils::at_cell(25, 40),
+            target: utils::pos(25, 40),
             flush: true,
         },
     );
@@ -458,9 +458,8 @@ fn ghost_snaps_to_seen_source_under_cursor_and_to_no_other() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
     // The mine spans (10, 20) to (11, 21): a cursor on its far cell snaps to
     // its origin, one beside it to nothing.
-    let (mine, _) =
-        utils::create_entity(app.world_mut(), "gold_mine", utils::at_cell(10, 20), None)
-            .expect("the demo content defines a gold mine");
+    let (mine, _) = utils::create_entity(app.world_mut(), "gold_mine", utils::cell(10, 20), None)
+        .expect("the demo content defines a gold mine");
 
     let seen = Sighted(Sighting::Seen);
     assert_eq!(
@@ -492,9 +491,8 @@ fn ghost_snaps_to_seen_source_under_cursor_and_to_no_other() {
 #[test]
 fn ghost_snapped_to_source_fits_only_as_its_field_rules_say() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (mine, _) =
-        utils::create_entity(app.world_mut(), "gold_mine", utils::at_cell(10, 20), None)
-            .expect("the demo content defines a gold mine");
+    let (mine, _) = utils::create_entity(app.world_mut(), "gold_mine", utils::cell(10, 20), None)
+        .expect("the demo content defines a gold mine");
     let world = app.world();
     let registry = world.resource::<ContentRegistry>();
     let creep = registry
@@ -527,9 +525,8 @@ fn ghost_snapped_to_source_fits_only_as_its_field_rules_say() {
 #[test]
 fn ghost_of_type_raised_over_source_stands_on_seen_source_under_cursor() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let (mine, _) =
-        utils::create_entity(app.world_mut(), "gold_mine", utils::at_cell(10, 20), None)
-            .expect("the demo content defines a gold mine");
+    let (mine, _) = utils::create_entity(app.world_mut(), "gold_mine", utils::cell(10, 20), None)
+        .expect("the demo content defines a gold mine");
     let world = app.world();
     let def = world
         .resource::<ContentRegistry>()
@@ -568,10 +565,10 @@ fn ghost_of_type_raised_over_source_stands_on_seen_source_under_cursor() {
 fn right_click_sets_rally_of_rising_mover_and_moves_standing_one() {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     let (_, rising_id) =
-        utils::create_rising(app.world_mut(), "zealot", utils::at_cell(20, 20), Some(0))
+        utils::create_rising(app.world_mut(), "zealot", utils::cell(20, 20), Some(0))
             .expect("the demo content defines a zealot");
     let (_, standing) =
-        utils::create_entity(app.world_mut(), "zealot", utils::at_cell(24, 20), Some(0))
+        utils::create_entity(app.world_mut(), "zealot", utils::cell(24, 20), Some(0))
             .expect("the demo content defines a zealot");
 
     // A mover still rising moves only once it has risen: the click names where
@@ -709,7 +706,7 @@ fn warp_click_skips_rival_gate_in_selection() {
     let (cooling, leader) = warp_gate(&mut app, 20, Some(0));
     let (_, rival) = warp_gate(&mut app, 30, Some(1));
     // The rival's own pylon powers its gate, which stands ready.
-    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(32, 23), Some(1))
+    utils::create_entity(app.world_mut(), "pylon", utils::cell(32, 23), Some(1))
         .expect("the demo content defines a pylon");
     utils::run_ticks(&mut app, 1);
     app.world_mut()
@@ -765,7 +762,7 @@ fn with_view<R>(app: &App, made_out: &[Entity], judge: impl FnOnce(&input::Ghost
             world.get::<AttachedComponent>(entity),
         )
     });
-    let footprints = input::made_out_footprints(registry, entities);
+    let footprints = input::made_out_footprints(registry, world.resource::<Map>(), entities);
     view_over(app, &footprints, judge)
 }
 
@@ -809,6 +806,7 @@ fn snap(
     input::snaps_to(
         over,
         cursor,
+        world.resource::<Map>(),
         info,
         location,
         standing,
@@ -853,7 +851,7 @@ fn right_click(app: &mut App) -> Vec<PlayerCommand> {
 fn warp_app() -> App {
     let mut app = utils::demo_map_app(MovementModel::Cell);
     // Warp gates stand idle unpowered.
-    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(24, 23), Some(0))
+    utils::create_entity(app.world_mut(), "pylon", utils::cell(24, 23), Some(0))
         .expect("the demo content defines a pylon");
     utils::run_ticks(&mut app, 1);
     app.world_mut()
@@ -866,7 +864,7 @@ fn warp_app() -> App {
 
 /// A warp gate of `owner` at `(x, 20)`.
 fn warp_gate(app: &mut App, x: u32, owner: Option<u8>) -> (Entity, SimulationId) {
-    utils::create_entity(app.world_mut(), "warp_gate", utils::at_cell(x, 20), owner)
+    utils::create_entity(app.world_mut(), "warp_gate", utils::cell(x, 20), owner)
         .expect("the demo content defines a warp gate")
 }
 
@@ -878,7 +876,7 @@ fn click_warp(app: &mut App, leading: SimulationId) -> Vec<PlayerCommand> {
         .insert_resource(input::WarpClick(Some(input::Warp {
             leading,
             type_name: "zealot".into(),
-            at: utils::at_cell(22, 24),
+            anchor: utils::cell(22, 24),
         })));
     app.world_mut()
         .run_system_once(input::issue_warp)
@@ -889,7 +887,7 @@ fn click_warp(app: &mut App, leading: SimulationId) -> Vec<PlayerCommand> {
 /// Has player 0 explore the east plateau's west edge, around (55, 26), by
 /// standing a grunt of its own beside it for a tick.
 fn explore_east_plateau_edge(app: &mut App) {
-    utils::create_entity(app.world_mut(), "grunt", utils::at_cell(52, 26), Some(0))
+    utils::create_entity(app.world_mut(), "grunt", utils::cell(52, 26), Some(0))
         .expect("the demo content defines a grunt");
     utils::run_ticks(app, 1);
 }

@@ -21,7 +21,7 @@ use ferrets_content::{
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
+use ferrets_math::{FixedU64, fixed_vec2::FixedVec2};
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 //
@@ -32,8 +32,8 @@ use ferrets_nav_grid::layer_mask::LayerMask;
 fn fully_loaded_definition_is_valid() {
     let def = utils::standing("factotum", utils::GROUND_DOMAIN)
         .with_movement(
-            FixedU64::from_num(0.5),
-            FixedU64::from_num(0.5),
+            utils::fixed("0.5"),
+            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -536,7 +536,7 @@ fn base_ticks_round_up() {
 
 /// The middle of a one-cell footprint, as a berth point.
 fn middle() -> FixedVec2 {
-    FixedVec2::new(FixedI64::from_num(0.5), FixedI64::from_num(0.5))
+    FixedVec2::new(utils::signed_fixed("0.5"), utils::signed_fixed("0.5"))
 }
 
 fn footman() -> EntityTypeDef {

@@ -12,7 +12,6 @@ use ferrets_content::{
     tunnel::Passage,
 };
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::{
     chase,
@@ -214,18 +213,18 @@ pub(crate) fn next_held(
 }
 
 /// Sets `body` down out of `gateway`'s link within the gateway's
-/// `unload_range`: on the free cell nearest `at` when the order names a point,
+/// `unload_range`: on the free cell nearest `at` when the order names one,
 /// else nearest the gateway as `lean` says. Out, it leaves the link.
 pub(crate) fn let_out(
     world: &mut World,
     gateway: Entity,
     body: Entity,
-    at: Option<FixedUVec2>,
+    at: Option<CellPos>,
     lean: Lean,
 ) -> SetDown {
     let gateway_id = entity_def::simulation_id(world, gateway);
     let set_down = match at {
-        Some(at) => spawn::place_back_near(world, body, CellPos::from(at), gateway_id),
+        Some(at) => spawn::place_back_near(world, body, at, gateway_id),
         None => spawn::place_back_from_holder(world, body, gateway_id, lean),
     };
     match set_down {
@@ -318,7 +317,7 @@ fn other_end_lander(world: &World, entity: Entity, other: Entity) -> Lander<'_> 
         from: ComesFrom::within(world, other, range),
         bound: Bound::Range { rect, range },
         around: rect,
-        toward: entity_def::footprint_rect(world, entity),
+        toward: entity_def::location(world, entity).footprint(),
     }
 }
 

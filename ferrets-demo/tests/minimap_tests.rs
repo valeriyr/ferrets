@@ -386,7 +386,7 @@ fn glimpsed_entity_paints_no_blip() {
     utils::compose_minimap(&mut app);
     let ground = painted(&app, 5, 30);
 
-    let (rival, _) = utils::create_entity(app.world_mut(), "grunt", utils::at_cell(5, 30), Some(1))
+    let (rival, _) = utils::create_entity(app.world_mut(), "grunt", utils::cell(5, 30), Some(1))
         .expect("the demo content defines a grunt");
     app.world_mut()
         .entity_mut(rival)
@@ -414,9 +414,9 @@ fn power_tints_only_viewers_own_coverage() {
     let (rival_ground, own_ground) = (painted(&app, 13, 20), painted(&app, 33, 30));
 
     // A rival's pylon and player 0's own, each powering six cells about it.
-    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(10, 20), Some(1))
+    utils::create_entity(app.world_mut(), "pylon", utils::cell(10, 20), Some(1))
         .expect("the demo content defines a pylon");
-    utils::create_entity(app.world_mut(), "pylon", utils::at_cell(30, 30), Some(0))
+    utils::create_entity(app.world_mut(), "pylon", utils::cell(30, 30), Some(0))
         .expect("the demo content defines a pylon");
     utils::run_ticks(&mut app, 1);
     recompose(&mut app);

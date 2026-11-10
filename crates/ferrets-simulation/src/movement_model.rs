@@ -1,17 +1,11 @@
 //! Selectable movement execution models.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, location::Location};
 use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_physics::body;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    components::{location::LocationComponent, movement::MoveComponent},
-    entity_def,
-    map::Map,
-    occupancy::GridMark,
-};
+use crate::{components::movement::MoveComponent, entity_def, map::Map, occupancy::GridMark};
 
 /// How a game's units occupy space and resolve blocking between each other.
 ///
@@ -42,25 +36,22 @@ pub(crate) enum Settling {
 }
 
 /// Moves a continuous-model body standing on the grid to `to`, its claim
-/// following it onto the footprint `to` anchors.
+/// following it onto the footprint it is anchored at there.
 ///
-/// Panics under the cell model, and for a body that claims cells but stands
-/// off the grid.
-pub fn move_body(world: &mut World, entity: Entity, to: FixedUVec2) {
+/// Panics under the cell model, for a body that claims cells but stands off
+/// the grid, and as [`entity_def::set_location`] does.
+pub fn move_body(world: &mut World, entity: Entity, to: Location) {
     match world.resource::<Map>().movement_model() {
         MovementModel::Cell => panic!("a cell-model body moves crossing by crossing"),
         MovementModel::Continuous => {}
     }
     let held = entity_def::grid_mark(world, entity);
-    world
-        .get_mut::<LocationComponent>(entity)
-        .expect("a moving body stands somewhere")
-        .position = to;
+    entity_def::set_location(world, entity, to);
     let Some(from) = held else {
         // A body that claims no cells has no claim to move.
         return;
     };
-    claim_onto(world, entity, from, body::anchor(to));
+    claim_onto(world, entity, from, to.anchor());
 }
 
 /// Moves the claim of a cell-model `entity`, at rest on the grid, onto the
@@ -107,16 +98,32 @@ pub fn swap_claims(world: &mut World, first: Entity, second: Entity) {
     });
 }
 
-/// Returns `true` if `position` is between two cell origins (a crossing is in progress).
+/// Whether `entity` stands between two anchored positions: a crossing is in
+/// progress.
 ///
 /// This infers movement state from the position alone, which is only valid
 /// under the lattice invariant documented on
-/// [`LocationComponent::position`](crate::components::location::LocationComponent):
-/// entities rest exactly on cell origins (integer coordinates), so a
-/// fractional component can mean nothing but a crossing in progress.
-pub fn is_mid_crossing(position: FixedUVec2) -> bool {
-    let cell = CellPos::from(position);
-    position != FixedUVec2::from(cell)
+/// [`LocationComponent`](crate::components::location::LocationComponent): a
+/// body not crossing stands exactly on its anchored position, so any other
+/// position can mean nothing but a crossing in progress.
+///
+/// Panics if `entity` is not a simulation entity, is off the map, or its type
+/// declares no location.
+pub fn is_mid_crossing(world: &World, entity: Entity) -> bool {
+    entity_def::location(world, entity).is_mid_crossing()
+}
+
+/// Whether `walker` stands where a point move to `target` ends: `target` held
+/// on the map for its size, lined up anchored there under the cell model, its
+/// middle exactly there under the continuous one.
+pub fn at_point(world: &World, walker: Entity, target: FixedUVec2) -> bool {
+    let standing = entity_def::location(world, walker);
+    let map = world.resource::<Map>();
+    let spot = map.location_clamped(target, standing.size());
+    match map.movement_model() {
+        MovementModel::Cell => !standing.is_mid_crossing() && standing.anchor() == spot.anchor(),
+        MovementModel::Continuous => standing.middle() == spot.middle(),
+    }
 }
 
 /// Settles a cell-model walker caught mid-crossing onto the cell it is
@@ -133,13 +140,9 @@ pub(crate) fn settle_crossing(world: &mut World, entity: Entity) -> Settling {
     else {
         return Settling::AtRest;
     };
-    let model = world.resource::<Map>().movement_model();
-    let mut location = world
-        .get_mut::<LocationComponent>(entity)
-        .expect("a walker stands somewhere");
-    match model {
-        MovementModel::Cell if is_mid_crossing(location.position) => {
-            location.position = FixedUVec2::from(claimed);
+    match world.resource::<Map>().movement_model() {
+        MovementModel::Cell if is_mid_crossing(world, entity) => {
+            entity_def::set_anchor(world, entity, claimed);
             Settling::Settled
         }
         MovementModel::Cell | MovementModel::Continuous => Settling::AtRest,

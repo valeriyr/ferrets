@@ -526,6 +526,7 @@ pub fn refresh_minimap(
     mut images: ResMut<Assets<Image>>,
     session: Res<GameSession>,
     registry: Res<ContentRegistry>,
+    map: Res<Map>,
     selection: Res<Selection>,
     fog: Res<VisibilityGrid>,
     fields: Res<FieldGrid>,
@@ -651,10 +652,6 @@ pub fn refresh_minimap(
     let mut blips: Vec<_> = entities
         .iter()
         .filter_map(|(info, location, owner, last_hit, sighted)| {
-            let (x, y) = (
-                location.position.x.to_num::<u32>(),
-                location.position.y.to_num::<u32>(),
-            );
             // The stamp is the whole answer: it already folds the footprint,
             // the watched side and the reveal, where this cell alone would
             // lose a building lit only at a corner. A glimpse is a shimmer on
@@ -664,6 +661,8 @@ pub fn refresh_minimap(
             }
             let def = registry.def(info.type_id());
             let size = def.location?.size();
+            let anchor = map.location(location.position, size).anchor();
+            let (x, y) = (anchor.x, anchor.y);
             let own = owner.is_some_and(|owner| Some(owner.player()) == local);
             let team =
                 owner.is_some_and(|owner| render::allied_with_local(&session, owner.player()));

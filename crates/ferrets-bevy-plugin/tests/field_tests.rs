@@ -436,7 +436,7 @@ fn morph_landing_on_forbidden_field_fizzles() {
     assert_eq!(utils::count_of_type(app.world_mut(), "bunker"), 1);
     assert_eq!(utils::owned_of_type(app.world_mut(), "bunker", 0).len(), 1);
     let bunker = utils::single_owned_of_type(app.world_mut(), "bunker", 0);
-    assert_eq!(utils::cell_of(app.world(), bunker), CellPos::new(20, 20));
+    assert_eq!(utils::anchor_of(app.world(), bunker), CellPos::new(20, 20));
 }
 
 #[test]
@@ -463,7 +463,7 @@ fn trained_unit_lands_only_where_its_placement_rules_admit() {
     assert_eq!(
         creepers
             .into_iter()
-            .map(|creeper| utils::cell_of(app.world(), creeper))
+            .map(|creeper| utils::anchor_of(app.world(), creeper))
             .collect::<Vec<_>>(),
         vec![CellPos::new(15, 10)]
     );
@@ -483,10 +483,7 @@ fn inside_effect_folds_into_stats_where_entity_stands() {
     utils::run_ticks(&mut app, 1);
 
     assert_eq!(utils::effective_speed(&app, on_creep), FixedU64::ONE);
-    assert_eq!(
-        utils::effective_speed(&app, off_creep),
-        FixedU64::from_num(0.5)
-    );
+    assert_eq!(utils::effective_speed(&app, off_creep), utils::fixed("0.5"));
 }
 
 #[test]
@@ -547,7 +544,7 @@ fn own_field_modifier_ignores_rival_power() {
     utils::run_ticks(&mut app, 1);
     assert_eq!(
         utils::effective_speed(&app, acolyte),
-        FixedU64::from_num(0.5),
+        utils::fixed("0.5"),
         "a rival's power is not its own"
     );
 
@@ -633,7 +630,7 @@ fn landing_replays_pool_interim_lacked_before_any_pool_settles() {
         app.world_mut(),
         sporeling,
         PoolId::ENERGY,
-        utils::fixed("10"),
+        FixedU64::from_num(10),
     );
     // 30 of 40 energy recorded; the pod enters full at 200 and is wounded
     // to 110.
@@ -663,7 +660,7 @@ fn landing_judges_trades_before_its_first_fold_moves_pools() {
         app.world_mut(),
         sporeling,
         PoolId::ENERGY,
-        utils::fixed("10"),
+        FixedU64::from_num(10),
     );
     // 30 of 40 energy recorded; the pod enters full at 200 and is wounded
     // to 50.
@@ -900,10 +897,14 @@ fn partly_covered_footprint_stands_on_one_side_of_entry() {
 #[test]
 fn form_field_effects_are_judged_on_that_form_footprint() {
     let mut app = field_app();
-    utils::place(&mut app, "pylon", 10, 10, 0);
-    // The kiln's 2×2 spans the powered column x = 13 and the unpowered
-    // x = 14; an ember standing on its anchor would cover only (13, 10).
-    let kiln = utils::place(&mut app, "kiln", 13, 10, 0);
+    // A pylon at (3, 9) powers three cells around itself, up to the column
+    // x = 6. The kiln's 2×2 on (6..7, 9..10) spans the powered column x = 6
+    // and the unpowered x = 7. A one-cell ember with its middle where the
+    // kiln's is, (7, 10), lies half way between four cells and takes the one
+    // nearest the kiln's anchor: (6, 9), powered — not (7, 10), which a half
+    // rounded up would give.
+    utils::place(&mut app, "pylon", 3, 9, 0);
+    let kiln = utils::place(&mut app, "kiln", 6, 9, 0);
     utils::run_ticks(&mut app, 3);
 
     let world = app.world();
@@ -1206,7 +1207,7 @@ fn disabled_probe_refuses_move_command() {
     utils::run_ticks(&mut app, utils::APPLY + 4);
 
     assert!(utils::order_queue_is_empty(app.world_mut(), probe));
-    assert_eq!(utils::cell_of(app.world(), probe), CellPos::new(20, 20));
+    assert_eq!(utils::anchor_of(app.world(), probe), CellPos::new(20, 20));
 }
 
 #[test]
@@ -1288,7 +1289,7 @@ fn build_under_way_completes_while_queued_build_is_swept() {
         PlayerCommand::BuildEntity {
             builder: probe_id,
             type_name: "gateway".into(),
-            position: utils::pos(12, 14),
+            anchor: utils::cell(12, 14),
             flush: false,
         },
     );
@@ -1548,7 +1549,7 @@ fn probe_sent_to_disabled_crystal_follows_it_instead_of_harvesting() {
     utils::create_owned(&mut app, "cannon", 12, 13, 0);
     let (probe, probe_id) = utils::create_owned(&mut app, "probe", 10, 10, 0);
     let (crystal, crystal_id) =
-        utils::create_entity(app.world_mut(), "crystal", utils::pos(15, 10), None)
+        utils::create_entity(app.world_mut(), "crystal", utils::cell(15, 10), None)
             .expect("the crystal fits");
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(crystal)
@@ -1701,7 +1702,7 @@ fn walker_disabled_mid_tick_takes_no_further_step() {
 //
 
 #[test]
-fn position_cast_covers_cells_that_then_decay_unsustained() {
+fn ground_cast_covers_cells_that_then_decay_unsustained() {
     let mut app = field_app();
     let Fields { creep, .. } = fields(&app);
     let (_, overlord) = utils::create_owned(&mut app, "overlord", 20, 20, 0);
@@ -1720,7 +1721,51 @@ fn position_cast_covers_cells_that_then_decay_unsustained() {
 }
 
 #[test]
-fn position_cast_clears_orphaned_coverage() {
+fn field_cast_around_caster_covers_from_its_whole_footprint() {
+    // The pit covers (10..12, 10..12). Its ooze of radius 1 reaches out from
+    // that footprint, 1 past each edge: x 12 + 1 = 13 takes creep, 14 does
+    // not, and 10 − 1 = 9 takes it, 8 does not.
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let pit = utils::place(&mut app, "ooze_pit", 10, 10, 0);
+    let pit_id = entity_def::simulation_id(app.world(), pit);
+
+    utils::cast_self(&mut app, pit_id, "ooze");
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert!(utils::covered_by(&app, creep, 13, 11, 0));
+    assert!(!covered_by_anyone(&app, creep, 14, 11));
+    assert!(utils::covered_by(&app, creep, 9, 11, 0));
+    assert!(!covered_by_anyone(&app, creep, 8, 11));
+}
+
+#[test]
+fn cast_cover_lies_only_on_terrain_field_names() {
+    // A column of water at x 12. Creep, land only, spewed at the water cell
+    // (12, 8) with radius 1: the walk starts there, but the water itself
+    // takes none; the land beside it, (11, 8) and (13, 8), takes it.
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    app.world_mut()
+        .resource_mut::<ContentRegistry>()
+        .register_terrain("water");
+    let mut data = MapData::new("walled", Projection::Isometric, 32, 32, "land");
+    for y in 0..32 {
+        data.set_terrain((12, y), "water");
+    }
+    instantiate_map(app.world_mut(), &data);
+    let (_, overlord) = utils::create_owned(&mut app, "overlord", 8, 8, 0);
+
+    utils::cast_at(&mut app, overlord, "spew", 12, 8);
+    utils::run_ticks(&mut app, utils::APPLY);
+
+    assert!(!covered_by_anyone(&app, creep, 12, 8), "water takes none");
+    assert!(utils::covered_by(&app, creep, 11, 8, 0));
+    assert!(utils::covered_by(&app, creep, 13, 8, 0));
+}
+
+#[test]
+fn ground_cast_clears_orphaned_coverage() {
     let mut app = field_app();
     let Fields { creep, .. } = fields(&app);
     let hive = utils::place(&mut app, "hive", 10, 10, 0);
@@ -2700,7 +2745,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     costs: Vec::new(),
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
-                        at: Spot::Cell {
+                        at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
                         field: creep,
@@ -2719,7 +2764,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     costs: Vec::new(),
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
-                        at: Spot::Cell {
+                        at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
                         field: creep,
@@ -2732,6 +2777,35 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         registry
             .register(utils::walker("overlord", utils::GROUND_DOMAIN).with_skills([spew, scour]));
+        // A 3×3 pit that oozes creep around itself.
+        let ooze = registry.register_skill(
+            "ooze",
+            SkillDef {
+                cooldown: 1,
+                caster: SkillCaster::Entity {
+                    costs: Vec::new(),
+                    casting: Casting::Instant,
+                    effect: EntityCastEffect::Field {
+                        at: Spot::Caster,
+                        field: creep,
+                        radius: Quantity::Constant(1),
+                        action: FieldAction::Cover,
+                    },
+                },
+                requires: Vec::new(),
+            },
+        );
+        registry.register(
+            EntityTypeDef::new("ooze_pit")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(3, 3),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_pool(Pool::health(100))
+                .with_skills([ooze]),
+        );
 
         registry.register(
             utils::walker("worker", utils::GROUND_DOMAIN)
@@ -2809,7 +2883,7 @@ fn build(
         PlayerCommand::BuildEntity {
             builder: worker,
             type_name: type_name.into(),
-            position: utils::pos(x, y),
+            anchor: utils::cell(x, y),
             flush: true,
         },
     );

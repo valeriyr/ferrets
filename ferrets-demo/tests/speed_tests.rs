@@ -1,6 +1,8 @@
 //! The game's speed ladder: the steps it offers, how they read, and the factors
 //! it asks the engine for.
 
+mod utils;
+
 use ferrets_demo::time::{NOMINAL_TICK_HZ, SpeedStep};
 use ferrets_math::FixedU64;
 use ferrets_simulation::session::game_speed::GameSpeed;
@@ -74,9 +76,6 @@ fn speed_maps_back_to_its_rung() {
 
 #[test]
 fn steps_ask_engine_for_their_own_factor() {
-    assert_eq!(
-        SpeedStep::Slowest.speed().factor(),
-        FixedU64::from_num(0.25)
-    );
+    assert_eq!(SpeedStep::Slowest.speed().factor(), utils::fixed("0.25"));
     assert_eq!(SpeedStep::Fastest.speed().factor(), FixedU64::from_num(8));
 }

@@ -4,8 +4,11 @@
 mod utils;
 
 use bevy::prelude::{App, World};
-use ferrets_content::{domain::DomainDef, player_stats::PlayerStatId, terrains::Terrains};
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_content::{
+    domain::DomainDef, entity_type_def::EntityTypeDef, location::Solidity,
+    player_stats::PlayerStatId, terrains::Terrains,
+};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
@@ -23,7 +26,7 @@ fn train_spawns_units_and_deducts_cost() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (barracks, barracks_id) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 100);
 
     for _ in 0..3 {
@@ -96,7 +99,7 @@ fn trained_unit_stands_only_on_terrain_its_domain_takes() {
         registry.register(camp);
     });
     let world = app.world_mut();
-    let (_, camp_id) = utils::create_entity(world, "camp", utils::pos(10, 10), Some(0)).unwrap();
+    let (_, camp_id) = utils::create_entity(world, "camp", utils::cell(10, 10), Some(0)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 60);
 
     for type_name in ["soldier", "landlubber"] {
@@ -145,7 +148,7 @@ fn naval_trainee_lands_on_water_beside_its_trainer() {
         registry.register(yard);
     });
     let world = app.world_mut();
-    let (_, yard_id) = utils::create_entity(world, "yard", utils::pos(10, 10), Some(0)).unwrap();
+    let (_, yard_id) = utils::create_entity(world, "yard", utils::cell(10, 10), Some(0)).unwrap();
     world.resource_mut::<PlayerResources>().add(0, "gold", 30);
 
     utils::push_command(
@@ -216,7 +219,7 @@ fn own_soldiers_around_trainer_make_way_for_trained_one() {
         }
     }
     let (_, barracks_id) =
-        utils::create_entity(app.world_mut(), "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "barracks", utils::cell(10, 10), Some(0)).unwrap();
     for x in 12..=19 {
         utils::create_owned(&mut app, "soldier", x, 10, 0);
     }
@@ -229,6 +232,53 @@ fn own_soldiers_around_trainer_make_way_for_trained_one() {
     assert_eq!(utils::count_of_type(app.world_mut(), "soldier"), 8);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::count_of_type(app.world_mut(), "soldier"), 9);
+}
+
+#[test]
+fn train_of_type_wider_than_map_is_refused_without_payment() {
+    // The map is 32 cells across: a 40×40 colossus has no place on it, so
+    // the pen takes no order and the 50 gold stays put.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[], |registry, _| {
+        registry.register(
+            EntityTypeDef::new("colossus")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(40, 40),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_price([("gold", 50)])
+                .with_train_time(4),
+        );
+        registry.register(
+            EntityTypeDef::new("pen")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::new(2, 2),
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_trainer(["colossus"]),
+        );
+    });
+    let (pen, pen_id) = utils::create_owned(&mut app, "pen", 10, 10, 0);
+    utils::grant_gold(&mut app, 50);
+
+    utils::push_command(
+        &mut app,
+        PlayerCommand::TrainEntity {
+            trainer: pen_id,
+            type_name: "colossus".into(),
+        },
+    );
+    utils::run_ticks(&mut app, 10);
+
+    assert_eq!(utils::gold(app.world()), 50);
+    assert!(
+        app.world()
+            .get::<TrainQueueComponent>(pen)
+            .is_none_or(|queue| queue.0.is_empty())
+    );
 }
 
 //
@@ -451,7 +501,7 @@ fn cancel_train_releases_supply_of_dropped_entry() {
 fn cells_of(world: &mut World, type_name: &str) -> Vec<CellPos> {
     utils::owned_of_type(world, type_name, 0)
         .into_iter()
-        .map(|unit| utils::cell_of(world, unit))
+        .map(|unit| utils::anchor_of(world, unit))
         .collect()
 }
 

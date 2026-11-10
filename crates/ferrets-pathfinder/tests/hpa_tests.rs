@@ -151,10 +151,9 @@ fn long_route_ignores_unit_claims() {
     let flat = astar::find_path(
         &grid,
         PROJECTION,
-        utils::world(0, 1),
+        utils::nav(0, 1),
         utils::profile(utils::on_ground()),
-        utils::world(15, 1),
-        CellSize::new(1, 1),
+        CellRect::cell(utils::nav(15, 1)),
         0,
     );
     assert!(flat.is_none(), "the flat search must honor claims");

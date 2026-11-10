@@ -3,8 +3,6 @@
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{registry::ContentRegistry, resource::DepletionPolicy};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
-use ferrets_math::fixed_uvec2::FixedUVec2;
-use ferrets_physics::body;
 
 use crate::{
     components::{build::OverbuiltComponent, hidden::Inside, resource::ResourceSourceComponent},
@@ -12,7 +10,7 @@ use crate::{
     entity_index::EntityIndex,
     events::DeathCause,
     occupancy::GridMark,
-    spawn::{self, FieldReach},
+    spawn::{self, At, FieldReach},
 };
 
 /// What a footprint covers as it is set down.
@@ -120,7 +118,7 @@ pub(crate) fn uncover_source(world: &mut World, entity: Entity) {
     if let Some((source, _)) = spawn::spawn_uncovered(
         world,
         &type_name,
-        FixedUVec2::from(overbuilt.anchor),
+        At::Cell(overbuilt.anchor),
         None,
         FieldReach::Full,
         by,
@@ -145,7 +143,7 @@ fn cover_source(world: &mut World, source: Entity, over: Entity) {
         .expect("a source covered is a resource source")
         .amount;
     let uncovers = entity_def::type_id(world, source);
-    let anchor = body::anchor(entity_def::whereabouts(world, source));
+    let anchor = entity_def::went_in_anchor(world, source);
     spawn::despawn_entity(world, source, DeathCause::Overbuilt);
 
     let mut over_mut = world.entity_mut(over);
@@ -168,6 +166,6 @@ fn source_where(world: &World, over: &str, holds: impl Fn(CellRect) -> bool) -> 
             world.entity(entity).contains::<ResourceSourceComponent>()
                 && entity_def::of(world, entity).name == over
                 && entity_def::stands_on_grid(world, entity)
-                && holds(entity_def::footprint_rect(world, entity))
+                && holds(entity_def::location(world, entity).footprint())
         })
 }

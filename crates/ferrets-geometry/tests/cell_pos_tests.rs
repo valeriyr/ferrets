@@ -34,6 +34,22 @@ fn ordering_is_lexicographic_x_then_y() {
 }
 
 //
+// ─── Middle ───────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn middle_lies_half_cell_in_from_corner() {
+    // (4, 9) + 1/2 on each axis.
+    assert_eq!(utils::nav(4, 9).middle(), utils::point("4.5", "9.5"));
+}
+
+#[test]
+fn middle_lies_in_its_cell() {
+    let cell = utils::nav(7, 3);
+    assert_eq!(CellPos::from(cell.middle()), cell);
+}
+
+//
 // ─── From world ───────────────────────────────────────────────────────────────
 //
 
@@ -44,10 +60,7 @@ fn from_world_whole_numbers() {
 
 #[test]
 fn from_world_floors_fractional() {
-    assert_eq!(
-        CellPos::from(utils::part_way("1.7", "2.3")),
-        utils::nav(1, 2)
-    );
+    assert_eq!(CellPos::from(utils::point("1.7", "2.3")), utils::nav(1, 2));
 }
 
 //

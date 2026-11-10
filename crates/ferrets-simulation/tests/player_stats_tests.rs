@@ -1,5 +1,7 @@
 //! Tests for the per-player stat store's modifier fold.
 
+mod utils;
+
 use ferrets_content::{
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
@@ -41,7 +43,7 @@ fn absent_stat_reads_none() {
 #[test]
 fn effective_as_u32_truncates_fractional_value() {
     let mut stats = PlayerStats::new(1);
-    stats.set_base(0, PlayerStatId::MAX_SUPPLY, FixedU64::from_num(12.75));
+    stats.set_base(0, PlayerStatId::MAX_SUPPLY, utils::fixed("12.75"));
 
     assert_eq!(
         stats.effective_as_u32(0, PlayerStatId::MAX_SUPPLY),
@@ -63,7 +65,7 @@ fn flat_and_percent_fold_as_base_plus_flat_times_percent() {
 
     assert_eq!(
         stats.effective(0, PlayerStatId::MAX_SUPPLY),
-        Some(FixedU64::from_num(22.5))
+        Some(utils::fixed("22.5"))
     );
     // The base stays what was set; only the effective value folds.
     assert_eq!(

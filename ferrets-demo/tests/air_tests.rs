@@ -33,7 +33,7 @@ fn flier_crosses_river_and_rests_on_water() {
     let (flier, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
-        utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the flier spawns over clear ground");
@@ -47,7 +47,7 @@ fn flier_crosses_river_and_rests_on_water() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::at_cell(RIVER.0, RIVER.1),
+                target: utils::pos(RIVER.0, RIVER.1),
                 size: CellSize::ONE,
                 range: 0,
             },
@@ -64,9 +64,10 @@ fn flier_crosses_river_and_rests_on_water() {
             .is_some_and(|queue| queue.0.is_empty()),
         "the flight never finished, so the air layer did not carry it over the river"
     );
-    let landed = utils::cell_of(utils::position_of(world, flier));
+    let landed = utils::anchor_of(world, flier);
     assert_eq!(
-        landed, RIVER,
+        landed,
+        CellPos::new(RIVER.0, RIVER.1),
         "the flier rested at {landed:?} instead of on the ordered water cell"
     );
 }
@@ -82,7 +83,7 @@ fn walker_cannot_stand_where_flier_rests() {
         utils::create_entity(
             app.world_mut(),
             "peasant",
-            utils::at_cell(RIVER.0, RIVER.1),
+            utils::cell(RIVER.0, RIVER.1),
             Some(0),
         )
         .is_none(),
@@ -97,7 +98,7 @@ fn walker_cannot_stand_where_flier_rests() {
 #[test]
 fn ground_building_does_not_block_flight() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let cell = utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1);
+    let cell = utils::cell(CLEAR_GROUND.0, CLEAR_GROUND.1);
 
     // A 2x2 farm holds the ground layer only, so the air over it stays open.
     utils::create_entity(app.world_mut(), "farm", cell, Some(0)).expect("the farm is raised");
@@ -132,7 +133,7 @@ fn tall_building_blocks_flight() {
     utils::create_entity(
         app.world_mut(),
         "sea_fortress",
-        utils::at_cell(origin.0, origin.1),
+        utils::cell(origin.0, origin.1),
         None,
     )
     .expect("the fortress stands on deep water");
@@ -169,7 +170,7 @@ fn flier_routes_around_tall_building() {
     utils::create_entity(
         app.world_mut(),
         "sea_fortress",
-        utils::at_cell(fortress.0, fortress.1),
+        utils::cell(fortress.0, fortress.1),
         None,
     )
     .expect("the fortress stands");
@@ -180,7 +181,7 @@ fn flier_routes_around_tall_building() {
     let (flier, _) = utils::create_entity(
         app.world_mut(),
         "gryphon_aloft",
-        utils::at_cell(start.0, start.1),
+        utils::cell(start.0, start.1),
         Some(0),
     )
     .expect("the flier spawns beside the fortress");
@@ -190,7 +191,7 @@ fn flier_routes_around_tall_building() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::at_cell(goal.0, goal.1),
+                target: utils::pos(goal.0, goal.1),
                 size: CellSize::ONE,
                 range: 0,
             },
@@ -203,7 +204,7 @@ fn flier_routes_around_tall_building() {
     // footprint must stay off the fortress rect, not the anchor alone.
     for _ in 0..300 {
         utils::run_ticks(&mut app, 1);
-        let (x, y) = utils::cell_of(utils::position_of(app.world_mut(), flier));
+        let CellPos { x, y } = utils::anchor_of(app.world(), flier);
         let overlaps = x <= fortress.0 + 2
             && x + 1 >= fortress.0
             && y <= fortress.1 + 2
@@ -222,9 +223,10 @@ fn flier_routes_around_tall_building() {
             .is_some_and(|queue| queue.0.is_empty()),
         "the flight around the fortress never finished"
     );
-    let landed = utils::cell_of(utils::position_of(world, flier));
+    let landed = utils::anchor_of(world, flier);
     assert_eq!(
-        landed, goal,
+        landed,
+        CellPos::new(goal.0, goal.1),
         "the flier rested at {landed:?} instead of rounding the fortress to {goal:?}"
     );
 }
@@ -243,14 +245,14 @@ fn melee_ignores_flier_overhead() {
     let (grunt, _) = utils::create_entity(
         app.world_mut(),
         "grunt",
-        utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the grunt spawns");
     let (flier, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
-        utils::at_cell(CLEAR_GROUND.0 + 1, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0 + 1, CLEAR_GROUND.1),
         Some(1),
     )
     .expect("the flier spawns beside it");
@@ -282,14 +284,14 @@ fn archer_engages_flier_overhead() {
     utils::create_entity(
         app.world_mut(),
         "archer",
-        utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the archer spawns");
     let (flier, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
-        utils::at_cell(CLEAR_GROUND.0 + 1, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0 + 1, CLEAR_GROUND.1),
         Some(1),
     )
     .expect("the flier spawns beside it");
@@ -318,14 +320,14 @@ fn garrisoned_melee_ignores_flier_overhead() {
     let (bunker, _) = utils::create_entity(
         app.world_mut(),
         "bunker",
-        utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the bunker spawns");
     let (grunt, _) = utils::create_entity(
         app.world_mut(),
         "grunt",
-        utils::at_cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the grunt spawns");
@@ -337,7 +339,7 @@ fn garrisoned_melee_ignores_flier_overhead() {
     let (flier, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
-        utils::at_cell(CLEAR_GROUND.0 + 2, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0 + 2, CLEAR_GROUND.1),
         Some(1),
     )
     .expect("the flier parks overhead");
@@ -361,14 +363,14 @@ fn garrisoned_archer_engages_flier_overhead() {
     let (bunker, _) = utils::create_entity(
         app.world_mut(),
         "bunker",
-        utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the bunker spawns");
     let (archer, _) = utils::create_entity(
         app.world_mut(),
         "archer",
-        utils::at_cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
         Some(0),
     )
     .expect("the archer spawns");
@@ -380,7 +382,7 @@ fn garrisoned_archer_engages_flier_overhead() {
     let (flier, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
-        utils::at_cell(CLEAR_GROUND.0 + 2, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0 + 2, CLEAR_GROUND.1),
         Some(1),
     )
     .expect("the flier parks overhead");
@@ -390,12 +392,13 @@ fn garrisoned_archer_engages_flier_overhead() {
     let world = app.world();
     let left = entity_def::pool_value(world, flier, PoolId::HEALTH);
     // The bunker garrison opened fire later than a standing archer would, and
-    // the unarmed flier, fleeing from where the archer is, drifts away from the
-    // bunker rather than from the cell the archer boarded by — the pinned toll
+    // the unarmed flier, fleeing from where the archer is — the bunker's
+    // middle — drifts away from the bunker rather than from the cell the
+    // archer boarded by: the pinned toll, four arrows of 6, 150 − 4 × 6 = 126,
     // says the arrows flew all the same.
     assert_eq!(
         left,
-        Some(FixedU64::from_num(138)),
+        Some(FixedU64::from_num(126)),
         "the garrisoned archer never fired at the flier: {left:?}"
     );
 }
@@ -413,7 +416,7 @@ fn wide_flier_crosses_map_and_rests_on_goal() {
     let (zeppelin, _) = utils::create_entity(
         app.world_mut(),
         "zeppelin",
-        utils::at_cell(start.0, start.1),
+        utils::cell(start.0, start.1),
         Some(1),
     )
     .expect("the zeppelin spawns");
@@ -423,7 +426,7 @@ fn wide_flier_crosses_map_and_rests_on_goal() {
         .unwrap()
         .push(
             Order::Move {
-                target: utils::at_cell(goal.0, goal.1),
+                target: utils::pos(goal.0, goal.1),
                 size: CellSize::ONE,
                 range: 0,
             },
@@ -441,8 +444,8 @@ fn wide_flier_crosses_map_and_rests_on_goal() {
         "the wide flier's walk never finished"
     );
     assert_eq!(
-        utils::cell_of(utils::position_of(world, zeppelin)),
-        goal,
+        utils::anchor_of(world, zeppelin),
+        CellPos::new(goal.0, goal.1),
         "the wide flier did not come to rest on its goal"
     );
 }
@@ -454,7 +457,7 @@ fn wide_flier_claims_its_whole_footprint() {
     utils::create_entity(
         app.world_mut(),
         "zeppelin",
-        utils::at_cell(anchor.0, anchor.1),
+        utils::cell(anchor.0, anchor.1),
         Some(1),
     )
     .expect("the zeppelin spawns");
@@ -484,15 +487,15 @@ fn wide_flier_cannot_spawn_where_its_footprint_does_not_fit() {
 
     // The fortress closes a 3x3 of air; a 2x2 anchored one cell short of it
     // still reaches in, so there is nowhere here for the footprint to go.
-    utils::create_entity(app.world_mut(), "sea_fortress", utils::at_cell(16, 2), None)
+    utils::create_entity(app.world_mut(), "sea_fortress", utils::cell(16, 2), None)
         .expect("the fortress stands");
 
     assert!(
-        utils::create_entity(app.world_mut(), "zeppelin", utils::at_cell(15, 2), Some(1)).is_none(),
+        utils::create_entity(app.world_mut(), "zeppelin", utils::cell(15, 2), Some(1)).is_none(),
         "a 2x2 flier was placed overlapping the fortress it cannot fit beside"
     );
     assert!(
-        utils::create_entity(app.world_mut(), "zeppelin", utils::at_cell(14, 2), Some(1)).is_some(),
+        utils::create_entity(app.world_mut(), "zeppelin", utils::cell(14, 2), Some(1)).is_some(),
         "a 2x2 flier could not be placed where its whole footprint is clear"
     );
 }
@@ -515,14 +518,14 @@ fn mixed_fliers_settle_without_milling() {
         let (entity, _) = utils::create_entity(
             app.world_mut(),
             type_name,
-            utils::at_cell(cell.0, cell.1),
+            utils::cell(cell.0, cell.1),
             Some(1),
         )
         .unwrap_or_else(|| panic!("{type_name} spawns at {cell:?}"));
         units.push(entity);
     }
 
-    let goal = utils::at_cell(30, 30);
+    let goal = utils::pos(30, 30);
     for &unit in &units {
         app.world_mut()
             .entity_mut(unit)
@@ -573,7 +576,7 @@ fn mixed_fliers_settle_without_milling() {
 #[test]
 fn flier_and_walker_share_cell() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let cell = utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1);
+    let cell = utils::cell(CLEAR_GROUND.0, CLEAR_GROUND.1);
 
     assert!(
         utils::create_entity(app.world_mut(), "peasant", cell, Some(0)).is_some(),
@@ -588,7 +591,7 @@ fn flier_and_walker_share_cell() {
 #[test]
 fn second_flier_cannot_take_held_air_cell() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);
-    let cell = utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1);
+    let cell = utils::cell(CLEAR_GROUND.0, CLEAR_GROUND.1);
 
     assert!(
         utils::create_entity(app.world_mut(), "gryphon_aloft", cell, Some(0)).is_some(),
@@ -613,14 +616,14 @@ fn holder_with_passenger(
     let (held, _) = utils::create_entity(
         app.world_mut(),
         holder,
-        utils::at_cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0, CLEAR_GROUND.1),
         Some(0),
     )
     .unwrap_or_else(|| panic!("'{holder}' spawns"));
     let (aboard, aboard_id) = utils::create_entity(
         app.world_mut(),
         passenger,
-        utils::at_cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
+        utils::cell(CLEAR_GROUND.0 + 3, CLEAR_GROUND.1),
         Some(0),
     )
     .unwrap_or_else(|| panic!("'{passenger}' spawns"));

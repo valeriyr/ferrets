@@ -60,7 +60,7 @@ impl Blockers {
                 top: entity_def::level(world, entity).saturating_add(block.height()),
                 of: block.of(),
             };
-            for cell in entity_def::occupied_rect_of(world, def, entity).cells() {
+            for cell in entity_def::location(world, entity).footprint().cells() {
                 cells.entry(cell).or_default().push(obstruction);
             }
         }

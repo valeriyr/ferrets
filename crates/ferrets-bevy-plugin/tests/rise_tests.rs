@@ -50,7 +50,7 @@ fn site_never_bears_risen_passive_tick_it_is_founded() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "kiosk".into(),
-            position: utils::pos(8, 8),
+            anchor: utils::cell(8, 8),
             flush: true,
         },
     );
@@ -240,7 +240,7 @@ fn site_founded_by_build_order_rises_to_full() {
         PlayerCommand::BuildEntity {
             builder: worker_id,
             type_name: "rampart".into(),
-            position: utils::pos(8, 8),
+            anchor: utils::cell(8, 8),
             flush: true,
         },
     );
@@ -417,7 +417,12 @@ fn settling_keeps_what_pool_gained_on_risen_lost_since_completion() {
     let (tower, _) = utils::create_unattended_rising(&mut app, "flare_tower", 8, 8, 0);
     utils::run_ticks(&mut app, 4);
     // Completed at a quarter of 60, 15, then 5 spent before the settle.
-    pools::drain(app.world_mut(), tower, PoolId::ENERGY, utils::fixed("5"));
+    pools::drain(
+        app.world_mut(),
+        tower,
+        PoolId::ENERGY,
+        FixedU64::from_num(5),
+    );
     utils::run_ticks(&mut app, 1);
     // Settled from its line of 15 to its initial of 15: 15 − 5 = 10 stands.
     assert_eq!(utils::energy_as_u32(&app, tower), 10);
@@ -449,7 +454,7 @@ fn two_builders_raise_line_with_each_tick_of_work() {
             PlayerCommand::BuildEntity {
                 builder,
                 type_name: "rampart".into(),
-                position: utils::pos(10, 10),
+                anchor: utils::cell(10, 10),
                 flush: true,
             },
         );
@@ -612,7 +617,7 @@ fn rising_mover_stands_where_set_down_under_contact() {
     assert!(entity_def::rising(app.world(), ark));
     assert_eq!(utils::position_of(app.world_mut(), ark), utils::pos(5, 5));
     // The soldier rests against it, a full body apart (radius 0.5 each), on
-    // its far side: x = 6 less the contact pass's rounding.
+    // its far side: x = 6.5 less the contact pass's rounding.
     let soldier_entity = app
         .world()
         .resource::<EntityIndex>()
@@ -620,7 +625,7 @@ fn rising_mover_stands_where_set_down_under_contact() {
         .expect("the soldier stands");
     assert_eq!(
         utils::position_of(app.world_mut(), soldier_entity),
-        utils::position_bits(0x5_ffff_ffff, 0x5_0000_0000)
+        utils::position_bits(0x6_7fff_ffff, 0x5_8000_0000)
     );
 }
 

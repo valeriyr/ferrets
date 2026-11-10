@@ -250,7 +250,7 @@ pub fn sighting_of(
     // Every cell the entity stands on answers, not one of them: a hall is lit
     // when any of its cells is, and found when a detector reaches any of
     // them. Sight is stamped from the same footprint.
-    let footprint = entity_def::occupied_rect_of(world, def, entity);
+    let footprint = entity_def::footprint_as(world, entity, def);
     let lit = match vision {
         AiVision::Omniscient => true,
         AiVision::Filtered => {

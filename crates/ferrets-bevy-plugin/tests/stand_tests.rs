@@ -77,7 +77,7 @@ fn standing_act_waits_for_site_to_finish() {
         PlayerCommand::BuildEntity {
             builder: drone,
             type_name: "cleanser".into(),
-            position: utils::pos(24, 22),
+            anchor: utils::cell(24, 22),
             flush: true,
         },
     );
@@ -256,7 +256,7 @@ fn stand_app() -> App {
                     costs: Vec::new(),
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
-                        at: Spot::Cell {
+                        at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
                         field: blight,

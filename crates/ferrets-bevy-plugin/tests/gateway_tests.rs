@@ -104,7 +104,7 @@ fn tunnel_end_founds_its_other_end_where_ordered_bound_to_it() {
 
     let raised = other_of(&mut app, "tunnel", raiser);
     let raised_id = entity_def::simulation_id(app.world(), raised);
-    assert_eq!(utils::cell_of(app.world(), raised), CellPos::new(20, 20));
+    assert_eq!(utils::anchor_of(app.world(), raised), CellPos::new(20, 20));
     assert!(!entity_def::rising(app.world(), raised));
     // The raiser minted bore 1 at birth; the site's own, 2, gave way.
     assert_eq!(
@@ -155,7 +155,7 @@ fn bound_tunnel_end_refuses_to_warp_in_another() {
     utils::run_ticks(&mut app, utils::APPLY + TRAIN_TIME + 1);
 
     assert_eq!(
-        warp::judge(app.world(), 0, rift, "tunnel", utils::pos(25, 25)).map(|_| ()),
+        warp::judge(app.world(), 0, rift, "tunnel", utils::cell(25, 25)).map(|_| ()),
         Err(WarpRefusal::Bound)
     );
 }
@@ -170,7 +170,7 @@ fn tunnel_end_summoned_by_unbound_shaft_is_bound_to_it_sharing_its_bore() {
 
     let raised = utils::single_owned_of_type(app.world_mut(), "tunnel", 0);
     let raised_id = entity_def::simulation_id(app.world(), raised);
-    assert_eq!(utils::cell_of(app.world(), raised), CellPos::new(20, 20));
+    assert_eq!(utils::anchor_of(app.world(), raised), CellPos::new(20, 20));
     // The shaft minted bore 1 at birth; the summoned end's own, 2, gave way.
     assert_eq!(end_of(&app, shaft), (OtherEnd::Bound(raised_id), BoreId(1)));
     assert_eq!(end_of(&app, raised), (OtherEnd::Bound(shaft_id), BoreId(1)));
@@ -337,7 +337,7 @@ fn beast_is_turned_away_from_other_players_burrow() {
 fn neutral_burrow_is_of_no_warren_and_turns_beast_away() {
     let mut app = app();
     let (burrow, burrow_id) =
-        utils::create_entity(app.world_mut(), "burrow", utils::pos(10, 10), None)
+        utils::create_entity(app.world_mut(), "burrow", utils::cell(10, 10), None)
             .expect("burrow fits at (10, 10)");
     let (beast, beast_id) = utils::create_owned(&mut app, "beast", 9, 10, 0);
 
@@ -366,7 +366,7 @@ fn beast_crossing_tunnel_steps_out_beside_its_other_end() {
 
     // Out on the ring around (20, 20), the cell nearest where it went in.
     assert!(!entity_def::hidden(app.world(), beast));
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(19, 19));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(19, 19));
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn tunnel_turns_beast_away_while_its_other_end_is_disabled() {
     utils::board(&mut app, beast_id, raiser_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 5));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(4, 5));
 }
 
 #[test]
@@ -391,7 +391,7 @@ fn unbound_tunnel_turns_beast_away() {
     utils::send_to(&mut app, beast_id, tunnel_id);
     utils::run_ticks(&mut app, utils::APPLY + 10);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 5));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(4, 5));
 }
 
 #[test]
@@ -416,7 +416,7 @@ fn tunnel_turns_away_what_it_does_not_carry() {
     utils::board(&mut app, critter_id, raiser_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), critter), CellPos::new(4, 5));
+    assert_eq!(utils::anchor_of(app.world(), critter), CellPos::new(4, 5));
 }
 
 #[test]
@@ -441,7 +441,7 @@ fn chute_turns_beast_away_toward_end_that_lets_nobody_out() {
     utils::board(&mut app, beast_id, head_id);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(5, 6));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(5, 6));
 }
 
 #[test]
@@ -451,7 +451,7 @@ fn beast_entering_chute_foot_steps_out_beside_its_head() {
     let foot_id = entity_def::simulation_id(app.world(), foot);
     // The foot stands at (5, 4), first by row of the head's sides; the beast
     // north of it, off the head's ring.
-    assert_eq!(utils::cell_of(app.world(), foot), CellPos::new(5, 4));
+    assert_eq!(utils::anchor_of(app.world(), foot), CellPos::new(5, 4));
     let (beast, beast_id) = utils::create_owned(&mut app, "beast", 5, 3, 0);
 
     utils::board(&mut app, beast_id, foot_id);
@@ -460,7 +460,7 @@ fn beast_entering_chute_foot_steps_out_beside_its_head() {
     // Of the head's ring, the foot holds (5, 4), nearest where the beast
     // stood; of the two corners next nearest, (4, 4) comes first.
     assert!(!entity_def::hidden(app.world(), beast));
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 4));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(4, 4));
 }
 
 #[test]
@@ -545,19 +545,19 @@ fn mole_takes_in_beast_part_way_across_cells_beside_it_without_walking() {
     utils::install_map(&mut app, projection, MovementModel::Continuous);
     let (mole, mole_id) = utils::create_owned(&mut app, "mole", 10, 10, 0);
     let (beast, beast_id) = utils::create_owned(&mut app, "beast", 10, 6, 0);
-    // Floored into (10, 8), two cells off the mole; rounded to (10, 9), one
-    // off, inside its one-cell load range.
-    let corner = utils::part_way("10.4", "8.6");
+    // Its low edge (10.4, 8.6) floors into (10, 8), two cells off the mole,
+    // and rounds to (10, 9), one off, inside its one-cell load range.
+    let spot = utils::point("10.9", "9.1");
     utils::select(&mut app, beast_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Move {
-            target: corner,
+            target: spot,
             flush: true,
         },
     );
     utils::run_ticks(&mut app, 30);
-    assert_eq!(utils::position_of(app.world_mut(), beast), corner);
+    assert_eq!(utils::position_of(app.world_mut(), beast), spot);
 
     utils::load(&mut app, mole_id, beast_id);
     utils::run_ticks(&mut app, utils::APPLY + 2);
@@ -580,7 +580,7 @@ fn tunnel_end_loads_beast_across_to_its_other_end() {
 
     // Out on the ring around (20, 20), the cell nearest where it was taken in.
     assert!(!entity_def::hidden(app.world(), beast));
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(19, 19));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(19, 19));
 }
 
 #[test]
@@ -601,7 +601,7 @@ fn tunnel_end_takes_body_seating_others_across_with_them() {
     utils::run_ticks(&mut app, utils::APPLY + 2);
 
     // Out on the ring around (20, 20), the larva still on its berth.
-    assert_eq!(utils::cell_of(app.world(), mother), CellPos::new(19, 19));
+    assert_eq!(utils::anchor_of(app.world(), mother), CellPos::new(19, 19));
     assert!(entity_def::attached(app.world(), larva));
     assert_eq!(
         utils::offset(
@@ -648,7 +648,7 @@ fn mole_walks_into_its_load_range_before_taking_beast_in() {
 
     assert!(entity_def::hidden(app.world(), beast));
     assert_eq!(held_in(&app, mole), vec![beast_id]);
-    assert_eq!(utils::cell_of(app.world(), mole), CellPos::new(11, 10));
+    assert_eq!(utils::anchor_of(app.world(), mole), CellPos::new(11, 10));
 }
 
 #[test]
@@ -703,7 +703,7 @@ fn beast_held_at_one_burrow_is_let_out_at_another() {
     // Beside the far burrow at (25, 10): of its ring, the four sides lie
     // nearest its middle, (25, 9) first by row.
     assert!(!entity_def::hidden(app.world(), beast));
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(25, 9));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(25, 9));
     assert!(held_in(&app, exit).is_empty());
 }
 
@@ -716,10 +716,10 @@ fn burrow_lets_beast_out_at_point_within_its_unload_range() {
     utils::run_ticks(&mut app, utils::APPLY + 10);
 
     // Two cells off, the burrow's unload range.
-    utils::unload(&mut app, burrow_id, Some(utils::pos(12, 10)));
+    utils::unload(&mut app, burrow_id, Some(utils::cell(12, 10)));
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(12, 10));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(12, 10));
     assert!(held_in(&app, burrow).is_empty());
 }
 
@@ -731,11 +731,16 @@ fn burrow_lets_beast_out_nearest_point_beyond_its_unload_range() {
     utils::send_to(&mut app, beast_id, burrow_id);
     utils::run_ticks(&mut app, utils::APPLY + 10);
 
-    // Eight cells east: out at the edge of the two-cell range toward it.
-    utils::unload(&mut app, burrow_id, Some(utils::pos(18, 10)));
+    // Eight cells east: out at the edge of the two-cell range toward it, on
+    // (12, 10), its middle at 12.5, and half a cell on toward the point the
+    // same tick: 12.5 + 0.5 = 13.
+    utils::unload(&mut app, burrow_id, Some(utils::cell(18, 10)));
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(12, 10));
+    assert_eq!(
+        utils::position_of(app.world(), beast),
+        utils::point("13", "10.5")
+    );
 }
 
 #[test]
@@ -747,11 +752,15 @@ fn burrow_lets_beast_out_nearest_point_far_beyond_its_unload_range() {
     utils::run_ticks(&mut app, utils::APPLY + 10);
 
     // Twenty cells east, past the placement search's reach from the point:
-    // still out at the edge of the two-cell range toward it.
-    utils::unload(&mut app, burrow_id, Some(utils::pos(30, 10)));
+    // still out at the edge of the two-cell range toward it, on (12, 10), and
+    // half a cell on toward the point the same tick: 12.5 + 0.5 = 13.
+    utils::unload(&mut app, burrow_id, Some(utils::cell(30, 10)));
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(12, 10));
+    assert_eq!(
+        utils::position_of(app.world(), beast),
+        utils::point("13", "10.5")
+    );
 }
 
 #[test]
@@ -763,12 +772,16 @@ fn burrow_lets_sapper_out_only_where_its_placement_rules_admit_it() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
     cover_with_creep(&mut app, CellPos::new(12, 10));
 
-    utils::unload(&mut app, burrow_id, Some(utils::pos(12, 10)));
+    utils::unload(&mut app, burrow_id, Some(utils::cell(12, 10)));
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     // Creep holds the point (12, 10); of the in-range cells around it,
-    // (12, 9) comes first by row.
-    assert_eq!(utils::cell_of(app.world(), sapper), CellPos::new(12, 9));
+    // (12, 9) comes first by row. Set down there, its middle at 9.5, it walks
+    // on toward the point the same tick, half a cell south: 9.5 + 0.5 = 10.
+    assert_eq!(
+        utils::position_of(app.world(), sapper),
+        utils::point("12.5", "10")
+    );
 }
 
 #[test]
@@ -785,7 +798,7 @@ fn burrow_lets_sapper_out_beside_it_only_where_its_placement_rules_admit_it() {
 
     // Of the burrow's four sides, nearest its middle, creep holds (10, 9),
     // first by row; (9, 10) comes next.
-    assert_eq!(utils::cell_of(app.world(), sapper), CellPos::new(9, 10));
+    assert_eq!(utils::anchor_of(app.world(), sapper), CellPos::new(9, 10));
 }
 
 #[test]
@@ -817,9 +830,9 @@ fn beast_held_in_den_is_let_out_at_its_other_end() {
 
     // The other end stands at (5, 4), first by row of the raiser's sides;
     // of its own ring, (5, 3) is first by row of the sides.
-    assert_eq!(utils::cell_of(app.world(), raised), CellPos::new(5, 4));
+    assert_eq!(utils::anchor_of(app.world(), raised), CellPos::new(5, 4));
     assert!(!entity_def::hidden(app.world(), beast));
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(5, 3));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(5, 3));
 }
 
 #[test]
@@ -850,12 +863,12 @@ fn grove_owner_lets_allys_beast_out_without_sending_it_on() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
     spawn::change_owner(app.world_mut(), beast, 1, grove_id, Lean::Nothing);
 
-    utils::unload(&mut app, grove_id, Some(utils::pos(20, 10)));
+    utils::unload(&mut app, grove_id, Some(utils::cell(20, 10)));
     utils::run_ticks(&mut app, utils::APPLY + 10);
 
     // Set down at the edge of the two-cell range toward the point, and left
     // there: an ally's unit takes no order from the grove.
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(12, 10));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(12, 10));
 }
 
 #[test]
@@ -879,7 +892,7 @@ fn grove_sends_no_allys_beast_to_its_rally() {
 
     // Set down beside the grove on the side of its rally point and left there:
     // the grove sends on only its own owner's units.
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(11, 10));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(11, 10));
 }
 
 #[test]
@@ -898,7 +911,7 @@ fn wagon_lets_sapper_out_only_where_its_placement_rules_admit_it() {
 
     // Of the wagon's four sides, nearest its middle, creep holds (10, 9),
     // first by row; (9, 10) comes next.
-    assert_eq!(utils::cell_of(app.world(), sapper), CellPos::new(9, 10));
+    assert_eq!(utils::anchor_of(app.world(), sapper), CellPos::new(9, 10));
 }
 
 #[test]
@@ -927,7 +940,7 @@ fn wagon_lets_out_beast_behind_sapper_no_cell_takes() {
 
     // The beast out on the first cell of the wagon's ring, (10, 9) by row;
     // the sapper still aboard, the Unload still waiting on it.
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(10, 9));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(10, 9));
     assert!(entity_def::hidden(app.world(), sapper));
     assert!(!entity_def::orders(app.world(), wagon).is_empty());
 }
@@ -956,7 +969,7 @@ fn burrow_lets_out_beast_behind_sapper_no_cell_takes() {
 
     // The beast out on the first cell of the burrow's ring, (10, 9) by row;
     // the sapper still inside, the Unload still waiting on it.
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(10, 9));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(10, 9));
     assert!(entity_def::hidden(app.world(), sapper));
     assert!(!entity_def::orders(app.world(), burrow).is_empty());
 }
@@ -976,7 +989,7 @@ fn own_beast_enters_at_allys_grove_and_leaves_at_own() {
 
     // Beside the own grove at (25, 10): of its ring, the four sides lie
     // nearest its middle, (25, 9) first by row.
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(25, 9));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(25, 9));
 }
 
 #[test]
@@ -1011,7 +1024,7 @@ fn beast_enters_enemys_thicket_and_leaves_at_own() {
     utils::unload(&mut app, own_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(25, 9));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(25, 9));
 }
 
 //
@@ -1078,7 +1091,7 @@ fn consumed_mole_captured_with_its_mound_loses_everyone_in_old_owners_warren() {
         PlayerCommand::BuildEntity {
             builder: mole_id,
             type_name: "mound".into(),
-            position: utils::pos(12, 10),
+            anchor: utils::cell(12, 10),
             flush: true,
         },
     );
@@ -1101,7 +1114,7 @@ fn captured_neutral_burrow_lets_out_everyone_in_captors_warren() {
     let mut app = app();
     let (_, entrance_id) = utils::create_owned(&mut app, "burrow", 5, 10, 0);
     let (neutral, neutral_id) =
-        utils::create_entity(app.world_mut(), "burrow", utils::pos(25, 10), None)
+        utils::create_entity(app.world_mut(), "burrow", utils::cell(25, 10), None)
             .expect("burrow fits at (25, 10)");
     let (beast, beast_id) = utils::create_owned(&mut app, "beast", 4, 10, 0);
     utils::send_to(&mut app, beast_id, entrance_id);
@@ -1113,7 +1126,7 @@ fn captured_neutral_burrow_lets_out_everyone_in_captors_warren() {
 
     // Beside the captured burrow at (25, 10): of its ring, the four sides lie
     // nearest its middle, (25, 9) first by row.
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(25, 9));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(25, 9));
     assert!(held_in_key(&app, warren_of(&app, 0)).is_empty());
 }
 
@@ -1186,7 +1199,7 @@ fn losing_last_hollow_sets_everyone_down_beside_it() {
     // its middle, (10, 9) first by row.
     assert!(!entity_def::dying(app.world(), beast));
     assert!(!entity_def::hidden(app.world(), beast));
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(10, 9));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(10, 9));
 }
 
 #[test]
@@ -1223,7 +1236,7 @@ fn losing_last_hollow_sets_sapper_down_only_where_its_placement_rules_admit_it()
     // Of the hollow's four sides, nearest its middle, creep holds (10, 9),
     // first by row; (9, 10) comes next.
     assert!(!entity_def::dying(app.world(), sapper));
-    assert_eq!(utils::cell_of(app.world(), sapper), CellPos::new(9, 10));
+    assert_eq!(utils::anchor_of(app.world(), sapper), CellPos::new(9, 10));
 }
 
 #[test]
@@ -1274,7 +1287,7 @@ fn dying_wagon_sets_sapper_down_only_where_its_placement_rules_admit_it() {
     // Of the wagon's four sides, nearest its middle, creep holds (10, 9),
     // first by row; (9, 10) comes next.
     assert!(!entity_def::dying(app.world(), sapper));
-    assert_eq!(utils::cell_of(app.world(), sapper), CellPos::new(9, 10));
+    assert_eq!(utils::anchor_of(app.world(), sapper), CellPos::new(9, 10));
 }
 
 #[test]
@@ -1548,7 +1561,7 @@ fn rock_changing_into_burrow_lets_out_everyone_in_owners_warren() {
 
     // Beside the new burrow at (25, 10): of its ring, the four sides lie
     // nearest its middle, (25, 9) first by row.
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(25, 9));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(25, 9));
 }
 
 #[test]
@@ -1601,7 +1614,7 @@ fn tunnel_turns_beast_away_while_its_other_end_changes_straight_into_trench_end(
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert_eq!(entity_def::of(app.world(), raised).name, "tunnel");
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 5));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(4, 5));
 }
 
 #[test]
@@ -1658,7 +1671,7 @@ fn beast_crossing_tunnel_is_sent_on_to_other_ends_rally() {
     utils::board(&mut app, beast_id, raiser_id);
     utils::run_ticks(&mut app, utils::APPLY + 30);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(25, 20));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(25, 20));
 }
 
 #[test]
@@ -1677,7 +1690,7 @@ fn beast_crossing_tunnel_follows_walk_queued_behind_its_board_over_other_ends_ra
     queue_move(&mut app, 15, 25);
     utils::run_ticks(&mut app, utils::APPLY + 40);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(15, 25));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(15, 25));
 }
 
 #[test]
@@ -1692,7 +1705,7 @@ fn beast_entering_burrow_drops_walk_queued_behind_its_board() {
     utils::unload(&mut app, burrow_id, None);
     utils::run_ticks(&mut app, utils::APPLY + 30);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(10, 9));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(10, 9));
 }
 
 #[test]
@@ -1711,7 +1724,7 @@ fn rally_naming_either_end_of_crossed_tunnel_sends_nobody() {
         utils::board(&mut app, beast_id, raiser_id);
         utils::run_ticks(&mut app, utils::APPLY + 30);
 
-        assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(19, 19));
+        assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(19, 19));
     }
 }
 
@@ -1724,11 +1737,11 @@ fn beast_waits_to_cross_until_cell_beside_other_end_frees() {
 
     utils::board(&mut app, beast_id, raiser_id);
     utils::run_ticks(&mut app, utils::APPLY + 5);
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 5));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(4, 5));
     utils::free_cell(&mut app, CellPos::new(21, 21));
     utils::run_ticks(&mut app, 2);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(21, 21));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(21, 21));
 }
 
 #[test]
@@ -1752,7 +1765,7 @@ fn beast_waits_to_cross_while_nothing_in_other_ends_unload_range_takes_it() {
     utils::board(&mut app, beast_id, raiser_id);
     utils::run_ticks(&mut app, utils::APPLY + 5);
 
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 5));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(4, 5));
 }
 
 #[test]
@@ -1774,9 +1787,9 @@ fn own_critters_at_other_end_make_way_for_beast_crossing() {
 
     utils::board(&mut app, beast_id, raiser_id);
     utils::run_ticks(&mut app, 3);
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(4, 5));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(4, 5));
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::cell_of(app.world(), beast), CellPos::new(19, 19));
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(19, 19));
 }
 
 //
@@ -2125,7 +2138,7 @@ fn register(app: &mut App) {
     };
     let dig = registry.register_skill(
         "dig",
-        summoning(SummonAt::Cell {
+        summoning(SummonAt::Ground {
             reach: Reach::Wherever,
         }),
     );

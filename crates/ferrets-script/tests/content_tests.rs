@@ -1297,7 +1297,7 @@ fn unknown_skill_caster_errors() {
 fn unknown_aim_errors() {
     let error = skill_error(r#"{ damage = { amount = "5", on = "everyone" } }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("aim must be 'caster', 'position', 'fallen', 'own', 'allied', 'enemy', or 'anyone', found 'everyone'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("aim must be 'caster', 'ground', 'fallen', 'own', 'allied', 'enemy', or 'anyone', found 'everyone'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1322,10 +1322,10 @@ fn entity_skill_with_target_beside_effect_errors() {
 }
 
 #[test]
-fn damage_on_position_errors() {
-    let error = skill_error(r#"{ damage = { amount = "5", on = "position" } }"#);
+fn damage_on_ground_errors() {
+    let error = skill_error(r#"{ damage = { amount = "5", on = "ground" } }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("recipient must be 'caster', 'own', 'allied', 'enemy', or 'anyone', found 'position'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("recipient must be 'caster', 'own', 'allied', 'enemy', or 'anyone', found 'ground'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1343,7 +1343,7 @@ fn heal_on_fallen_errors() {
 fn watch_at_fallen_errors() {
     let error = skill_error(r#"{ watch = { at = "fallen", radius = 6, duration = 40 } }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("spot must be 'caster', 'position', 'own', 'allied', 'enemy', or 'anyone', found 'fallen'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("spot must be 'caster', 'ground', 'own', 'allied', 'enemy', or 'anyone', found 'fallen'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1359,12 +1359,12 @@ fn caster_aim_with_range_errors() {
 }
 
 #[test]
-fn position_aim_with_filter_errors() {
+fn ground_aim_with_filter_errors() {
     let error = skill_error(
-        r#"{ watch = { at = { kind = "position", only = { tags = { "hall" } } }, radius = 6, duration = 40 } }"#,
+        r#"{ watch = { at = { kind = "ground", only = { tags = { "hall" } } }, radius = 6, duration = 40 } }"#,
     );
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("a position aim takes no filter")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("a ground aim takes no filter")),
         "unexpected error: {error:?}"
     );
 }
@@ -1417,7 +1417,7 @@ fn parses_player_buff_with_both_modifier_lists() {
         vec![EntityModifiers::Stats(vec![EntityModifier {
             stat: EntityStatId::SPEED,
             op: ModifierOp::PercentAdd,
-            magnitude: FixedI64::from_num(0.5),
+            magnitude: utils::signed_fixed("0.5"),
         }])]
     );
 }
@@ -2987,7 +2987,7 @@ fn docks_and_annex_read_their_terms() {
         AloneConduct::Standing {
             work: AnnexWork::Idles,
             life: AnnexLife::Fades {
-                per_tick: FixedU64::lit("2")
+                per_tick: FixedU64::from_num(2)
             },
         }
     );
@@ -3004,7 +3004,7 @@ fn watch_effect_reads_its_radius_and_duration() {
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
-            effect = { watch = { at = "position", radius = 6, duration = 40 } },
+            effect = { watch = { at = "ground", radius = 6, duration = 40 } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -3018,7 +3018,7 @@ fn watch_effect_reads_its_radius_and_duration() {
     assert_eq!(
         *effect,
         EntityCastEffect::Watch {
-            at: Spot::Cell {
+            at: Spot::Ground {
                 reach: Reach::Wherever,
             },
             radius: Quantity::Constant(6),
@@ -3488,7 +3488,7 @@ fn summon_without_placement_errors() {
         define_skill("raise_mound", {
             cooldown = 10,
             caster = "entity",
-            effect = { summon = { at = { kind = "position" }, entity = "mound", count = 1, landing = "anywhere", arrives = "standing" } },
+            effect = { summon = { at = { kind = "ground" }, entity = "mound", count = 1, landing = "anywhere", arrives = "standing" } },
         })
     "#;
     assert_content_error(
@@ -3510,7 +3510,7 @@ fn summon_reads_exact_placement() {
         define_skill("raise_mound", {
             cooldown = 10,
             caster = "entity",
-            effect = { summon = { at = { kind = "position" }, entity = "mound", count = 1, placement = "exact", landing = "anywhere", arrives = "standing" } },
+            effect = { summon = { at = { kind = "ground" }, entity = "mound", count = 1, placement = "exact", landing = "anywhere", arrives = "standing" } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -3663,7 +3663,7 @@ fn skill_numbers_read_stats() {
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
-            effect = { watch = { at = "position", radius = { stat = "scan_radius" }, duration = { stat = "scan_time" } } },
+            effect = { watch = { at = "ground", radius = { stat = "scan_radius" }, duration = { stat = "scan_time" } } },
         })
         define_skill("spew", {
             cooldown = 10,
@@ -3681,7 +3681,7 @@ fn skill_numbers_read_stats() {
             effect = { relocate = {
                 journey = { from_aim = {
                     party = { around = {
-                        at = "position", radius = 2, side = "own", kinds = "any",
+                        at = "ground", radius = 2, side = "own", kinds = "any",
                         sight = "blind", count = { at_most = { stat = "host_size" } }, shortfall = "leave",
                     } },
                     to = "caster",
@@ -4065,7 +4065,10 @@ fn attached_presence_reads_berths_and_stance() {
     let canopy = tree.berths.as_ref().unwrap().group("canopy").unwrap();
     assert_eq!(
         canopy.points(),
-        &[FixedVec2::new(FixedI64::lit("0.5"), FixedI64::lit("0.5"))]
+        &[FixedVec2::new(
+            utils::signed_fixed("0.5"),
+            utils::signed_fixed("0.5")
+        )]
     );
     assert_eq!(canopy.slots(), 1);
     let lodge = registry.entity("lodge").unwrap();
@@ -4086,7 +4089,7 @@ fn attached_presence_reads_berths_and_stance() {
     );
     assert_eq!(
         rim.points()[1],
-        FixedVec2::new(FixedI64::lit("1.8"), FixedI64::ONE)
+        FixedVec2::new(utils::signed_fixed("1.8"), FixedI64::ONE)
     );
 
     let sprite = registry.entity("sprite").unwrap();
@@ -4107,7 +4110,7 @@ fn attached_presence_reads_berths_and_stance() {
         BuilderAttendance::Crew(WorkPresence::Attached(Attachment::new(
             "rim",
             BerthStance::Roaming {
-                speed: FixedU64::lit("0.05"),
+                speed: utils::fixed("0.05"),
                 dwell: 10,
             },
         )))
@@ -4186,7 +4189,7 @@ fn orbit_stance_reads_radius_and_period() {
         WorkPresence::Attached(Attachment::new(
             "canopy",
             BerthStance::Orbit {
-                radius: FixedU64::lit("0.3"),
+                radius: utils::fixed("0.3"),
                 period: 40,
             },
         ))
@@ -4210,7 +4213,7 @@ fn circling_stance_reads_speed_and_dwell() {
         WorkPresence::Attached(Attachment::new(
             "canopy",
             BerthStance::Circling {
-                speed: FixedU64::lit("0.25"),
+                speed: utils::fixed("0.25"),
                 dwell: 8,
             },
         ))
@@ -4518,7 +4521,7 @@ fn parses_fields_sources_placement_and_effects() {
                 costs: Vec::new(),
                 casting: Casting::Instant,
                 effect: EntityCastEffect::Field {
-                    at: Spot::Cell {
+                    at: Spot::Ground {
                         reach: Reach::Wherever,
                     },
                     field: creep,
@@ -4733,8 +4736,8 @@ fn breeder_and_broodling_round_trip() {
     assert_eq!(
         group.points(),
         &[
-            FixedVec2::new(FixedI64::lit("0.5"), FixedI64::lit("3.5")),
-            FixedVec2::new(FixedI64::lit("-1"), FixedI64::ONE),
+            FixedVec2::new(utils::signed_fixed("0.5"), utils::signed_fixed("3.5")),
+            FixedVec2::new(FixedI64::from_num(-1), FixedI64::ONE),
         ]
     );
 
@@ -4755,7 +4758,7 @@ fn breeder_and_broodling_round_trip() {
         Some(&Attachment::new(
             "sty",
             BerthStance::Roaming {
-                speed: FixedU64::lit("0.05"),
+                speed: utils::fixed("0.05"),
                 dwell: 40,
             }
         ))
@@ -5790,7 +5793,7 @@ fn parses_field_detection_and_watch_detection() {
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
-            effect = { watch = { at = "position", radius = 6, duration = 40, detection = AIR } },
+            effect = { watch = { at = "ground", radius = 6, duration = 40, detection = AIR } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -5816,7 +5819,7 @@ fn parses_field_detection_and_watch_detection() {
     assert_eq!(
         *effect,
         EntityCastEffect::Watch {
-            at: Spot::Cell {
+            at: Spot::Ground {
                 reach: Reach::Wherever,
             },
             radius: Quantity::Constant(6),
@@ -5840,7 +5843,7 @@ fn relocate_effect_reads_journey_and_landing() {
             cooldown = 140,
             caster = "entity",
             effect = { relocate = {
-                journey = { from_caster = { party = "caster", to = { aim = { kind = "position", range = 8 } } } },
+                journey = { from_caster = { party = "caster", to = { aim = { kind = "ground", range = 8 } } } },
                 landing = "sighted",
             } },
         })
@@ -5864,7 +5867,7 @@ fn relocate_effect_reads_journey_and_landing() {
         EntityCastEffect::Relocate {
             journey: Box::new(Journey::FromCaster {
                 party: CasterParty::Caster,
-                to: FromCasterTo::Aim(Away::Cell {
+                to: FromCasterTo::Aim(Away::Ground {
                     reach: Reach::Within(Quantity::Constant(8)),
                 }),
             }),
@@ -5934,7 +5937,7 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
                     party = { around = {
                         radius = 3, side = "enemy", kinds = "any", sight = "seen", count = { at_most = 2 }, shortfall = "leave",
                     } },
-                    to = { aim = "position" },
+                    to = { aim = "ground" },
                 } },
                 landing = "anywhere",
             } },
@@ -5945,7 +5948,7 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
             effect = { relocate = {
                 journey = { from_aim = {
                     party = { around = {
-                        at = "position", radius = 2, side = "allied", kinds = "any", sight = "blind", count = "all", shortfall = "leave",
+                        at = "ground", radius = 2, side = "allied", kinds = "any", sight = "blind", count = "all", shortfall = "leave",
                     } },
                     to = "caster",
                 } },
@@ -5989,7 +5992,7 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
                     count: Count::AtMost(Quantity::Constant(2)),
                     shortfall: Shortfall::Leave,
                 }),
-                to: FromCasterTo::Aim(Away::Cell {
+                to: FromCasterTo::Aim(Away::Ground {
                     reach: Reach::Wherever,
                 }),
             }),
@@ -6001,7 +6004,7 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
         EntityCastEffect::Relocate {
             journey: Box::new(Journey::FromAim {
                 party: AimParty::Around {
-                    at: Away::Cell {
+                    at: Away::Ground {
                         reach: Reach::Wherever,
                     },
                     gathering: Gathering {
@@ -6031,7 +6034,7 @@ fn relocate_gathering_without_sight_errors() {
                     party = { around = {
                         radius = 3, side = "enemy", kinds = "any", count = "all", shortfall = "leave",
                     } },
-                    to = { aim = "position" },
+                    to = { aim = "ground" },
                 } },
                 landing = "anywhere",
             } },
@@ -6055,7 +6058,7 @@ fn relocate_gathering_with_unknown_sight_errors() {
                         radius = 3, side = "enemy", kinds = "any", sight = "keen",
                         count = "all", shortfall = "leave",
                     } },
-                    to = { aim = "position" },
+                    to = { aim = "ground" },
                 } },
                 landing = "anywhere",
             } },
@@ -6134,7 +6137,7 @@ fn relocate_journey_of_unknown_word_errors() {
 #[test]
 fn relocate_journey_with_two_directions_errors() {
     let error = relocation_error(
-        r#"{ from_caster = { party = "caster", to = { aim = "position" } }, swap = "own" }"#,
+        r#"{ from_caster = { party = "caster", to = { aim = "ground" } }, swap = "own" }"#,
     );
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("a relocation journey table must have exactly one of 'from_caster', 'from_aim' or 'swap'")),
@@ -6145,7 +6148,7 @@ fn relocate_journey_with_two_directions_errors() {
 #[test]
 fn relocate_party_at_caster_of_unknown_word_errors() {
     let error =
-        relocation_error(r#"{ from_caster = { party = "target", to = { aim = "position" } } }"#);
+        relocation_error(r#"{ from_caster = { party = "target", to = { aim = "ground" } } }"#);
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("party at the caster must be 'caster', a { caster_and_around = ... } table, or an { around = ... } table, found 'target'")),
         "unexpected error: {error:?}"
@@ -6155,7 +6158,7 @@ fn relocate_party_at_caster_of_unknown_word_errors() {
 #[test]
 fn relocate_party_at_aim_naming_target_and_around_errors() {
     let error = relocation_error(
-        r#"{ from_aim = { party = { target = "own", around = { at = "position", radius = 2, side = "own", kinds = "any", sight = "blind", count = "all", shortfall = "leave" } }, to = "caster" } }"#,
+        r#"{ from_aim = { party = { target = "own", around = { at = "ground", radius = 2, side = "own", kinds = "any", sight = "blind", count = "all", shortfall = "leave" } }, to = "caster" } }"#,
     );
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("a party at the aim table must have exactly one of 'target' or 'around'")),
@@ -6166,7 +6169,7 @@ fn relocate_party_at_aim_naming_target_and_around_errors() {
 #[test]
 fn relocate_destination_from_caster_naming_aim_and_home_errors() {
     let error = relocation_error(
-        r#"{ from_caster = { party = "caster", to = { aim = "position", home = "any" } } }"#,
+        r#"{ from_caster = { party = "caster", to = { aim = "ground", home = "any" } } }"#,
     );
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("a destination from the caster table must have exactly one of 'aim' or 'home'")),
@@ -6188,16 +6191,16 @@ fn relocate_aim_at_caster_errors() {
     let error =
         relocation_error(r#"{ from_caster = { party = "caster", to = { aim = "caster" } } }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("aim away from the caster must be 'position', 'own', 'allied', 'enemy', or 'anyone', found 'caster'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("aim away from the caster must be 'ground', 'own', 'allied', 'enemy', or 'anyone', found 'caster'")),
         "unexpected error: {error:?}"
     );
 }
 
 #[test]
-fn relocate_swap_aimed_at_position_errors() {
-    let error = relocation_error(r#"{ swap = "position" }"#);
+fn relocate_swap_aimed_at_ground_errors() {
+    let error = relocation_error(r#"{ swap = "ground" }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("aim at something standing must be 'own', 'allied', 'enemy', or 'anyone', found 'position'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("aim at something standing must be 'own', 'allied', 'enemy', or 'anyone', found 'ground'")),
         "unexpected error: {error:?}"
     );
 }
@@ -6205,7 +6208,7 @@ fn relocate_swap_aimed_at_position_errors() {
 #[test]
 fn relocate_count_of_unknown_shape_errors() {
     let error = relocation_error(
-        r#"{ from_aim = { party = { around = { at = "position", radius = 2, side = "own", kinds = "any", sight = "blind", count = 3, shortfall = "leave" } }, to = "caster" } }"#,
+        r#"{ from_aim = { party = { around = { at = "ground", radius = 2, side = "own", kinds = "any", sight = "blind", count = 3, shortfall = "leave" } }, to = "caster" } }"#,
     );
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("relocation count must be 'all' or an { at_most = n } table, found integer")),
@@ -6223,7 +6226,7 @@ fn relocate_landing_of_unknown_word_errors() {
             cooldown = 1,
             caster = "entity",
             effect = { relocate = {
-                journey = { from_caster = { party = "caster", to = { aim = "position" } } },
+                journey = { from_caster = { party = "caster", to = { aim = "ground" } } },
                 landing = "lit",
             } },
         })
@@ -6390,7 +6393,7 @@ const FIELDS: &str = r#"
     define_skill("spew", {
         caster = "entity",
         cooldown = 20,
-        effect = { field = { at = "position", field = "creep", radius = 1, action = "cover" } },
+        effect = { field = { at = "ground", field = "creep", radius = 1, action = "cover" } },
     })
 "#;
 

@@ -14,7 +14,7 @@ use ferrets_demo::{
     content::CONTENT,
     map, ruleset, setup,
 };
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::FixedU64;
 use ferrets_script::{
     ai::view::content::ContentView,
     content,
@@ -139,12 +139,12 @@ fn field_races_ai_build_economy_and_army() {
     assert_eq!(count_owned(world, 1, "hive"), 1);
     assert_eq!(count_owned(world, 1, "overlord"), 3);
     assert_eq!(count_owned(world, 1, "tumor"), 1);
-    assert_eq!(count_owned(world, 1, "swarmling"), 13);
+    assert_eq!(count_owned(world, 1, "swarmling"), 16);
     // Counted together: one part way through its growth is still a ravager
     // the brain paid for.
     assert_eq!(
         count_owned(world, 1, "ravager") + count_owned(world, 1, "cocoon"),
-        4
+        2
     );
     assert_eq!(count_owned(world, 1, "drone"), 5);
     // The conclave's structures warped in on their own after a probe placed
@@ -495,13 +495,8 @@ fn boss_mans_its_fleet_and_defends_lake() {
     }
 
     // A lone archer strays to the lake shore, within a ship's aggro range.
-    utils::create_entity(
-        app.world_mut(),
-        "archer",
-        FixedUVec2::new(FixedU64::from_num(40), FixedU64::from_num(42)),
-        Some(0),
-    )
-    .expect("shore archer");
+    utils::create_entity(app.world_mut(), "archer", utils::cell(40, 42), Some(0))
+        .expect("shore archer");
 
     for _ in 0..1000 {
         app.world_mut().run_schedule(FixedUpdate);

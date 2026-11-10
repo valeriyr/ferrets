@@ -326,14 +326,13 @@ pub(crate) enum Clicked {
 
 /// The selectable entity whose sprite covers the world position, preferring
 /// the smallest footprint (a unit standing on/near a building wins over the
-/// building). Sprites span the entity's fractional position plus its
-/// footprint — the same box they are rendered in — so a mover resting
-/// between cell origins is picked by what is drawn, not by the cell its
-/// position truncates to.
+/// building). Sprites span the entity's bounds, the same box they are
+/// rendered in.
 pub(crate) fn entity_at(
     world: Vec2,
     looking_for: Clicked,
     registry: &ContentRegistry,
+    map: &Map,
     entities: &Query<(
         &EntityInfoComponent,
         &LocationComponent,
@@ -342,8 +341,6 @@ pub(crate) fn entity_at(
         Has<RemainsComponent>,
     )>,
 ) -> Option<SimulationId> {
-    let x = world.x / CELL_PX;
-    let y = -world.y / CELL_PX;
     let mut best: Option<(u32, SimulationId)> = None;
     for (info, location, visibility, sighted, remains) in entities {
         // The click meets what the player sees: a sprite the fog (or the
@@ -363,17 +360,18 @@ pub(crate) fn entity_at(
         if !wanted {
             continue;
         }
-        let ox = location.position.x.to_num::<f32>();
-        let oy = location.position.y.to_num::<f32>();
         let def = registry.def(info.type_id());
         let size = def.location.unwrap().size();
+        let bounds = map.location(location.position, size).bounds();
         // An airborne sprite is drawn lifted up the screen; the click meets
         // the unit where the player sees it, so the lift comes back off the
-        // cursor before the footprint test.
-        let y = y + render::lift(registry, def).y / CELL_PX;
-        let inside =
-            x >= ox && x < ox + size.width as f32 && y >= oy && y < oy + size.height as f32;
-        if inside {
+        // cursor before the bounds test. Left of the map or above it the
+        // click meets nothing; on the edge two sprites share, it meets one.
+        let lifted = Vec2::new(world.x, world.y - render::lift(registry, def).y);
+        if lifted.x < 0.0 || lifted.y > 0.0 {
+            continue;
+        }
+        if bounds.contains_half_open(world_to_pos(lifted)) {
             let area = size.width * size.height;
             if best.is_none_or(|(best_area, _)| area < best_area) {
                 best = Some((area, info.id()));
@@ -391,6 +389,7 @@ pub fn selection_input(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time<Real>>,
     registry: Res<ContentRegistry>,
+    map: Res<Map>,
     mut drag: ResMut<DragStart>,
     mut last_click: ResMut<LastClick>,
     mut gizmos: Gizmos,
@@ -448,7 +447,7 @@ pub fn selection_input(
         // a click toggles the entity, a box adds its contents.
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         if start.distance(cursor) <= CLICK_SLOP
-            && let Some(id) = entity_at(cursor, Clicked::Standing, &registry, &entities)
+            && let Some(id) = entity_at(cursor, Clicked::Standing, &registry, &map, &entities)
         {
             let now = time.elapsed_secs();
             let double = last_click
@@ -515,6 +514,7 @@ pub fn order_input(
     session: Res<GameSession>,
     selection: Res<Selection>,
     registry: Res<ContentRegistry>,
+    map: Res<Map>,
     mut pending: ResMut<PendingInput>,
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -548,7 +548,7 @@ pub fn order_input(
     };
 
     let flush = !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
-    let target = entity_at(cursor, Clicked::Standing, &registry, &entities);
+    let target = entity_at(cursor, Clicked::Standing, &registry, &map, &entities);
     issue_orders_at(
         cursor,
         target,
@@ -697,6 +697,7 @@ pub fn inspect_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     registry: Res<ContentRegistry>,
+    map: Res<Map>,
     mut drag: ResMut<DragStart>,
     mut inspected: ResMut<Inspected>,
     mut gizmos: Gizmos,
@@ -743,7 +744,7 @@ pub fn inspect_input(
     {
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         if start.distance(cursor) <= CLICK_SLOP {
-            match entity_at(cursor, Clicked::Standing, &registry, &entities) {
+            match entity_at(cursor, Clicked::Standing, &registry, &map, &entities) {
                 Some(id) if shift => {
                     if let Some(held) = inspected.0.iter().position(|&it| it == id) {
                         inspected.0.remove(held);
@@ -875,6 +876,7 @@ pub enum AimVerdict {
 pub fn hover_aim(
     mode: Res<InputMode>,
     registry: Res<ContentRegistry>,
+    map: Res<Map>,
     mut hover: ResMut<AimHover>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -893,7 +895,7 @@ pub fn hover_aim(
                     cursor_world(window, camera, camera_transform)
                 },
             );
-            cursor.and_then(|cursor| skill_target_at(cursor, skill, &registry, &entities))
+            cursor.and_then(|cursor| skill_target_at(cursor, skill, &registry, &map, &entities))
         }
         InputMode::Normal
         | InputMode::PlacingBuild(_)
@@ -989,6 +991,7 @@ pub fn targeting_input(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     registry: Res<ContentRegistry>,
+    map: Res<Map>,
     session: Res<GameSession>,
     selection: Res<Selection>,
     leading: Res<Leading>,
@@ -1035,7 +1038,7 @@ pub fn targeting_input(
             // An entity under the cursor is attacked as named — the executor
             // honours the order against allies too; an empty cell is attacked
             // toward, engaging whatever is met on the way.
-            match entity_at(cursor, Clicked::Standing, &registry, &entities) {
+            match entity_at(cursor, Clicked::Standing, &registry, &map, &entities) {
                 Some(target) => pending.push(PlayerCommand::Attack {
                     target: AttackTarget::Entity(target),
                     flush,
@@ -1055,33 +1058,37 @@ pub fn targeting_input(
         TargetedOrder::Guard => {
             // Guard needs an entity under the cursor; a miss keeps the mode
             // armed so the player can click again.
-            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities) else {
+            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &map, &entities)
+            else {
                 return;
             };
             pending.push(PlayerCommand::Guard { target, flush });
         }
         TargetedOrder::Follow => {
-            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities) else {
+            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &map, &entities)
+            else {
                 return;
             };
             pending.push(PlayerCommand::Follow { target, flush });
         }
         TargetedOrder::Board => {
-            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities) else {
+            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &map, &entities)
+            else {
                 return;
             };
             pending.push(PlayerCommand::Board { target, flush });
         }
         TargetedOrder::AttackGround => {
             pending.push(PlayerCommand::Attack {
-                target: AttackTarget::Position(world_to_pos(cursor)),
+                target: AttackTarget::Cell(CellPos::from(world_to_pos(cursor))),
                 flush,
             });
         }
         TargetedOrder::Load => {
             // The fetch needs an entity under the cursor; a miss keeps the mode
             // armed so the player can click again.
-            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &entities) else {
+            let Some(target) = entity_at(cursor, Clicked::Standing, &registry, &map, &entities)
+            else {
                 return;
             };
             if let Some(holder) = leading.0 {
@@ -1096,7 +1103,7 @@ pub fn targeting_input(
             if let Some(holder) = leading.0 {
                 pending.push(PlayerCommand::Unload {
                     holder,
-                    at: Some(world_to_pos(cursor)),
+                    at: Some(CellPos::from(world_to_pos(cursor))),
                     flush,
                 });
             }
@@ -1110,7 +1117,7 @@ pub fn targeting_input(
             // the leader's reach, each selected caster is still asked: the
             // executor refuses one that cannot reach from where it stands,
             // and one that can walk walks into reach.
-            let Some(target) = skill_target_at(cursor, skill, &registry, &entities) else {
+            let Some(target) = skill_target_at(cursor, skill, &registry, &map, &entities) else {
                 return;
             };
             match *aim_verdict {
@@ -1324,6 +1331,7 @@ pub fn placement_input(
     let cursor = CellPos::new(cx, cy);
     let mut made_out = made_out_footprints(
         &registry,
+        &map,
         sources
             .iter()
             .filter(|(info, ..)| {
@@ -1377,8 +1385,16 @@ pub fn placement_input(
             if !own_side {
                 continue;
             }
-            let cell = body::anchor(location.position);
             let standing = registry.def(info.type_id());
+            let cell = map
+                .location(
+                    location.position,
+                    standing
+                        .location
+                        .expect("a field source stands somewhere")
+                        .size(),
+                )
+                .anchor();
             for (other, state) in standing.field_sources.iter().zip(&states.0) {
                 if other.field() != source.field() {
                     continue;
@@ -1407,7 +1423,7 @@ pub fn placement_input(
         pending.push(PlayerCommand::BuildEntity {
             builder,
             type_name,
-            position: FixedUVec2::new(FixedU64::from_num(cx), FixedU64::from_num(cy)),
+            anchor: CellPos::new(cx, cy),
             flush: true,
         });
         *mode = InputMode::Normal;
@@ -1489,7 +1505,7 @@ pub fn warp_placement_input(
         .location
         .expect("validated content defines a location")
         .size();
-    let mut made_out = made_out_footprints(&registry, seen.iter());
+    let mut made_out = made_out_footprints(&registry, &map, seen.iter());
     made_out.extend(ghosts.remembered_footprints());
     let ghost = GhostView {
         map: &map,
@@ -1525,13 +1541,13 @@ pub fn warp_placement_input(
         click.0 = Some(Warp {
             leading: warper,
             type_name,
-            at: FixedUVec2::from(anchor),
+            anchor,
         });
         *mode = InputMode::Normal;
     }
 }
 
-/// While a summon aimed at a position is armed, mark the cell under the
+/// While a summon aimed at the ground is armed, mark the cell under the
 /// cursor: an exact summon draws the summoned type's footprint ghost there,
 /// fitting where the cast takes that aim — its reach — and the ground there
 /// takes the body as the leading caster's side knows it, inside the summon's
@@ -1569,7 +1585,7 @@ pub fn summon_ghost(
     let Some(SkillCaster::Entity {
         effect:
             EntityCastEffect::Summon {
-                at: SummonAt::Cell { .. },
+                at: SummonAt::Ground { .. },
                 entity_type,
                 placement,
                 landing,
@@ -1613,7 +1629,7 @@ pub fn summon_ghost(
         .location
         .expect("validated content defines a location")
         .size();
-    let mut made_out = made_out_footprints(&registry, seen.iter());
+    let mut made_out = made_out_footprints(&registry, &map, seen.iter());
     made_out.extend(ghosts.remembered_footprints());
     let ghost = GhostView {
         map: &map,
@@ -1653,8 +1669,8 @@ pub struct Warp {
     pub leading: SimulationId,
     /// The unit's type, by name.
     pub type_name: String,
-    /// Where it was clicked.
-    pub at: FixedUVec2,
+    /// The cell the unit is anchored at.
+    pub anchor: CellPos,
 }
 
 /// Warp-ins given to warpers whose commands may not have landed yet.
@@ -1715,7 +1731,7 @@ pub fn issue_warp(world: &mut World) {
         .push(PlayerCommand::WarpIn {
             warper,
             type_name: warp.type_name,
-            at: warp.at,
+            anchor: warp.anchor,
         });
 }
 
@@ -1873,7 +1889,9 @@ impl GhostView<'_> {
             .into_iter()
             .find_map(|(info, location, visibility, sighted)| {
                 let standing = self.registry.def(info.type_id());
-                snaps_to(over, cursor, info, location, standing, visibility, sighted)
+                snaps_to(
+                    over, cursor, self.map, info, location, standing, visibility, sighted,
+                )
             });
         match under {
             Some(anchor) => (
@@ -1954,6 +1972,7 @@ impl GhostView<'_> {
 /// those seated in a berth.
 pub fn made_out_footprints<'a>(
     registry: &ContentRegistry,
+    map: &Map,
     entities: impl Iterator<
         Item = (
             &'a EntityInfoComponent,
@@ -1972,15 +1991,16 @@ pub fn made_out_footprints<'a>(
             let def = registry.def(info.type_id());
             let location_def = def.location?;
             let class = OccupancyClass::of(def);
+            let placed = map.location(location.position, location_def.size());
             let footprint = match (class, location_def.solidity()) {
                 (OccupancyClass::Claim, Solidity::Underfoot | Solidity::Passable) => {
-                    body::standing_rect(location.position, location_def.size())
+                    body::standing_rect(placed)
                 }
                 (OccupancyClass::Claim, Solidity::Solid)
                 | (
                     OccupancyClass::Static,
                     Solidity::Solid | Solidity::Underfoot | Solidity::Passable,
-                ) => CellRect::new(body::anchor(location.position), location_def.size()),
+                ) => placed.footprint(),
             };
             Some(render::MadeOutFootprint {
                 layers: location_def.occupies(),
@@ -1998,6 +2018,7 @@ pub fn made_out_footprints<'a>(
 pub fn snaps_to(
     over: &str,
     cursor: CellPos,
+    map: &Map,
     info: &EntityInfoComponent,
     location: &LocationComponent,
     standing: &EntityTypeDef,
@@ -2011,7 +2032,7 @@ pub fn snaps_to(
         .location
         .expect("validated content defines a location")
         .size();
-    let footprint = CellRect::new(body::anchor(location.position), size);
+    let footprint = map.location(location.position, size).footprint();
     (footprint.contains(cursor) && render::made_out(visibility, sighted))
         .then_some(footprint.origin)
 }
@@ -2050,6 +2071,7 @@ fn skill_target_at(
     cursor: Vec2,
     skill: SkillId,
     registry: &ContentRegistry,
+    map: &Map,
     entities: &Query<(
         &EntityInfoComponent,
         &LocationComponent,
@@ -2063,12 +2085,14 @@ fn skill_target_at(
         .and_then(|def| def.entity_effect())?
         .target();
     match aim {
-        EntityCastTarget::Position { .. } => Some(SkillTarget::Position(world_to_pos(cursor))),
+        EntityCastTarget::Ground { .. } => {
+            Some(SkillTarget::Cell(CellPos::from(world_to_pos(cursor))))
+        }
         EntityCastTarget::Fallen { .. } => {
-            entity_at(cursor, Clicked::Remains, registry, entities).map(SkillTarget::Entity)
+            entity_at(cursor, Clicked::Remains, registry, map, entities).map(SkillTarget::Entity)
         }
         EntityCastTarget::Caster | EntityCastTarget::Standing { .. } => {
-            entity_at(cursor, Clicked::Standing, registry, entities).map(SkillTarget::Entity)
+            entity_at(cursor, Clicked::Standing, registry, map, entities).map(SkillTarget::Entity)
         }
     }
 }

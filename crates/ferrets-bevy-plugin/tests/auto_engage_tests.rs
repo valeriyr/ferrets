@@ -7,6 +7,7 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_content::pool_def::PoolId;
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{
@@ -30,10 +31,10 @@ use ferrets_simulation::{
 fn armed_unit_defaults_to_defend_and_worker_to_flee() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (soldier, _) = utils::create_entity(world, "soldier", utils::pos(5, 5), Some(0)).unwrap();
-    let (worker, _) = utils::create_entity(world, "worker", utils::pos(7, 5), Some(0)).unwrap();
+    let (soldier, _) = utils::create_entity(world, "soldier", utils::cell(5, 5), Some(0)).unwrap();
+    let (worker, _) = utils::create_entity(world, "worker", utils::cell(7, 5), Some(0)).unwrap();
     let (barracks, _) =
-        utils::create_entity(world, "barracks", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(10, 10), Some(0)).unwrap();
 
     assert_eq!(
         world.get::<StanceComponent>(soldier).unwrap().0,
@@ -51,9 +52,9 @@ fn armed_unit_defaults_to_defend_and_worker_to_flee() {
 fn set_stance_applies_to_owned_selection_only() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (own, own_id) = utils::create_entity(world, "sentry", utils::pos(5, 5), Some(0)).unwrap();
+    let (own, own_id) = utils::create_entity(world, "sentry", utils::cell(5, 5), Some(0)).unwrap();
     let (foreign, foreign_id) =
-        utils::create_entity(world, "sentry", utils::pos(20, 20), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(20, 20), Some(1)).unwrap();
 
     utils::select(&mut app, own_id);
     utils::push_command(
@@ -104,17 +105,17 @@ fn ground_held_part_way_across_cells_engages_what_its_reach_covers() {
     // Walked to the spot rather than placed on it: a point move lands on the
     // ordered position to the bit, and only a walk leaves a body off the lattice
     // with its claims in order.
-    let corner = utils::part_way("12.6", "10.6");
+    let spot = utils::point("13.1", "11.1");
     utils::select(&mut app, sentry_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Move {
-            target: corner,
+            target: spot,
             flush: true,
         },
     );
     utils::run_ticks(&mut app, 20);
-    assert_eq!(utils::position_of(app.world_mut(), sentry), corner);
+    assert_eq!(utils::position_of(app.world_mut(), sentry), spot);
 
     // Holding its ground, so nothing it manages can be a chase: the reach is
     // all it has.
@@ -127,8 +128,8 @@ fn ground_held_part_way_across_cells_engages_what_its_reach_covers() {
     utils::run_ticks(&mut app, utils::APPLY);
 
     // Cell (11, 12) is a cell away from the cells the sentry stands on — and two
-    // from the cell its position floors into and from the cell its center rounds
-    // to, taken one at a time. An immobile target, because anything that walks
+    // from the cell its low edge floors into and from the cell it is anchored
+    // at, taken one at a time. An immobile target, because anything that walks
     // takes itself out of the reach under test the moment it is hit.
     let (enemy, _) = utils::create_owned(&mut app, "boulder", 11, 12, 1);
     utils::run_ticks(&mut app, 60);
@@ -136,7 +137,7 @@ fn ground_held_part_way_across_cells_engages_what_its_reach_covers() {
     utils::assert_despawned(app.world_mut(), enemy);
     assert_eq!(
         utils::position_of(app.world_mut(), sentry),
-        corner,
+        spot,
         "and it held the ground it fought from"
     );
 }
@@ -153,30 +154,30 @@ fn ground_held_unit_engages_target_standing_part_way_into_its_reach() {
         },
     );
 
-    // Floored into (10, 8), two cells off the sentry's one-cell reach;
-    // rounded to (10, 9), one off.
+    // Its low edge (10.4, 8.6) floors into (10, 8), two cells off the sentry's
+    // one-cell reach, and rounds to (10, 9), one off.
     let (ox, _) = utils::create_owned(&mut app, "ox", 10, 4, 1);
-    let corner = utils::part_way("10.4", "8.6");
+    let spot = utils::point("10.9", "9.1");
     app.world_mut()
         .get_mut::<OrderQueueComponent>(ox)
         .expect("a walker takes orders")
         .push(
             Order::Move {
-                target: corner,
+                target: spot,
                 size: CellSize::ONE,
                 range: 0,
             },
             None,
         );
     for _ in 0..40 {
-        if utils::health(&app, ox) < utils::fixed("60") {
+        if utils::health(&app, ox) < FixedU64::from_num(60) {
             break;
         }
         utils::run_ticks(&mut app, 1);
     }
 
     // One swing landed: 60 - 10.
-    assert_eq!(utils::health(&app, ox), utils::fixed("50"));
+    assert_eq!(utils::health(&app, ox), FixedU64::from_num(50));
     assert_eq!(
         utils::position_of(app.world_mut(), sentry),
         utils::pos(10, 10)
@@ -188,29 +189,29 @@ fn unit_engages_nearer_of_two_by_cells_target_stands_on() {
     let mut app = utils::continuous_orders_app();
     // Both rivals in place before the sentry is, so it judges them together.
     // The whole-cell ox at (12, 10) is two cells off the sentry's (10, 10),
-    // with the lower id; the other, walked to (10.4, 8.6), floors two cells
-    // off too but stands one off, on (10, 9).
+    // with the lower id; the other, walked to (10.9, 9.1), its low edge at
+    // (10.4, 8.6), floors two cells off too but stands one off, on (10, 9).
     let (whole, _) = utils::create_owned(&mut app, "ox", 12, 10, 1);
     let (part_way, _) = utils::create_owned(&mut app, "ox", 10, 4, 1);
-    let corner = utils::part_way("10.4", "8.6");
+    let spot = utils::point("10.9", "9.1");
     app.world_mut()
         .get_mut::<OrderQueueComponent>(part_way)
         .expect("a walker takes orders")
         .push(
             Order::Move {
-                target: corner,
+                target: spot,
                 size: CellSize::ONE,
                 range: 0,
             },
             None,
         );
     utils::run_ticks(&mut app, 30);
-    assert_eq!(utils::position_of(app.world_mut(), part_way), corner);
+    assert_eq!(utils::position_of(app.world_mut(), part_way), spot);
     utils::create_owned(&mut app, "sentry", 10, 10, 0);
 
     for _ in 0..40 {
-        if utils::health(&app, part_way) < utils::fixed("60")
-            || utils::health(&app, whole) < utils::fixed("60")
+        if utils::health(&app, part_way) < FixedU64::from_num(60)
+            || utils::health(&app, whole) < FixedU64::from_num(60)
         {
             break;
         }
@@ -218,8 +219,8 @@ fn unit_engages_nearer_of_two_by_cells_target_stands_on() {
     }
 
     // The first swing landed on the nearer: 60 - 10.
-    assert_eq!(utils::health(&app, part_way), utils::fixed("50"));
-    assert_eq!(utils::health(&app, whole), utils::fixed("60"));
+    assert_eq!(utils::health(&app, part_way), FixedU64::from_num(50));
+    assert_eq!(utils::health(&app, whole), FixedU64::from_num(60));
 }
 
 #[test]
@@ -243,8 +244,8 @@ fn unit_engages_only_targets_it_can_reach() {
     utils::create_owned(&mut app, "sentry", 10, 10, 0);
 
     for _ in 0..60 {
-        if utils::health(&app, open) < utils::fixed("60")
-            || utils::health(&app, walled) < utils::fixed("60")
+        if utils::health(&app, open) < FixedU64::from_num(60)
+            || utils::health(&app, walled) < FixedU64::from_num(60)
         {
             break;
         }
@@ -252,8 +253,8 @@ fn unit_engages_only_targets_it_can_reach() {
     }
 
     // The first swing landed on the open one: 60 - 10.
-    assert_eq!(utils::health(&app, open), utils::fixed("50"));
-    assert_eq!(utils::health(&app, walled), utils::fixed("60"));
+    assert_eq!(utils::health(&app, open), FixedU64::from_num(50));
+    assert_eq!(utils::health(&app, walled), FixedU64::from_num(60));
 }
 
 #[test]
@@ -287,12 +288,12 @@ fn attack_moving_unit_engages_only_targets_it_can_reach() {
     // open one at (10, 14) instead, its first blow landing on the twelfth
     // tick: 60 - 10.
     utils::run_ticks(&mut app, 11);
-    assert_eq!(utils::health(&app, open), utils::fixed("60"));
+    assert_eq!(utils::health(&app, open), FixedU64::from_num(60));
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, open), utils::fixed("50"));
-    assert_eq!(utils::health(&app, walled), utils::fixed("60"));
+    assert_eq!(utils::health(&app, open), FixedU64::from_num(50));
+    assert_eq!(utils::health(&app, walled), FixedU64::from_num(60));
     assert_eq!(
-        utils::cell_of(app.world_mut(), sentry),
+        utils::anchor_of(app.world_mut(), sentry),
         CellPos::new(10, 13)
     );
 }
@@ -325,25 +326,25 @@ fn wall_freed_at_tick_head_opens_reach_to_that_tick_scan() {
     // phase, freeing its cell at the head of tick 5, whose scan reaches the
     // ox through it: the sentry's first blow lands on tick 11, 60 - 10.
     utils::run_ticks(&mut app, 10);
-    assert_eq!(utils::health(&app, ox), utils::fixed("60"));
+    assert_eq!(utils::health(&app, ox), FixedU64::from_num(60));
     utils::run_ticks(&mut app, 1);
-    assert_eq!(utils::health(&app, ox), utils::fixed("50"));
+    assert_eq!(utils::health(&app, ox), FixedU64::from_num(50));
 }
 
 #[test]
 fn defend_unit_destroys_enemy_in_acquire_range_and_returns_home() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (sentry, _) = utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
+    let (sentry, _) = utils::create_entity(world, "sentry", utils::cell(10, 10), Some(0)).unwrap();
     let (barracks, _) =
-        utils::create_entity(world, "barracks", utils::pos(13, 10), Some(1)).unwrap();
+        utils::create_entity(world, "barracks", utils::cell(13, 10), Some(1)).unwrap();
 
     // 100 hp at 10 damage per 4-tick swing, plus walking there and back.
     utils::run_ticks(&mut app, 80);
 
     let world = app.world_mut();
     utils::assert_despawned(world, barracks);
-    assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(world, sentry), CellPos::new(10, 10));
     assert!(utils::order_queue_is_empty(world, sentry));
 }
 
@@ -352,8 +353,8 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
-    let (ghost, _) = utils::create_entity(world, "ghost", utils::pos(14, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(10, 10), Some(0)).unwrap();
+    let (ghost, _) = utils::create_entity(world, "ghost", utils::cell(14, 10), Some(1)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -368,7 +369,7 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
     utils::run_ticks(&mut app, 30);
     {
         let world = app.world_mut();
-        assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
+        assert_eq!(utils::anchor_of(world, sentry), CellPos::new(10, 10));
         assert_eq!(
             entity_def::pool_value(world, ghost, PoolId::HEALTH).unwrap(),
             20
@@ -379,18 +380,18 @@ fn stand_ground_unit_fires_in_weapon_range_and_never_moves() {
     // the zero leash refuses to follow.
     let (ghost2, _) = {
         let world = app.world_mut();
-        utils::create_entity(world, "ghost", utils::pos(11, 10), Some(1)).unwrap()
+        utils::create_entity(world, "ghost", utils::cell(11, 10), Some(1)).unwrap()
     };
     utils::run_ticks(&mut app, 30);
 
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(world, sentry), CellPos::new(10, 10));
     // One hit of 10 on the ghost's 20, which then flees out of reach.
     assert_eq!(
         entity_def::pool_value(world, ghost2, PoolId::HEALTH).unwrap(),
         10
     );
-    assert_ne!(utils::cell_of(world, ghost2), CellPos::new(11, 10));
+    assert_ne!(utils::anchor_of(world, ghost2), CellPos::new(11, 10));
 }
 
 #[test]
@@ -398,8 +399,8 @@ fn hold_fire_unit_never_engages() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
-    let (ghost, _) = utils::create_entity(world, "ghost", utils::pos(11, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(10, 10), Some(0)).unwrap();
+    let (ghost, _) = utils::create_entity(world, "ghost", utils::cell(11, 10), Some(1)).unwrap();
 
     utils::select(&mut app, sentry_id);
     utils::push_command(
@@ -415,7 +416,7 @@ fn hold_fire_unit_never_engages() {
         entity_def::pool_value(world, ghost, PoolId::HEALTH).unwrap(),
         20
     );
-    assert_eq!(utils::cell_of(world, sentry), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(world, sentry), CellPos::new(10, 10));
     assert!(utils::order_queue_is_empty(world, sentry));
 }
 
@@ -424,8 +425,8 @@ fn ordered_unit_is_not_hijacked_by_idle_engagement() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
     let (sentry, sentry_id) =
-        utils::create_entity(world, "sentry", utils::pos(2, 10), Some(0)).unwrap();
-    let (ghost, _) = utils::create_entity(world, "ghost", utils::pos(10, 12), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(2, 10), Some(0)).unwrap();
+    let (ghost, _) = utils::create_entity(world, "ghost", utils::cell(10, 12), Some(1)).unwrap();
 
     // A plain move straight past an enemy: the order is executed as given.
     utils::select(&mut app, sentry_id);
@@ -439,7 +440,7 @@ fn ordered_unit_is_not_hijacked_by_idle_engagement() {
 
     utils::run_ticks(&mut app, 50);
     let world = app.world_mut();
-    assert_eq!(utils::cell_of(world, sentry), CellPos::new(20, 10));
+    assert_eq!(utils::anchor_of(world, sentry), CellPos::new(20, 10));
     assert_eq!(
         entity_def::pool_value(world, ghost, PoolId::HEALTH).unwrap(),
         20
@@ -450,8 +451,8 @@ fn ordered_unit_is_not_hijacked_by_idle_engagement() {
 fn leashed_chase_abandons_fled_target_and_returns_home() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (archer, _) = utils::create_entity(world, "archer", utils::pos(10, 10), Some(0)).unwrap();
-    let (ghost, _) = utils::create_entity(world, "ghost", utils::pos(13, 10), Some(1)).unwrap();
+    let (archer, _) = utils::create_entity(world, "archer", utils::cell(10, 10), Some(0)).unwrap();
+    let (ghost, _) = utils::create_entity(world, "ghost", utils::cell(13, 10), Some(1)).unwrap();
 
     // The archer engages at range, the hit sends the ghost fleeing beyond the
     // leash, and the archer gives up the chase and walks home.
@@ -467,7 +468,7 @@ fn leashed_chase_abandons_fled_target_and_returns_home() {
         entity_def::pool_value(world, ghost, PoolId::HEALTH).unwrap(),
         10
     );
-    assert_eq!(utils::cell_of(world, archer), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(world, archer), CellPos::new(10, 10));
     assert!(utils::order_queue_is_empty(world, archer));
 }
 
@@ -479,12 +480,12 @@ fn leashed_chase_abandons_fled_target_and_returns_home() {
 fn fresh_attacker_is_preferred_over_nearer_target() {
     let mut app = utils::orders_app();
     let world = app.world_mut();
-    let (sentry, _) = utils::create_entity(world, "sentry", utils::pos(10, 10), Some(0)).unwrap();
+    let (sentry, _) = utils::create_entity(world, "sentry", utils::cell(10, 10), Some(0)).unwrap();
     // A passive enemy farther out, and a nearer enemy worker.
     let (attacker, attacker_id) =
-        utils::create_entity(world, "sentry", utils::pos(14, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(14, 10), Some(1)).unwrap();
     hold_fire(world, attacker);
-    let (nearer, _) = utils::create_entity(world, "worker", utils::pos(11, 12), Some(1)).unwrap();
+    let (nearer, _) = utils::create_entity(world, "worker", utils::cell(11, 12), Some(1)).unwrap();
 
     // A hit landing this tick makes the far attacker the fresh target.
     let tick = current_tick(world);
@@ -511,7 +512,7 @@ fn fresh_attacker_is_preferred_over_nearer_target() {
 fn stale_attacker_is_not_preferred_over_nearer_target() {
     let mut app = utils::orders_app();
     let (sentry, _) =
-        utils::create_entity(app.world_mut(), "sentry", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "sentry", utils::cell(10, 10), Some(0)).unwrap();
 
     // Carry the clock well past the memory window with no enemies present, so
     // a hit stamped at tick 0 is already stale by the time either enemy exists.
@@ -519,9 +520,9 @@ fn stale_attacker_is_not_preferred_over_nearer_target() {
 
     let world = app.world_mut();
     let (attacker, attacker_id) =
-        utils::create_entity(world, "sentry", utils::pos(14, 10), Some(1)).unwrap();
+        utils::create_entity(world, "sentry", utils::cell(14, 10), Some(1)).unwrap();
     hold_fire(world, attacker);
-    let (nearer, _) = utils::create_entity(world, "worker", utils::pos(11, 12), Some(1)).unwrap();
+    let (nearer, _) = utils::create_entity(world, "worker", utils::cell(11, 12), Some(1)).unwrap();
     last_hit::record(world, sentry, attacker_id, 0);
 
     // The sentry engages the nearer worker, and never chases the stale attacker.
@@ -547,8 +548,8 @@ fn body_engages_only_what_its_own_weapon_reaches() {
     // takes none — its gun answers for itself (see the turret tests).
     let mut app = utils::combat_app();
     let world = app.world_mut();
-    let (post, _) = utils::create_entity(world, "flak_post", utils::pos(5, 5), Some(0)).unwrap();
-    utils::create_entity(world, "kite", utils::pos(5, 3), Some(1)).unwrap();
+    let (post, _) = utils::create_entity(world, "flak_post", utils::cell(5, 5), Some(0)).unwrap();
+    utils::create_entity(world, "kite", utils::cell(5, 3), Some(1)).unwrap();
 
     utils::run_ticks(&mut app, 16);
 

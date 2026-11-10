@@ -2,9 +2,8 @@
 //! once the tick's orders have run. The marking side lives in [`crate::rally`].
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::cell_size::CellSize;
 
-use super::executor;
+use super::{executor, orders};
 use crate::{
     components::{
         order_queue::OrderQueueComponent,
@@ -72,11 +71,7 @@ fn lapses(world: &World, holder: Entity) -> bool {
 /// The order a rally `target` gives a freshly released `unit`, if any.
 fn resolve(world: &mut World, unit: Entity, target: RallyTarget) -> Option<Order> {
     match target {
-        RallyTarget::Position(position) => Some(Order::Move {
-            target: position,
-            size: CellSize::ONE,
-            range: 0,
-        }),
+        RallyTarget::Position(position) => Some(orders::move_to_point(position)),
         RallyTarget::Entity(id) => {
             // Judged as the send-to-entity command is: a target the unit's
             // owner cannot make out is not one it may be sent after.

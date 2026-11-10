@@ -94,6 +94,11 @@ impl NavGrid {
         self.height
     }
 
+    /// Returns the grid's extent in cells.
+    pub fn size(&self) -> CellSize {
+        CellSize::new(self.width, self.height)
+    }
+
     /// Registers a fully-open layer, flat at `level` everywhere.
     ///
     /// Panics if `layer` is already registered.

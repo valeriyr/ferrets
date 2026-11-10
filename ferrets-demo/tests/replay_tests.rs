@@ -268,7 +268,7 @@ fn record_walking_game(model: MovementModel) -> Recorded {
     utils::push_command(
         &mut app,
         PlayerCommand::Move {
-            target: utils::at_cell(20, 20),
+            target: utils::pos(20, 20),
             flush: true,
         },
     );

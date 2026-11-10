@@ -94,7 +94,7 @@ use crate::{
 };
 /// Look direction a freshly spawned entity starts with: south, the conventional
 /// resting facing toward the viewer.
-pub(crate) const DEFAULT_FACING: Facing = Facing::SOUTH;
+const DEFAULT_FACING: Facing = Facing::SOUTH;
 
 /// How many cells from the deceased's footprint its remains may be laid.
 const REMAINS_RANGE: u32 = 1;
@@ -147,40 +147,47 @@ pub enum Arrival<'a> {
     },
 }
 
-/// Creates an entity of the given type at `position`, owned by `owner`
+/// Where a fresh entity is set down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum At {
+    /// Lined up on its cells, anchored at the cell.
+    Cell(CellPos),
+    /// Settled from the point as [`entity_def::settled`] says.
+    Position(FixedUVec2),
+}
+
+/// Creates an entity of the given type `at`, owned by `owner`
 /// (`None` creates a neutral entity), its field sources reaching as `reach`
 /// says and arriving as `arrival` says, announcing nothing.
 ///
-/// `position` must lie exactly on a cell's origin corner — a fresh entity is
-/// at rest, and rest positions are lattice points.
-///
 /// The `spawn_*` functions are the announcing counterparts, one per cause.
 ///
-/// Returns `(entity, simulation_id)`, or `None` if `type_name` is not registered
-/// or the ground there does not take it ([`ground::can_place`]). Panics when a
-/// standing arrival's starts name a pool the type does not declare, name one
-/// twice, or start one where it cannot start, or when it arrives rising and its
-/// type never rises.
+/// Returns `(entity, simulation_id)`, or `None` if `type_name` is not
+/// registered, is wider or taller than the map, or the ground there does not
+/// take it ([`ground::can_place`]). Panics when a standing arrival's starts
+/// name a pool the type does not declare, name one twice, or start one where it
+/// cannot start, or when it arrives rising and its type never rises.
 pub fn create_entity(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     arrival: Arrival,
 ) -> Option<(Entity, SimulationId)> {
-    create_entity_clear_of(world, type_name, position, owner, reach, arrival, &[])
+    create_entity_clear_of(world, type_name, at, owner, reach, arrival, &[])
 }
 
 /// Creates one of the map's placements, each pool `starts` names started
 /// there in place of its type's initial, and announces it as placed.
 ///
-/// Returns `None` if `type_name` is not registered or the ground there does
-/// not take it ([`ground::can_place`]). Panics as [`create_entity`] does.
+/// Returns `None` if `type_name` is not registered, is wider or taller than the
+/// map, or the ground there does not take it ([`ground::can_place`]). Panics as
+/// [`create_entity`] does.
 pub fn spawn_placed(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     starts: &[(PoolId, PoolInitial)],
@@ -188,7 +195,7 @@ pub fn spawn_placed(
     spawn(
         world,
         type_name,
-        position,
+        at,
         owner,
         reach,
         Arrival::Standing { starts },
@@ -199,12 +206,12 @@ pub fn spawn_placed(
 /// Creates a unit finished in `trainer`'s queue for `owner` and announces it
 /// as trained.
 ///
-/// Returns `None` if `type_name` is not registered or the ground there does
-/// not take it ([`ground::can_place`]).
+/// Returns `None` if `type_name` is not registered, is wider or taller than the
+/// map, or the ground there does not take it ([`ground::can_place`]).
 pub fn spawn_trained(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: PlayerId,
     reach: FieldReach,
     trainer: SimulationId,
@@ -212,7 +219,7 @@ pub fn spawn_trained(
     spawn(
         world,
         type_name,
-        position,
+        at,
         Some(owner),
         reach,
         Arrival::Standing { starts: &[] },
@@ -224,13 +231,13 @@ pub fn spawn_trained(
 /// unattended over its own rise time, the warper cooling down until
 /// `ready_at` for it, and announces it as warped in.
 ///
-/// Returns `None` if `type_name` is not registered or the ground there does
-/// not take it ([`ground::can_place`]). Panics when the type does not rise, or the
-/// warper is not alive.
+/// Returns `None` if `type_name` is not registered, is wider or taller than the
+/// map, or the ground there does not take it ([`ground::can_place`]). Panics
+/// when the type does not rise, or the warper is not alive.
 pub fn spawn_warped(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     payer: PlayerId,
     reach: FieldReach,
     warper: SimulationId,
@@ -246,7 +253,7 @@ pub fn spawn_warped(
     spawn(
         world,
         type_name,
-        position,
+        at,
         Some(payer),
         reach,
         Arrival::Rising {
@@ -265,13 +272,14 @@ pub fn spawn_warped(
 /// on ground judged as though none of `ignored` stood on the map, and
 /// announces it as founded.
 ///
-/// Returns `None` if `type_name` is not registered or the ground there does
-/// not take it ([`ground::can_place`]). Panics when the type never rises.
+/// Returns `None` if `type_name` is not registered, is wider or taller than the
+/// map, or the ground there does not take it ([`ground::can_place`]). Panics
+/// when the type never rises.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_founded(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     builder: SimulationId,
@@ -281,7 +289,7 @@ pub fn spawn_founded(
     spawn_clear_of(
         world,
         type_name,
-        position,
+        at,
         owner,
         reach,
         Arrival::Rising {
@@ -297,8 +305,8 @@ pub fn spawn_founded(
 /// group named by `attachment`, and announces it as bred. The entity never
 /// stands on the grid on its way to the seat.
 ///
-/// Returns `None` if `type_name` is not registered or has no location, or the
-/// group has no free berth.
+/// Returns `None` if `type_name` is not registered, has no location or is
+/// wider or taller than the map, or the group has no free berth.
 pub(crate) fn spawn_bred(
     world: &mut World,
     type_name: &str,
@@ -314,9 +322,18 @@ pub(crate) fn spawn_bred(
         .entity(type_name)?
         .location?
         .size();
+    // A body wider or taller than the map has no place on it.
+    if !world.resource::<Map>().fits(size) {
+        return None;
+    }
     let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), size, from)?;
-    // Facing the way every fresh entity does; the seat sets the position.
-    let location = LocationComponent::new(point, DEFAULT_FACING);
+    // Facing the way every fresh entity does; the seat sets the position, held
+    // on the map for the body's size as a seated body is.
+    let middle = world
+        .resource::<Map>()
+        .location_clamped(point, size)
+        .middle();
+    let location = LocationComponent::new(middle, DEFAULT_FACING);
     let (entity, id) = conjure(
         world,
         type_name,
@@ -334,12 +351,12 @@ pub(crate) fn spawn_bred(
 /// Creates an entity handed on by the death of `of` and announces it as
 /// bequeathed.
 ///
-/// Returns `None` if `type_name` is not registered or the ground there does
-/// not take it ([`ground::can_place`]).
+/// Returns `None` if `type_name` is not registered, is wider or taller than the
+/// map, or the ground there does not take it ([`ground::can_place`]).
 pub fn spawn_bequeathed(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     of: SimulationId,
@@ -347,7 +364,7 @@ pub fn spawn_bequeathed(
     spawn(
         world,
         type_name,
-        position,
+        at,
         owner,
         reach,
         Arrival::Standing { starts: &[] },
@@ -358,13 +375,13 @@ pub fn spawn_bequeathed(
 /// Creates an entity the caster `by` raised from the remains `from`, arriving
 /// as `arrival` says, and announces it as raised.
 ///
-/// Returns `None` if `type_name` is not registered or the ground there does
-/// not take it ([`ground::can_place`]).
+/// Returns `None` if `type_name` is not registered, is wider or taller than the
+/// map, or the ground there does not take it ([`ground::can_place`]).
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_raised(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     arrival: Arrival,
@@ -374,7 +391,7 @@ pub fn spawn_raised(
     spawn(
         world,
         type_name,
-        position,
+        at,
         owner,
         reach,
         arrival,
@@ -385,12 +402,12 @@ pub fn spawn_raised(
 /// Creates an entity the caster `by` called up from nothing, arriving as
 /// `arrival` says, and announces it as summoned.
 ///
-/// Returns `None` if `type_name` is not registered or the ground there does
-/// not take it ([`ground::can_place`]).
+/// Returns `None` if `type_name` is not registered, is wider or taller than the
+/// map, or the ground there does not take it ([`ground::can_place`]).
 pub fn spawn_summoned(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     arrival: Arrival,
@@ -399,7 +416,7 @@ pub fn spawn_summoned(
     spawn(
         world,
         type_name,
-        position,
+        at,
         owner,
         reach,
         arrival,
@@ -410,12 +427,12 @@ pub fn spawn_summoned(
 /// Creates the resource source put back where `by`, raised over it, died,
 /// and announces it as uncovered.
 ///
-/// Returns `None` if `type_name` is not registered or the ground there does
-/// not take it ([`ground::can_place`]).
+/// Returns `None` if `type_name` is not registered, is wider or taller than the
+/// map, or the ground there does not take it ([`ground::can_place`]).
 pub fn spawn_uncovered(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     by: SimulationId,
@@ -423,7 +440,7 @@ pub fn spawn_uncovered(
     spawn(
         world,
         type_name,
-        position,
+        at,
         owner,
         reach,
         Arrival::Standing { starts: &[] },
@@ -434,19 +451,19 @@ pub fn spawn_uncovered(
 /// Creates an entity the sandbox spawn command conjured, and announces it as
 /// such.
 ///
-/// Returns `None` if `type_name` is not registered or the ground there does
-/// not take it ([`ground::can_place`]).
+/// Returns `None` if `type_name` is not registered, is wider or taller than the
+/// map, or the ground there does not take it ([`ground::can_place`]).
 pub fn spawn_sandbox(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
 ) -> Option<(Entity, SimulationId)> {
     spawn(
         world,
         type_name,
-        position,
+        at,
         owner,
         reach,
         Arrival::Standing { starts: &[] },
@@ -552,16 +569,15 @@ pub(crate) fn spawn_bequest(
     };
 
     for cell in cells {
-        let position = FixedUVec2::from(cell);
         match left {
             Left::Remains { decay } => {
-                spawn_remains(world, type_name, position, location_def, decay, fallen);
+                spawn_remains(world, type_name, cell, location_def, decay, fallen);
             }
             Left::Entity => {
                 spawn_bequeathed(
                     world,
                     type_name,
-                    position,
+                    At::Cell(cell),
                     fallen.owner,
                     FieldReach::Initial,
                     fallen.id,
@@ -584,15 +600,11 @@ pub(crate) fn spawn_bequest(
 fn spawn_remains(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    anchor: CellPos,
     location_def: LocationDef,
     decay: u32,
     fallen: Fallen,
 ) {
-    debug_assert!(
-        !movement_model::is_mid_crossing(position),
-        "remains spawn at rest: position must lie exactly on a cell origin"
-    );
     if !room_for_remains(world) {
         return;
     }
@@ -609,18 +621,24 @@ fn spawn_remains(
         )
     };
 
-    let location = LocationComponent::new(position, DEFAULT_FACING);
     // Remains lie only on ground their domain takes, out of every standing
     // footprint; those that claim no cells share theirs with whoever stands
     // there.
-    if !ground::can_place(world, &location, location_def, class, &[], &[]) {
+    if !ground::can_place(world, anchor, location_def, class, &[], &[]) {
         return;
     }
     let id = world.resource_mut::<SimulationIds>().mint();
     remark(
         world,
         None,
-        entity_def::grid_mark_of(id, &location, location_def, class),
+        entity_def::grid_mark_of(id, anchor, location_def, class),
+    );
+    let location = LocationComponent::new(
+        world
+            .resource::<Map>()
+            .location_at(anchor, location_def.size())
+            .middle(),
+        DEFAULT_FACING,
     );
     let mut queue = OrderQueueComponent::default();
     queue.push(Order::Die, None);
@@ -887,7 +905,7 @@ pub(crate) fn seat_unseated(
     seating: Seating,
 ) {
     let standing = entity_def::standing_rect(world, entity);
-    let size = entity_def::location_size(world, entity);
+    let size = entity_def::size(world, entity);
     let (seat, point) = berths::nearest_free_seat(world, job, attachment.berths(), size, standing)
         .expect("a worker attaches only to a job with a free berth in its group");
     seat_at(world, entity, job, attachment, seat, point, seating);
@@ -921,7 +939,8 @@ fn seat_at(
     seat_body(world, entity, point);
 }
 
-/// Puts the middle of `entity`, seated in a berth, on `point`.
+/// Puts the middle of `entity`, seated in a berth, on `point`, held so its
+/// body lies wholly on the map.
 ///
 /// Panics for an entity not seated in a berth, or with no location.
 pub(crate) fn seat_body(world: &mut World, entity: Entity, point: FixedUVec2) {
@@ -929,11 +948,8 @@ pub(crate) fn seat_body(world: &mut World, entity: Entity, point: FixedUVec2) {
         world.entity(entity).contains::<AttachedComponent>(),
         "a body moved to its seat sits in a berth"
     );
-    let position = berths::position_centered_on(world, entity, point);
-    world
-        .get_mut::<LocationComponent>(entity)
-        .expect("a seated body has a location")
-        .position = position;
+    let location = berths::seated_location(world, entity, point);
+    entity_def::set_location(world, entity, location);
 }
 
 /// Takes an entity out of the berth it sits in, if any, giving the berth back
@@ -1342,9 +1358,10 @@ fn place_back_at(world: &mut World, entity: Entity, cell: CellPos, location_def:
 /// on cells another held. Each keeps its facing, workers seated on one follow
 /// it onto its berths' new points, and each move is announced.
 ///
-/// Panics for an entity that does not stand on the grid at rest, is dying, is
-/// still rising, was raised over a resource source or is changing form: the
-/// caller judged every move, and every cell free with the moved bodies lifted.
+/// Panics for an entity that does not stand on the grid lined up on its cells,
+/// is dying, is still rising, was raised over a resource source or is changing
+/// form: the caller judged every move, and every cell free with the moved
+/// bodies lifted.
 pub fn relocate(world: &mut World, moves: &[(Entity, CellPos)]) {
     let mut from = Vec::with_capacity(moves.len());
     for &(entity, _) in moves {
@@ -1352,15 +1369,14 @@ pub fn relocate(world: &mut World, moves: &[(Entity, CellPos)]) {
             entity_def::relocatable(world, entity),
             "only a finished body standing on the grid, over no resource source and not dying or changing form, is relocated"
         );
-        let position = entity_def::position(world, entity);
         assert!(
             match world.resource::<Map>().movement_model() {
-                MovementModel::Cell => !movement_model::is_mid_crossing(position),
+                MovementModel::Cell => !movement_model::is_mid_crossing(world, entity),
                 MovementModel::Continuous => true,
             },
-            "a relocated body stands at rest, settled off any crossing"
+            "a relocated body stands lined up on its cells, settled off any crossing"
         );
-        from.push(position);
+        from.push(entity_def::position(world, entity));
     }
     for &(entity, _) in moves {
         lift_footprint(world, entity);
@@ -1402,11 +1418,8 @@ fn stand_at(
     class: OccupancyClass,
 ) {
     let holder = entity_def::simulation_id(world, entity);
-    let mut location = world
-        .get_mut::<LocationComponent>(entity)
-        .expect("an entity on the map has a location");
-    location.position = FixedUVec2::from(cell);
-    let mark = entity_def::grid_mark_of(holder, &location, *location_def, class);
+    entity_def::set_anchor(world, entity, cell);
+    let mark = entity_def::grid_mark_of(holder, cell, *location_def, class);
     remark(world, None, mark);
 }
 
@@ -2460,22 +2473,13 @@ fn conjure(
 fn spawn(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     arrival: Arrival,
     cause: SpawnCause,
 ) -> Option<(Entity, SimulationId)> {
-    spawn_clear_of(
-        world,
-        type_name,
-        position,
-        owner,
-        reach,
-        arrival,
-        cause,
-        &[],
-    )
+    spawn_clear_of(world, type_name, at, owner, reach, arrival, cause, &[])
 }
 
 /// [`create_entity`] on ground judged as though none of `ignored` stood on the
@@ -2483,16 +2487,12 @@ fn spawn(
 fn create_entity_clear_of(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     arrival: Arrival,
     ignored: &[Entity],
 ) -> Option<(Entity, SimulationId)> {
-    debug_assert!(
-        !movement_model::is_mid_crossing(position),
-        "entities spawn at rest: position must lie exactly on a cell origin"
-    );
     // Both come off one borrow: the whole definition is never cloned for a
     // placement test that reads two of its fields.
     let (location_def, occupancy) = {
@@ -2504,14 +2504,36 @@ fn create_entity_clear_of(
         }
         (def.location?, OccupancyClass::of(def))
     };
-    let location = LocationComponent::new(position, DEFAULT_FACING);
-    if !ground::can_place(world, &location, location_def, occupancy, &[], ignored) {
+    // A body wider or taller than the map has no place on it. A point is held
+    // on the map for the body's size; an anchor is judged with the ground,
+    // which refuses a footprint past the map's edge.
+    let (map, size) = (world.resource::<Map>(), location_def.size());
+    if !map.fits(size) {
         return None;
     }
+    let anchor = match at {
+        At::Cell(anchor) => anchor,
+        At::Position(point) => map.location_clamped(point, size).anchor(),
+    };
+    if !ground::can_place(world, anchor, location_def, occupancy, &[], ignored) {
+        return None;
+    }
+    // A point settles as a change of form does: a standing body on its
+    // cells, as the ground was judged.
+    let placed = match at {
+        At::Cell(anchor) => map.location_at(anchor, size),
+        At::Position(point) => {
+            let def = world
+                .resource::<ContentRegistry>()
+                .entity(type_name)
+                .expect("the type was read above");
+            entity_def::settled(world, def, point, anchor)
+        }
+    };
 
+    let location = LocationComponent::new(placed.middle(), DEFAULT_FACING);
     let (entity, id) = conjure(world, type_name, location, owner, reach, arrival)?;
-    // Stamped from the location the entity now carries, not the one tested
-    // above.
+    // Stamped from the location the entity now carries.
     restore_footprint(world, entity);
     Some((entity, id))
 }
@@ -2521,7 +2543,7 @@ fn create_entity_clear_of(
 fn spawn_clear_of(
     world: &mut World,
     type_name: &str,
-    position: FixedUVec2,
+    at: At,
     owner: Option<PlayerId>,
     reach: FieldReach,
     arrival: Arrival,
@@ -2529,7 +2551,7 @@ fn spawn_clear_of(
     ignored: &[Entity],
 ) -> Option<(Entity, SimulationId)> {
     let (entity, id) =
-        create_entity_clear_of(world, type_name, position, owner, reach, arrival, ignored)?;
+        create_entity_clear_of(world, type_name, at, owner, reach, arrival, ignored)?;
     tunnels::bind_at_birth(world, entity, cause);
     announce(world, id, cause);
     Some((entity, id))

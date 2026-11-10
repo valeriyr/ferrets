@@ -26,6 +26,8 @@
 //! or once its conduct lets it run standing.
 
 use bevy_ecs::{entity::Entity, world::World};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use super::{
     attack, attack_move, board, build, cast, die, follow, guard, harvest, load, morph, movement,
@@ -641,19 +643,15 @@ pub fn watch_tick(entity: Entity, queue: &mut OrderQueueComponent, world: &mut W
         return;
     }
     // Off the map no watcher interrupts anything: the front holds untouched.
-    let Some(position) = world
-        .entity(entity)
-        .get::<LocationComponent>()
-        .map(|location| location.position)
-    else {
+    if !world.entity(entity).contains::<LocationComponent>() {
         return;
-    };
+    }
     match world.resource::<Map>().movement_model() {
         // A continuous mover's position is a free point with no crossing
         // state to finish — watchers may always interrupt.
         MovementModel::Continuous => {}
         MovementModel::Cell => {
-            if movement_model::is_mid_crossing(position) {
+            if movement_model::is_mid_crossing(world, entity) {
                 return;
             }
         }
@@ -793,6 +791,31 @@ pub fn note_idleness(world: &mut World) {
         if was != Some(now) {
             world.entity_mut(entity).insert(now);
         }
+    }
+}
+
+/// A walk that brings `walker` onto the cells anchored at `cell`, held on the
+/// map for its size: a point move to its middle there.
+///
+/// Panics if `walker` is not a simulation entity, its type declares no
+/// location, or its body is wider or taller than the map.
+pub fn move_onto_cell(world: &World, walker: Entity, cell: CellPos) -> Order {
+    let size = entity_def::size(world, walker);
+    move_to_point(
+        world
+            .resource::<Map>()
+            .location_at_clamped(cell, size)
+            .middle(),
+    )
+}
+
+/// A walk that brings a walker's middle to `target`, held on the map for its
+/// size (see [`movement_model::at_point`]).
+pub fn move_to_point(target: FixedUVec2) -> Order {
+    Order::Move {
+        target,
+        size: CellSize::ONE,
+        range: 0,
     }
 }
 

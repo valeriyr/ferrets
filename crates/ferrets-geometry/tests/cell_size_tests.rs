@@ -24,3 +24,17 @@ fn default_is_zero_by_zero() {
     assert_eq!(size.width, 0);
     assert_eq!(size.height, 0);
 }
+
+//
+// ─── Fit ──────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+fn size_fits_within_area_no_wider_and_no_taller() {
+    let area = CellSize::new(32, 16);
+
+    assert!(CellSize::new(32, 16).fits_within(area));
+    assert!(CellSize::new(2, 2).fits_within(area));
+    assert!(!CellSize::new(33, 1).fits_within(area));
+    assert!(!CellSize::new(1, 17).fits_within(area));
+}

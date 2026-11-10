@@ -78,6 +78,16 @@ fn does_not_contain_exterior_point() {
     assert!(!rect.contains(utils::uvec2(5, 11)));
 }
 
+#[test]
+fn half_open_contains_near_edges_only() {
+    let rect = FixedURect::from_corners(utils::uvec2(0, 0), utils::uvec2(10, 10));
+
+    assert!(rect.contains_half_open(utils::uvec2(0, 0)));
+    assert!(rect.contains_half_open(utils::uvec2(5, 5)));
+    assert!(!rect.contains_half_open(utils::uvec2(10, 5)));
+    assert!(!rect.contains_half_open(utils::uvec2(5, 10)));
+}
+
 //
 // ─── Intersects ───────────────────────────────────────────────────────────────
 //

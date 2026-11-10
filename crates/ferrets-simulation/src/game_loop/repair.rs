@@ -158,7 +158,6 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
     // open closes on its target every tick, since a patient can walk away from the
     // hands mending it.
     if !repair.inside_job {
-        let (target_position, target_size) = entity_def::footprint(world, target);
         match chase::advance_to_entity(
             &mut repair.last_chase,
             world,
@@ -173,7 +172,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
             }
             Destination::Arrived => {}
         }
-        chase::face(world, entity, target_position, target_size);
+        chase::face_entity(world, entity, target);
 
         // Stepping inside the job, or onto it, frees the cells the worker was
         // holding. Done on arrival, so it happens exactly once — and only for a

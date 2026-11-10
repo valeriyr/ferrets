@@ -219,17 +219,18 @@ fn game_view_classifies_and_snapshots_entities() {
     utils::register_orders_content(&mut app);
     let world = app.world_mut();
 
-    let (_, _) = utils::create_entity(world, "worker", utils::pos(5, 5), Some(1)).unwrap();
-    let (hidden_own, _) = utils::create_entity(world, "worker", utils::pos(7, 5), Some(1)).unwrap();
-    let (_, _) = utils::create_entity(world, "worker", utils::pos(10, 10), Some(0)).unwrap();
+    let (_, _) = utils::create_entity(world, "worker", utils::cell(5, 5), Some(1)).unwrap();
+    let (hidden_own, _) =
+        utils::create_entity(world, "worker", utils::cell(7, 5), Some(1)).unwrap();
+    let (_, _) = utils::create_entity(world, "worker", utils::cell(10, 10), Some(0)).unwrap();
     let (hidden_enemy, _) =
-        utils::create_entity(world, "worker", utils::pos(12, 10), Some(0)).unwrap();
+        utils::create_entity(world, "worker", utils::cell(12, 10), Some(0)).unwrap();
     // The ally's, one of them hidden and both far from anything the brain
     // sees on its own.
-    let (_, _) = utils::create_entity(world, "worker", utils::pos(25, 25), Some(2)).unwrap();
+    let (_, _) = utils::create_entity(world, "worker", utils::cell(25, 25), Some(2)).unwrap();
     let (hidden_ally, _) =
-        utils::create_entity(world, "worker", utils::pos(27, 25), Some(2)).unwrap();
-    let (mine, _) = utils::create_entity(world, "mine", utils::pos(2, 2), None).unwrap();
+        utils::create_entity(world, "worker", utils::cell(27, 25), Some(2)).unwrap();
+    let (mine, _) = utils::create_entity(world, "mine", utils::cell(2, 2), None).unwrap();
     world
         .get_mut::<ResourceSourceComponent>(mine)
         .unwrap()
@@ -495,7 +496,7 @@ fn worker_inside_own_walking_job_is_listed_where_job_is() {
 fn rider_of_holder_inside_unseen_job_is_listed_where_holder_went_in() {
     let mut app = utils::transport_app();
     let (seam, seam_id) =
-        utils::create_entity(app.world_mut(), "ore_seam", utils::pos(10, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "ore_seam", utils::cell(10, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(seam)
         .unwrap()
@@ -689,8 +690,8 @@ fn run_ai_session() -> Vec<u64> {
     utils::register_orders_content(&mut app);
     {
         let world = app.world_mut();
-        utils::create_entity(world, "worker", utils::pos(4, 4), Some(1)).unwrap();
-        utils::create_entity(world, "worker", utils::pos(20, 20), Some(2)).unwrap();
+        utils::create_entity(world, "worker", utils::cell(4, 4), Some(1)).unwrap();
+        utils::create_entity(world, "worker", utils::cell(20, 20), Some(2)).unwrap();
     }
     install_ai(&mut app, &[(1, PATROL), (2, PATROL)]);
     utils::start_game(&mut app);

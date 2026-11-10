@@ -13,7 +13,7 @@ mod utils;
 fn buff_modifies_effective_stat_then_reverts_on_expiry() {
     let mut app = utils::combat_app();
     let (soldier, _) =
-        utils::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "soldier", utils::cell(5, 5), Some(0)).unwrap();
 
     let base = utils::effective_damage(&app, soldier);
     let frenzy = utils::register_entity_buff(
@@ -58,7 +58,7 @@ fn buff_modifies_effective_stat_then_reverts_on_expiry() {
 fn removing_buff_entity_does_not_bear_panics() {
     let mut app = utils::combat_app();
     let (soldier, _) =
-        utils::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "soldier", utils::cell(5, 5), Some(0)).unwrap();
     let frenzy = utils::register_entity_buff(
         &mut app,
         "frenzy",

@@ -8,7 +8,6 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_simulation::{
     annex,
     command::PlayerCommand,
@@ -217,12 +216,12 @@ fn primary_between_cells_raises_its_annex_on_whole_cell() {
     let mut app = utils::annex_app();
     let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
     // Standing past the middle of its cell, as a form set down there by hand
-    // would: the position floors to ten and rounds to eleven, so the dock can
-    // only land where the rounding rule puts it.
+    // would: its low corner (10.6, 10) floors to ten and rounds to eleven, so
+    // the dock can only land where the rounding rule puts it.
     app.world_mut()
         .get_mut::<LocationComponent>(keep)
         .unwrap()
-        .position = FixedUVec2::new(utils::fixed("10.6"), utils::fixed("10.0"));
+        .position = utils::point("11.6", "11");
     utils::grant_gold(&mut app, 10);
 
     // Its dock is read from the cell its footprint anchors to, not from the
@@ -240,7 +239,7 @@ fn primary_between_cells_raises_its_annex_on_whole_cell() {
     let lookout = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
     assert_eq!(
         entity_def::position(app.world(), lookout),
-        FixedUVec2::from(dock),
+        dock.middle(),
         "the annex stands on the cell, whatever its primary is standing on"
     );
     assert_eq!(primary_of(&app, lookout), Docking::Primary(keep_id));

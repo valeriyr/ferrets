@@ -1,9 +1,9 @@
 //! Flee response: fleeing-stance entities run from whatever damaged them.
 
 use bevy_ecs::world::World;
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_geometry::cell_pos::CellPos;
 
+use super::orders;
 use crate::{
     components::{
         last_hit::LastHitComponent,
@@ -13,7 +13,6 @@ use crate::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     map::Map,
-    order::Order,
     session::GameSession,
 };
 
@@ -72,19 +71,13 @@ pub fn tick(world: &mut World) {
             continue;
         };
 
-        let position = entity_def::position(world, entity);
-        let attacker_position = entity_def::whereabouts(world, attacker);
-        let target = flee_target(world, position, attacker_position);
+        let anchor = entity_def::location(world, entity).anchor();
+        let attacker_anchor = entity_def::whereabouts_rect(world, attacker).origin;
+        let walk =
+            orders::move_onto_cell(world, entity, flee_target(world, anchor, attacker_anchor));
 
         if let Some(mut queue) = world.entity_mut(entity).get_mut::<OrderQueueComponent>() {
-            queue.push(
-                Order::Move {
-                    target,
-                    size: CellSize::ONE,
-                    range: 0,
-                },
-                Some(CancelPolicy::Soft),
-            );
+            queue.push(walk, Some(CancelPolicy::Soft));
         }
     }
 }
@@ -93,9 +86,7 @@ pub fn tick(world: &mut World) {
 /// map. Axis signs keep the direction deterministic without normalization; on
 /// an axis the two share (no direction to flee) the entity steps toward higher
 /// coordinates.
-fn flee_target(world: &World, from: FixedUVec2, attacker: FixedUVec2) -> FixedUVec2 {
-    let from_cell = CellPos::from(from);
-    let attacker_cell = CellPos::from(attacker);
+fn flee_target(world: &World, from_cell: CellPos, attacker_cell: CellPos) -> CellPos {
     let grid = world.resource::<Map>().nav_grid();
     let (width, height) = (grid.width(), grid.height());
 
@@ -106,8 +97,8 @@ fn flee_target(world: &World, from: FixedUVec2, attacker: FixedUVec2) -> FixedUV
             own.saturating_sub(FLEE_DISTANCE)
         }
     };
-    FixedUVec2::new(
-        FixedU64::from_num(step(from_cell.x, attacker_cell.x, width)),
-        FixedU64::from_num(step(from_cell.y, attacker_cell.y, height)),
+    CellPos::new(
+        step(from_cell.x, attacker_cell.x, width),
+        step(from_cell.y, attacker_cell.y, height),
     )
 }

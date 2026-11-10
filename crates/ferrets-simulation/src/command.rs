@@ -3,6 +3,7 @@
 //! Commands reference entities by [`SimulationId`] rather than Bevy's `Entity` so they
 //! are identical across all peers and survive serialization to replay files.
 
+use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use serde::{Deserialize, Serialize};
 
@@ -42,8 +43,8 @@ pub enum SkillCasterRef {
 pub enum SkillTarget {
     /// The given entity.
     Entity(SimulationId),
-    /// The given position.
-    Position(FixedUVec2),
+    /// The given cell.
+    Cell(CellPos),
 }
 
 /// A player command.
@@ -117,19 +118,19 @@ pub enum PlayerCommand {
         target: Option<RallyTarget>,
     },
     /// Warps a unit of `type_name` in by the `warper`: it rises at once
-    /// anchored on the cell at `at`.
+    /// anchored at `anchor`.
     WarpIn {
         warper: SimulationId,
         type_name: String,
-        at: FixedUVec2,
+        anchor: CellPos,
     },
     /// Issues a build order to the `builder` entity: construct a building of
-    /// `type_name` at `position`.
+    /// `type_name` anchored at `anchor`.
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     BuildEntity {
         builder: SimulationId,
         type_name: String,
-        position: FixedUVec2,
+        anchor: CellPos,
         flush: bool,
     },
     /// Drops one entry from the `trainer`'s production queue, refunding its
@@ -176,16 +177,16 @@ pub enum PlayerCommand {
     /// `flush` cancels existing orders before issuing this one; `false` appends.
     Unload {
         holder: SimulationId,
-        at: Option<FixedUVec2>,
+        at: Option<CellPos>,
         flush: bool,
     },
     /// Stops the current orders.
     Stop,
-    /// Spawns a fully-formed entity of `type_name` for the issuing player at
-    /// `position`, bypassing production. A sandbox/debug and scenario-scripting
-    /// command — it runs through the normal command pipeline (so it stays
-    /// deterministic and replay-safe), unlike scenario setup which spawns
-    /// directly.
+    /// Spawns a fully-formed entity of `type_name` for the issuing player,
+    /// settled from `position` as `entity_def::settled` says, bypassing
+    /// production. A sandbox/debug and scenario-scripting command — it runs
+    /// through the normal command pipeline (so it stays deterministic and
+    /// replay-safe), unlike scenario setup which spawns directly.
     Spawn {
         type_name: String,
         position: FixedUVec2,

@@ -1,10 +1,9 @@
 //! Delivery of a weapon's damage: immediately, or as a shot that lands later.
 
-use bevy_ecs::{entity::Entity, world::World};
+use bevy_ecs::{entity::Entity, query::With, world::World};
 use ferrets_geometry::{
     cell_pos::CellPos,
     cell_rect::CellRect,
-    cell_size::CellSize,
     projection::{self, Projection},
 };
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
@@ -40,11 +39,12 @@ use ferrets_content::{
 /// the middle of a turret's mount for a turret, and the middle of the holder
 /// for a weapon fired from inside something else, whose bearer stands nowhere.
 ///
-/// A type with a projectile releases a shot that lands after its flight time; one
-/// without applies the damage now. A shot following a body damages it wherever
-/// it has moved to and centers its blast there; a cell-aimed one commits to the
-/// cell the body stood on nearest the weapon at release, so a body that keeps
-/// moving escapes it; a shot at a point lands there.
+/// A type with a projectile releases a shot that lands after its flight time;
+/// one without applies the damage now. A shot following a body damages it
+/// wherever it has moved to and centers its blast there; a cell-aimed one
+/// commits to the cell the body stood on nearest the weapon at release, so a
+/// body that keeps moving escapes it; a shot at a bare cell lands at its
+/// middle.
 ///
 /// Firing is the attacker's attack: every buff of its that an attack cuts
 /// short ends here, whatever weapon fired and whether or not the shot then
@@ -66,12 +66,12 @@ pub(super) fn deliver(
     };
     let target = aimed.body();
     let target_id = target.and_then(|target| target_id(world, target));
-    // A shot at an entity is aimed at the cell it stands on nearest the
-    // weapon, not at the corner its position names; a shot at bare ground goes
-    // where it was sent.
+    // A shot at an entity is aimed at the middle of the cell it stands on
+    // nearest the weapon; a shot at bare ground at the middle of the cell it
+    // was sent to.
     let impact = match aimed {
         AimedAt::Body(target) => aim_cell(world, origin, target),
-        AimedAt::Point(point) => point,
+        AimedAt::Cell(cell) => cell.middle(),
     };
 
     let delivery = fired_from
@@ -105,16 +105,12 @@ pub(super) fn deliver(
                     .projectile_def(projectile);
                 (def.speed(), def.aim())
             };
-            // Footprint-based, so a shot at a 3x3 building is not treated as
-            // reaching for its origin corner.
-            let target_size = target
-                .and_then(|target| entity_def::of(world, target).location)
-                .map(|location| location.size())
-                .unwrap_or(CellSize::ONE);
-            let distance = world.resource::<Map>().projection().rect_distance(
-                CellPos::from(origin),
-                CellRect::new(CellPos::from(impact), target_size),
-            );
+            // The flight is the path from where the shot leaves to where it
+            // lands.
+            let distance = world
+                .resource::<Map>()
+                .projection()
+                .span(origin.x.abs_diff(impact.x), origin.y.abs_diff(impact.y));
             let tick = world.resource::<GameSession>().tick();
             let attacker_type = entity_def::type_id(world, attacker);
             let shot = PendingImpact {
@@ -131,7 +127,7 @@ pub(super) fn deliver(
                 impact,
                 damage,
                 emitted_on_tick: tick,
-                lands_on_tick: tick + flight_ticks(FixedU64::from_num(distance), speed),
+                lands_on_tick: tick + flight_ticks(distance, speed),
             };
             world.resource_mut::<PendingImpacts>().push(shot);
         }
@@ -261,10 +257,11 @@ fn blast_victims(
     origin: FixedUVec2,
 ) -> Vec<(Entity, FixedU64)> {
     // Gather first, then filter: the checks below read the world immutably.
-    let mut query = world.query::<(Entity, &EntityInfoComponent, &LocationComponent)>();
-    let candidates: Vec<(Entity, SimulationId, FixedUVec2)> = query
+    let mut query =
+        world.query_filtered::<(Entity, &EntityInfoComponent), With<LocationComponent>>();
+    let candidates: Vec<(Entity, SimulationId)> = query
         .iter(world)
-        .map(|(entity, info, location)| (entity, info.id(), location.position))
+        .map(|(entity, info)| (entity, info.id()))
         .collect();
 
     let projection = world.resource::<Map>().projection();
@@ -275,7 +272,7 @@ fn blast_victims(
         .and_then(|attacker| world.entity(attacker).get::<OwnerComponent>().copied());
 
     let mut caught: Vec<(SimulationId, Entity, FixedU64)> = Vec::new();
-    for (entity, id, position) in candidates {
+    for (entity, id) in candidates {
         if direct.contains(&entity) {
             continue;
         }
@@ -290,9 +287,9 @@ fn blast_victims(
         // The blast only reaches the layers content gave it, met where the
         // victim can be attacked; a type with no location stands nowhere.
         let def = entity_def::of(world, entity);
-        let Some(location) = def.location else {
+        if def.location.is_none() {
             continue;
-        };
+        }
         if targeting::targetable(world.resource::<ContentRegistry>(), def) & splash.layers()
             == LayerMask::EMPTY
         {
@@ -312,8 +309,7 @@ fn blast_victims(
             projection,
             origin,
             impact,
-            position,
-            location.size(),
+            entity_def::location(world, entity).footprint(),
         ) else {
             continue;
         };
@@ -327,20 +323,17 @@ fn blast_victims(
         .collect()
 }
 
-/// The fraction the innermost band containing `victim` deals, or `None` when the
-/// blast does not reach it.
+/// The fraction the innermost band containing `victim`, a footprint, deals,
+/// or `None` when the blast does not reach it: the whole footprint is the
+/// victim, so a blast overlapping any of its cells catches it, in the band
+/// that cell falls in.
 fn band_fraction(
     splash: &SplashDef,
     projection: Projection,
     origin: FixedUVec2,
     impact: FixedUVec2,
-    victim: FixedUVec2,
-    victim_size: CellSize,
+    victim: CellRect,
 ) -> Option<FixedU64> {
-    // The whole footprint is the victim, not its anchor cell: a blast
-    // overlapping any cell of a wide body catches it, in the band that cell
-    // falls in.
-    let victim = CellRect::new(CellPos::from(victim), victim_size);
     splash
         .bands()
         .find(|&(radius, _)| match splash.shape() {
@@ -393,16 +386,17 @@ fn lerp_cell(from: CellPos, to: CellPos, step: u32, steps: u32) -> CellPos {
 ///
 /// More than one can share a cell when their footprints occupy layers that do not
 /// collide, so this answers with all of them rather than picking one.
-fn occupants_of(world: &mut World, cell: FixedUVec2) -> Vec<Entity> {
-    let cell = CellPos::from(cell);
-    let mut query = world.query::<(Entity, &EntityInfoComponent, &LocationComponent)>();
-    let candidates: Vec<(Entity, SimulationId, CellPos)> = query
+fn occupants_of(world: &mut World, point: FixedUVec2) -> Vec<Entity> {
+    let cell = CellPos::from(point);
+    let mut query =
+        world.query_filtered::<(Entity, &EntityInfoComponent), With<LocationComponent>>();
+    let candidates: Vec<(Entity, SimulationId)> = query
         .iter(world)
-        .map(|(entity, info, location)| (entity, info.id(), CellPos::from(location.position)))
+        .map(|(entity, info)| (entity, info.id()))
         .collect();
 
     let mut found: Vec<(SimulationId, Entity)> = Vec::new();
-    for (entity, id, origin) in candidates {
+    for (entity, id) in candidates {
         let entity_ref = world.entity(entity);
         // A hidden entity has no position for the query to find: a shot arriving
         // at the cell one stood on finds nobody there.
@@ -411,16 +405,12 @@ fn occupants_of(world: &mut World, cell: FixedUVec2) -> Vec<Entity> {
         {
             continue;
         }
-        let Some(size) = entity_def::of(world, entity)
-            .location
-            .map(|location| location.size())
-        else {
+        if entity_def::of(world, entity).location.is_none() {
             continue;
-        };
-        if cell.x >= origin.x
-            && cell.x < origin.x + size.width
-            && cell.y >= origin.y
-            && cell.y < origin.y + size.height
+        }
+        if entity_def::location(world, entity)
+            .footprint()
+            .contains(cell)
         {
             found.push((id, entity));
         }
@@ -436,9 +426,9 @@ fn flight_ticks(distance: FixedU64, speed: FixedU64) -> u32 {
     (distance / speed).ceil().to_num::<u32>().max(1)
 }
 
-/// The cell `target` stands on ([`entity_def::standing_rect`]) nearest to a
-/// shot released from `origin`: where the shot is aimed, and where a following
-/// one lands. Ties go to the first cell in row-major order.
+/// The middle of the cell `target` stands on ([`entity_def::standing_rect`])
+/// nearest to a shot released from `origin`: where the shot is aimed, and
+/// where a following one lands. Ties go to the first cell in row-major order.
 fn aim_cell(world: &World, origin: FixedUVec2, target: Entity) -> FixedUVec2 {
     let projection = world.resource::<Map>().projection();
     let from = CellPos::from(origin);
@@ -446,7 +436,7 @@ fn aim_cell(world: &World, origin: FixedUVec2, target: Entity) -> FixedUVec2 {
         .cells()
         .min_by_key(|&cell| projection.metric(from, cell))
         .expect("a footprint has at least one cell");
-    FixedUVec2::from(cell)
+    cell.middle()
 }
 
 /// The entity's simulation id, if it carries one.

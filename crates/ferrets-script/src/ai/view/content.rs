@@ -137,7 +137,7 @@ impl ContentView {
                             }),
                             Some(match effect.target() {
                                 EntityCastTarget::Caster => "caster",
-                                EntityCastTarget::Position { .. } => "position",
+                                EntityCastTarget::Ground { .. } => "ground",
                                 EntityCastTarget::Fallen { .. } => "fallen",
                                 EntityCastTarget::Standing {
                                     whom: Whom { side, .. },
@@ -177,7 +177,7 @@ pub struct SkillContentView {
     /// How an entity cast takes its caster's time: `"transient"`,
     /// `"instant"` or `"delayed"`. `None` for a player cast.
     pub cast: Option<String>,
-    /// What an entity cast acts on: `"caster"`, `"position"`, `"fallen"`, or
+    /// What an entity cast acts on: `"caster"`, `"ground"`, `"fallen"`, or
     /// a standing entity's side, `"own"`, `"allied"`, `"enemy"` or
     /// `"anyone"`. `None` for a player cast, which lands on the casting
     /// player.

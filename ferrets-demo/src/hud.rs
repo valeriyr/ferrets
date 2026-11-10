@@ -17,7 +17,6 @@ use ferrets_content::{
     skills::{EntityCastTarget, SkillCaster, SkillId},
     terrains::Terrains,
 };
-use ferrets_math::fixed_uvec2::FixedUVec2;
 use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_simulation::{
     annex,
@@ -2581,7 +2580,7 @@ pub fn build_card_input(world: &mut World) {
                                 .push(PlayerCommand::BuildEntity {
                                     builder,
                                     type_name,
-                                    position: FixedUVec2::from(at),
+                                    anchor: at,
                                     // As every other build click does: a
                                     // pending one is replaced rather than
                                     // piling a second order on the primary,
@@ -2667,7 +2666,7 @@ pub fn skill_card_input(
                     }
                     // Targeted cast: arm the click that names the target.
                     EntityCastTarget::Standing { .. }
-                    | EntityCastTarget::Position { .. }
+                    | EntityCastTarget::Ground { .. }
                     | EntityCastTarget::Fallen { .. } => {
                         *mode = InputMode::Targeting(TargetedOrder::Skill(button.skill));
                     }

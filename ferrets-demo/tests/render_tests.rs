@@ -51,7 +51,7 @@ fn glimpsed_entity_hides_body_sprite_and_shows_it_once_seen() {
     // color and the type's own outline, so the body stays hidden and
     // draw_glimpses puts a neutral shape where it stands.
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
 
     app.world_mut()
         .entity_mut(worker)
@@ -83,7 +83,7 @@ fn reveal_snaps_interpolation_anchor_to_where_entity_reappeared() {
     // A worker stepping out of a mine is set down beside the cell it went in
     // by — closer than a real step, so only the reveal itself tells them apart.
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     let entered = anchor_of(&app, worker);
 
     // Off the map and set back down one cell over, with no frame in between:
@@ -116,7 +116,7 @@ fn reveal_snaps_interpolation_anchor_to_where_entity_reappeared() {
 fn relocation_snaps_interpolation_anchor_to_where_entity_landed() {
     let mut app = utils::view_app();
     app.world_mut().init_resource::<render::Relocated>();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     let before = anchor_of(&app, worker);
 
     // Moved one cell over: nearer than any jump the interpolation snaps on
@@ -139,10 +139,10 @@ fn walking_keeps_its_interpolation_anchor() {
     // The snap is for reappearing only: an ordinary step still interpolates, or
     // motion turns into a slideshow.
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     let before = anchor_of(&app, worker);
 
-    set_position(&mut app, worker, "20.5");
+    set_position(&mut app, worker, "21");
     app.world_mut()
         .run_system_once(render::snap_revealed)
         .expect("nothing was revealed");
@@ -155,7 +155,7 @@ fn walking_keeps_its_interpolation_anchor() {
 #[test]
 fn reveal_snaps_look_to_where_entity_reappeared() {
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     face(&mut app, worker, Facing::WEST);
     record_tick(&mut app);
     draw(&mut app);
@@ -198,7 +198,7 @@ fn sprite_leaves_view_when_entity_goes_off_map_and_returns_once_set_down() {
     // draw, so its sprite leaves view the frame it goes, and is drawn again
     // where it is set back down.
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     app.world_mut()
         .entity_mut(worker)
         .insert(Sighted(Sighting::Seen));
@@ -253,7 +253,7 @@ fn sprite_leaves_view_when_entity_goes_off_map_and_returns_once_set_down() {
 #[test]
 fn drawing_puts_sprite_part_way_between_two_ticks_looks() {
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     face(&mut app, worker, Facing::NORTH);
     record_tick(&mut app);
     face(&mut app, worker, Facing::EAST);
@@ -275,7 +275,7 @@ fn drawing_puts_sprite_part_way_between_two_ticks_looks() {
 #[test]
 fn drawn_look_never_runs_past_tick() {
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     face(&mut app, worker, Facing::NORTH);
     record_tick(&mut app);
     face(&mut app, worker, Facing::EAST);
@@ -296,7 +296,7 @@ fn drawn_look_never_runs_past_tick() {
 #[test]
 fn unsmoothed_drawing_puts_sprite_on_tick_itself() {
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     app.world_mut().insert_resource(render::Smoothing(false));
     face(&mut app, worker, Facing::NORTH);
     record_tick(&mut app);
@@ -305,7 +305,7 @@ fn unsmoothed_drawing_puts_sprite_on_tick_itself() {
     // Mid-tick, where a smoothed sprite would be drawn part way from the last
     // position and part way round toward the new look.
     part_way_through_tick(&mut app);
-    set_position(&mut app, worker, "21");
+    set_position(&mut app, worker, "21.5");
     draw(&mut app);
 
     assert_eq!(
@@ -326,7 +326,7 @@ fn unsmoothed_drawing_puts_sprite_on_tick_itself() {
 #[test]
 fn facing_line_follows_drawn_look_not_tick() {
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     face(&mut app, worker, Facing::NORTH);
     record_tick(&mut app);
     face(&mut app, worker, Facing::EAST);
@@ -365,7 +365,7 @@ fn body_and_gun_are_drawn_apart() {
     );
 
     let mut app = utils::view_app();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     assert!(
         app.world().get::<Directional>(worker).is_some(),
         "a body that walks is drawn along its look"
@@ -510,7 +510,7 @@ fn hiding_marks_cell_entity_went_in_by() {
     // marker stands where it went in.
     let mut app = utils::view_app();
     app.world_mut().init_resource::<Puffs>();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
     // A tick before the hiding notes the worker as made out.
     app.world_mut()
         .run_system_once(render::collect_puffs)
@@ -523,7 +523,7 @@ fn hiding_marks_cell_entity_went_in_by() {
 
     assert_eq!(
         app.world().resource::<Puffs>().marked(),
-        vec![(utils::part_way("20", "20"), CellSize::ONE)],
+        vec![(utils::point("20.5", "20.5"), CellSize::ONE)],
         "one marker, where the announcement says the worker went in"
     );
 }
@@ -532,12 +532,10 @@ fn hiding_marks_cell_entity_went_in_by() {
 fn boarding_marks_cell_passenger_vanished_from_not_holder() {
     let mut app = utils::view_app();
     app.world_mut().init_resource::<Puffs>();
-    let (bunker, _) =
-        utils::create_entity(app.world_mut(), "bunker", utils::at_cell(20, 20), Some(0))
-            .expect("the demo content defines a bunker");
-    let (grunt, _) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(24, 20), Some(0))
-            .expect("the demo content defines a grunt");
+    let (bunker, _) = utils::create_entity(app.world_mut(), "bunker", utils::cell(20, 20), Some(0))
+        .expect("the demo content defines a bunker");
+    let (grunt, _) = utils::create_entity(app.world_mut(), "grunt", utils::cell(24, 20), Some(0))
+        .expect("the demo content defines a grunt");
     // A tick before the boarding notes the grunt as made out.
     app.world_mut()
         .run_system_once(render::collect_puffs)
@@ -555,7 +553,7 @@ fn boarding_marks_cell_passenger_vanished_from_not_holder() {
     // from the bunker it now rides in.
     assert_eq!(
         app.world().resource::<Puffs>().marked(),
-        vec![(utils::at_cell(24, 20), CellSize::ONE)]
+        vec![(utils::pos(24, 20), CellSize::ONE)]
     );
 }
 
@@ -563,7 +561,7 @@ fn boarding_marks_cell_passenger_vanished_from_not_holder() {
 fn hiding_of_body_nobody_made_out_marks_nothing() {
     let mut app = utils::view_app();
     app.world_mut().init_resource::<Puffs>();
-    let worker = spawn_worker(&mut app, "20");
+    let worker = spawn_worker(&mut app, 20);
 
     // No tick before the hiding noted the worker as made out.
     spawn::hide_entity(app.world_mut(), worker, Inside::Nothing);
@@ -578,7 +576,7 @@ fn hiding_of_body_nobody_made_out_marks_nothing() {
 fn changing_view_forgets_marks_and_what_was_made_out() {
     let mut app = utils::view_app();
     let mut forget = view_change_clear(&mut app);
-    let second = spawn_worker(&mut app, "24");
+    let second = spawn_worker(&mut app, 24);
     seed_marks(&mut app);
 
     app.world_mut().insert_resource(FogReveal::Revealed);
@@ -641,15 +639,14 @@ fn rival_caster_in_fog_casting_at_cell_pulses_nothing() {
         .resource::<ContentRegistry>()
         .skill("battle_focus")
         .expect("the demo content defines battle focus");
-    let (_, rival) =
-        utils::create_entity(app.world_mut(), "grunt", utils::at_cell(60, 60), Some(1))
-            .expect("the demo content defines a grunt");
+    let (_, rival) = utils::create_entity(app.world_mut(), "grunt", utils::cell(60, 60), Some(1))
+        .expect("the demo content defines a grunt");
     utils::run_ticks(&mut app, 1);
     app.world_mut()
         .resource_mut::<EventRecord>()
         .emit(SimulationEvent::SkillCast {
             caster: rival,
-            target: SkillTarget::Position(utils::at_cell(20, 20)),
+            target: SkillTarget::Cell(utils::cell(20, 20)),
             skill,
         });
 
@@ -894,16 +891,11 @@ const WEST: Vec2 = Vec2::NEG_X;
 /// And the other way, for a look set down facing back.
 const EAST: Vec2 = Vec2::X;
 
-/// A drawn peasant at `x` on row 20, carrying the render components a drawn
-/// entity has.
-fn spawn_worker(app: &mut App, x: &str) -> Entity {
-    let (worker, _) = utils::create_entity(
-        app.world_mut(),
-        "peasant",
-        utils::part_way(x, "20"),
-        Some(0),
-    )
-    .expect("peasant spawns");
+/// A drawn peasant anchored at the cell `(x, 20)`, carrying the render
+/// components a drawn entity has.
+fn spawn_worker(app: &mut App, x: u32) -> Entity {
+    let (worker, _) = utils::create_entity(app.world_mut(), "peasant", utils::cell(x, 20), Some(0))
+        .expect("peasant spawns");
     app.world_mut()
         .run_system_once(render::attach_sprites)
         .expect("sprites attach");
@@ -923,13 +915,14 @@ fn anchor_of(app: &App, entity: Entity) -> Vec3 {
         .anchor()
 }
 
-/// Moves the entity to `x` on row 20, as the simulation would.
+/// Moves the entity's middle to `x` on the middle of row 20, as the
+/// simulation would.
 fn set_position(app: &mut App, entity: Entity, x: &str) {
     app.world_mut()
         .entity_mut(entity)
         .get_mut::<LocationComponent>()
         .unwrap()
-        .position = utils::part_way(x, "20");
+        .position = utils::point(x, "20.5");
 }
 
 /// Sets `entity`'s look, as a tick of the simulation would.
@@ -1000,13 +993,9 @@ fn spawn_at(app: &mut App, type_name: &str, x: u32, y: u32) -> Entity {
 
 /// Spawns `type_name` at a cell for `owner`, with its sprite attached.
 fn spawn_owned_at(app: &mut App, type_name: &str, x: u32, y: u32, owner: PlayerId) -> Entity {
-    let (entity, _) = utils::create_entity(
-        app.world_mut(),
-        type_name,
-        utils::at_cell(x, y),
-        Some(owner),
-    )
-    .unwrap_or_else(|| panic!("{type_name} spawns"));
+    let (entity, _) =
+        utils::create_entity(app.world_mut(), type_name, utils::cell(x, y), Some(owner))
+            .unwrap_or_else(|| panic!("{type_name} spawns"));
     app.world_mut()
         .run_system_once(render::attach_sprites)
         .expect("sprites attach");
@@ -1043,8 +1032,8 @@ fn register_gun_wagon(app: &mut App) {
         EntityTypeDef::new("gun_wagon")
             .with_location(domain, CellSize::ONE, Solidity::Solid, ground)
             .with_movement(
-                FixedU64::from_num(0.3),
-                FixedU64::from_num(0.5),
+                utils::fixed("0.3"),
+                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(30),
                 FixedU64::from_num(30),
@@ -1094,7 +1083,7 @@ fn view_change_clear(app: &mut App) -> impl System<In = (), Out = ()> {
 /// One puff and one pulse for player 0's view: a worker of player 0's made
 /// out, then hidden, and a skill it casts on itself.
 fn seed_marks(app: &mut App) {
-    let worker = spawn_worker(app, "20");
+    let worker = spawn_worker(app, 20);
     let worker_id = app
         .world()
         .get::<EntityInfoComponent>(worker)

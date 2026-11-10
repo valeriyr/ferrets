@@ -174,7 +174,7 @@ fn body_is_set_down_under_standing_mover() {
         "a body that claims no cells is set down whoever stands over it"
     );
     assert_eq!(
-        utils::cell_of(app.world(), left[0]),
+        utils::anchor_of(app.world(), left[0]),
         CellPos::new(5, 5),
         "and it lies where the wraith fell, not beside the trooper standing there"
     );
@@ -195,7 +195,7 @@ fn solid_remains_are_laid_beside_burrowed_entity() {
 
     let left = bodies(&app);
     assert_eq!(left.len(), 1);
-    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(5, 4));
+    assert_eq!(utils::anchor_of(app.world(), left[0]), CellPos::new(5, 4));
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn burrowed_body_leaves_its_corpse_on_its_own_cell() {
 
     let left = bodies(&app);
     assert_eq!(left.len(), 1);
-    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), left[0]), CellPos::new(5, 5));
 }
 
 #[test]
@@ -231,13 +231,13 @@ fn dying_body_holds_its_ground_until_its_death_ends() {
     utils::run_ticks(&mut app, 1);
     assert!(entity_def::dying(app.world(), mole));
 
-    let placed = utils::create_entity(app.world_mut(), "soldier", utils::pos(5, 5), Some(0));
+    let placed = utils::create_entity(app.world_mut(), "soldier", utils::cell(5, 5), Some(0));
     assert!(placed.is_none());
 
     utils::run_ticks(&mut app, 3);
     let left = bodies(&app);
     assert_eq!(left.len(), 1);
-    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), left[0]), CellPos::new(5, 5));
 }
 
 #[test]
@@ -250,10 +250,10 @@ fn static_footprint_is_not_raised_over_body_lying_there() {
     let (_, killer) = utils::create_owned(&mut app, "soldier", 7, 5, 1);
     kill(&mut app, soldier, killer, Slain::Remains);
     let left = bodies(&app);
-    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(5, 5));
+    assert_eq!(utils::anchor_of(app.world(), left[0]), CellPos::new(5, 5));
 
     let place = |app: &mut App, x| {
-        utils::create_entity(app.world_mut(), "soldier", utils::pos(x, 5), Some(0)).is_some()
+        utils::create_entity(app.world_mut(), "soldier", utils::cell(x, 5), Some(0)).is_some()
     };
     assert!(!place(&mut app, 5));
     assert!(place(&mut app, 4));
@@ -275,7 +275,7 @@ fn death_beyond_remains_limit_leaves_no_body() {
 
     let lying: Vec<CellPos> = bodies(&app)
         .into_iter()
-        .map(|body| utils::cell_of(app.world(), body))
+        .map(|body| utils::anchor_of(app.world(), body))
         .collect();
     assert_eq!(
         lying,
@@ -367,19 +367,19 @@ fn remains_of_mover_between_cells_are_set_down_from_cells_it_stood_across() {
     });
     let (runner, _) = utils::create_owned(&mut app, "runner", 5, 5, 0);
     let (_, killer) = utils::create_owned(&mut app, "soldier", 20, 20, 1);
-    utils::walk_onto(&mut app, runner, utils::part_way("9.5", "5"), 30);
+    utils::walk_onto(&mut app, runner, utils::point("10", "5.5"), 30);
     assert_eq!(
         utils::position_of(app.world_mut(), runner),
-        utils::part_way("9.5", "5")
+        utils::point("10", "5.5")
     );
 
-    // Resting at x 9.5 the runner stands across (9, 5) and (10, 5); its husk
-    // is offered those cells first and lies on the first of them, not on the
-    // (10, 5) its position rounds to.
+    // Resting with its middle at x 10 the runner stands across (9, 5) and
+    // (10, 5); its husk is offered those cells first and lies on the first of
+    // them, not on the (10, 5) it is anchored at.
     kill(&mut app, runner, killer, Slain::Remains);
     let left = bodies(&app);
     assert_eq!(left.len(), 1);
-    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(9, 5));
+    assert_eq!(utils::anchor_of(app.world(), left[0]), CellPos::new(9, 5));
 }
 
 #[test]
@@ -449,7 +449,7 @@ fn remains_whose_domain_takes_water_lie_in_water() {
 
     let left = bodies(&app);
     assert_eq!(left.len(), 1);
-    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(10, 10));
+    assert_eq!(utils::anchor_of(app.world(), left[0]), CellPos::new(10, 10));
 }
 
 #[test]
@@ -491,7 +491,7 @@ fn remains_refused_where_body_fell_lie_at_most_cell_beside_it() {
 
     let left = bodies(&app);
     assert_eq!(left.len(), 1);
-    assert_eq!(utils::cell_of(app.world(), left[0]), CellPos::new(10, 8));
+    assert_eq!(utils::anchor_of(app.world(), left[0]), CellPos::new(10, 8));
 }
 
 #[test]
@@ -574,7 +574,7 @@ fn what_death_in_berth_stands_up_comes_out_of_job_around_it() {
         registry.register(warden);
     });
     let (hoard, hoard_id) =
-        utils::create_entity(app.world_mut(), "hoard", utils::pos(8, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "hoard", utils::cell(8, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(hoard)
         .unwrap()
@@ -598,7 +598,10 @@ fn what_death_in_berth_stands_up_comes_out_of_job_around_it() {
     assert_eq!(stood_up.len(), 1);
     utils::assert_adjacent_to_footprint(app.world_mut(), stood_up[0], hoard);
     // The cell above the hoard's middle column, the first the search offers.
-    assert_eq!(utils::cell_of(app.world(), stood_up[0]), CellPos::new(9, 4));
+    assert_eq!(
+        utils::anchor_of(app.world(), stood_up[0]),
+        CellPos::new(9, 4)
+    );
 }
 
 #[test]

@@ -81,24 +81,20 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
             let y1 = integer(table, index, "y1")?;
             let x2 = integer(table, index, "x2")?;
             let y2 = integer(table, index, "y2")?;
-            // The range is inclusive in cells: the far corner reaches up to,
-            // but not onto, the next cell's origin (containment includes the
-            // rectangle's boundary, and resting units sit exactly on origins).
+            // The range is inclusive in cells: the rectangle runs from the
+            // first cell's corner to the far corner of the last.
             let (far_x, far_y) = x2
                 .checked_add(1)
                 .zip(y2.checked_add(1))
                 .ok_or_else(|| element_error(index, "cell range out of range"))?;
-            let far = FixedUVec2::new(
-                FixedU64::from_num(far_x) - FixedU64::DELTA,
-                FixedU64::from_num(far_y) - FixedU64::DELTA,
-            );
+            let far = FixedUVec2::new(FixedU64::from_num(far_x), FixedU64::from_num(far_y));
             Ok(PlayerCommand::SelectByRect {
-                rect: FixedURect::from_corners(cell(x1, y1), far),
+                rect: FixedURect::from_corners(FixedUVec2::from(CellPos::new(x1, y1)), far),
                 mode: SelectMode::Replace,
             })
         }
         "move" => Ok(PlayerCommand::Move {
-            target: cell(integer(table, index, "x")?, integer(table, index, "y")?),
+            target: point(integer(table, index, "x")?, integer(table, index, "y")?),
             flush: flush(table, index)?,
         }),
         "attack" => Ok(PlayerCommand::Attack {
@@ -106,11 +102,11 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
             flush: flush(table, index)?,
         }),
         "attack_move" => Ok(PlayerCommand::AttackMove {
-            target: cell(integer(table, index, "x")?, integer(table, index, "y")?),
+            target: point(integer(table, index, "x")?, integer(table, index, "y")?),
             flush: flush(table, index)?,
         }),
         "patrol" => Ok(PlayerCommand::Patrol {
-            target: cell(integer(table, index, "x")?, integer(table, index, "y")?),
+            target: point(integer(table, index, "x")?, integer(table, index, "y")?),
             flush: flush(table, index)?,
         }),
         "guard" => Ok(PlayerCommand::Guard {
@@ -160,7 +156,7 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
                     optional_integer(table, index, "x")?,
                     optional_integer(table, index, "y")?,
                 ) {
-                    (Some(x), Some(y)) => Some(SkillTarget::Position(cell(x, y))),
+                    (Some(x), Some(y)) => Some(SkillTarget::Cell(CellPos::new(x, y))),
                     (None, None) => None,
                     (Some(_), None) | (None, Some(_)) => {
                         return Err(field_error(index, "x", "a cell aim names both x and y"));
@@ -180,7 +176,7 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
         "build" => Ok(PlayerCommand::BuildEntity {
             builder: SimulationId(integer(table, index, "builder")?),
             type_name: field(table, index, "type_name")?,
-            position: cell(integer(table, index, "x")?, integer(table, index, "y")?),
+            anchor: CellPos::new(integer(table, index, "x")?, integer(table, index, "y")?),
             flush: flush(table, index)?,
         }),
         "load" => Ok(PlayerCommand::Load {
@@ -192,7 +188,7 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
             let x = optional_integer(table, index, "x")?;
             let y = optional_integer(table, index, "y")?;
             let at = match (x, y) {
-                (Some(x), Some(y)) => Some(cell(x, y)),
+                (Some(x), Some(y)) => Some(CellPos::new(x, y)),
                 (None, None) => None,
                 _ => return Err(element_error(index, "unload cell needs both x and y")),
             };
@@ -232,9 +228,9 @@ fn command(table: &Table, index: usize, names: &CommandNames) -> crate::Result<P
     }
 }
 
-/// World position of the cell's origin corner.
-fn cell(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::from(CellPos::new(x, y))
+/// The middle of the cell at `(x, y)`.
+fn point(x: u32, y: u32) -> FixedUVec2 {
+    CellPos::new(x, y).middle()
 }
 
 /// The `caster` of a use_skill command: an entity id, or the string
@@ -286,7 +282,7 @@ fn rally_target(table: &Table, index: usize) -> crate::Result<Option<RallyTarget
             "rally takes either a target or a cell, not both",
         )),
         (Some(id), None, None) => Ok(Some(RallyTarget::Entity(SimulationId(id)))),
-        (None, Some(x), Some(y)) => Ok(Some(RallyTarget::Position(cell(x, y)))),
+        (None, Some(x), Some(y)) => Ok(Some(RallyTarget::Position(point(x, y)))),
         (None, None, None) => Ok(None),
         (None, _, _) => Err(element_error(index, "rally cell needs both x and y")),
     }
@@ -303,7 +299,7 @@ fn attack_target(table: &Table, index: usize) -> crate::Result<AttackTarget> {
             "attack takes either a target or a cell, not both",
         )),
         (Some(id), None, None) => Ok(AttackTarget::Entity(SimulationId(id))),
-        (None, Some(x), Some(y)) => Ok(AttackTarget::Position(cell(x, y))),
+        (None, Some(x), Some(y)) => Ok(AttackTarget::Cell(CellPos::new(x, y))),
         (None, None, None) => Err(element_error(index, "attack needs a target or a cell")),
         (None, _, _) => Err(element_error(index, "attack cell needs both x and y")),
     }

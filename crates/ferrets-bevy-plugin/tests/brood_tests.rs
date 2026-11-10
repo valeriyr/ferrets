@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
     attack::{AttackDef, Delivery, Slain, Weapon},
+    berths::BerthGroup,
     brood::OrphanFate,
     build::BuilderAttendance,
     entity_buffs::{EntityBuffDef, Lasting},
@@ -29,7 +30,7 @@ use ferrets_content::{
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::{FixedU64, fixed_urect::FixedURect};
+use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_simulation::{
     brood,
@@ -152,7 +153,7 @@ fn rising_breeder_counts_no_time() {
         PlayerCommand::BuildEntity {
             builder: digger,
             type_name: "ready_hatch".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -216,7 +217,7 @@ fn period_read_from_breeder_stat() {
 fn berth_beyond_map_edge_is_held_at_edge_cell() {
     // The map is 32 cells tall; a hatch on its last three rows has its berth
     // row at y 32.5, off the map, so the seat is held at the edge cell's
-    // middle, 31.5, and the one-cell grub's corner sits at 31.
+    // middle, 31.5, where the one-cell grub's middle sits.
     let mut app = utils::brood_app(MovementModel::Cell);
     utils::place(&mut app, "hatch", 10, 29, 0);
     utils::run_ticks(&mut app, 10);
@@ -224,7 +225,33 @@ fn berth_beyond_map_edge_is_held_at_edge_cell() {
 
     assert_eq!(
         entity_def::position(app.world(), grub).y,
-        FixedU64::from_num(31)
+        utils::fixed("31.5")
+    );
+}
+
+#[test]
+fn broodling_seated_past_map_edge_is_held_on_map() {
+    // A hatch at (0, 10) whose one berth lies at (−1, 1.5) from its anchor:
+    // 0 − 1 floors to 0 and the one-cell grub is held half a cell in, at
+    // 0.5; 10 + 1.5 = 11.5 on y.
+    let mut app = utils::brood_app(MovementModel::Cell);
+    {
+        let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
+        let mut edge_hatch = registry
+            .entity("hatch")
+            .expect("the brood content declares a hatch")
+            .clone()
+            .with_berths([("brood", BerthGroup::new([utils::berth("-1", "1.5")], 1))]);
+        edge_hatch.name = "edge_hatch".to_string();
+        registry.register(edge_hatch);
+    }
+    utils::place(&mut app, "edge_hatch", 0, 10, 0);
+    utils::run_ticks(&mut app, 10);
+    let grub = alive_of_type(&mut app, "grub")[0];
+
+    assert_eq!(
+        entity_def::position(app.world(), grub),
+        utils::point("0.5", "11.5")
     );
 }
 
@@ -258,7 +285,7 @@ fn seated_broodlings_hold_no_cells() {
     utils::run_ticks(&mut app, 10);
     let grub = alive_of_type(&mut app, "grub")[0];
 
-    let cell = utils::cell_of(app.world(), grub);
+    let cell = utils::anchor_of(app.world(), grub);
     let map = app.world().resource::<Map>();
     assert!(!map.nav_grid().is_occupied(utils::GROUND, cell));
     assert!(
@@ -277,7 +304,7 @@ fn berths_may_ring_footprint() {
     // The brood berths lie on the row below the 3×3 footprint at (10, 10);
     // every point is one cell from the footprint, so the first seat wins the
     // tie: point (10.5, 13.5), a one-cell body's corner at (10, 13).
-    assert_eq!(utils::cell_of(app.world(), grub), CellPos::new(10, 13));
+    assert_eq!(utils::anchor_of(app.world(), grub), CellPos::new(10, 13));
 }
 
 #[test]
@@ -327,7 +354,10 @@ fn broodlings_are_boxed_like_units() {
     utils::push_command(
         &mut app,
         PlayerCommand::SelectByRect {
-            rect: FixedURect::new(utils::pos(9, 13), utils::pos(14, 14)),
+            rect: FixedURect::new(
+                FixedUVec2::from(utils::cell(9, 13)),
+                FixedUVec2::from(utils::cell(14, 14)),
+            ),
             mode: SelectMode::Replace,
         },
     );
@@ -440,7 +470,7 @@ fn held_broodling_refuses_work() {
     for order in [
         Order::Harvest { target: lode_id },
         Order::Build {
-            task: BuildTask::found("ready_hatch", utils::pos(20, 20)),
+            task: BuildTask::found("ready_hatch", utils::cell(20, 20)),
         },
         Order::Build {
             task: BuildTask::Join { site: site_id },
@@ -483,7 +513,7 @@ fn held_broodling_holds_attack_on_target_it_notices_out_of_reach() {
     // waiting for the target to come in reach.
     let (mut app, pup) = kennel_with_seated_pup();
     let seated = utils::position_of(app.world(), pup);
-    let seat = utils::cell_of(app.world(), pup);
+    let seat = utils::anchor_of(app.world(), pup);
     let mound = utils::place(&mut app, "mound", seat.x + 4, seat.y, 0);
     let mound_id = entity_def::simulation_id(app.world(), mound);
     let pup_id = entity_def::simulation_id(app.world(), pup);
@@ -504,7 +534,7 @@ fn held_broodling_on_defend_leaves_enemy_past_its_seat_alone() {
     // it reaches from its seat, where it acts: it picks nothing, its queue
     // empty through ten ticks — several acquisition periods.
     let (mut app, pup) = kennel_with_two_players();
-    let seat = utils::cell_of(app.world(), pup);
+    let seat = utils::anchor_of(app.world(), pup);
     utils::place(&mut app, "dummy", seat.x + 4, seat.y, 1);
 
     utils::run_ticks(&mut app, 10);
@@ -519,7 +549,7 @@ fn held_broodling_on_defend_engages_enemy_in_reach_of_its_seat() {
     // weapon: acquiring on Defend, it attacks from its berth, with no way home
     // queued behind the attack for a body that may not walk.
     let (mut app, pup) = kennel_with_two_players();
-    let seat = utils::cell_of(app.world(), pup);
+    let seat = utils::anchor_of(app.world(), pup);
     let seated = utils::position_of(app.world(), pup);
     let dummy = utils::place(&mut app, "dummy", seat.x, seat.y + 1, 1);
     let dummy_id = entity_def::simulation_id(app.world(), dummy);
@@ -545,7 +575,7 @@ fn held_broodling_casts_only_on_what_its_seat_reaches() {
     // past its seat is refused before the order is given, one three off is
     // not.
     let (mut app, pup) = kennel_with_seated_pup();
-    let seat = utils::cell_of(app.world(), pup);
+    let seat = utils::anchor_of(app.world(), pup);
     let far = utils::place(&mut app, "pup", seat.x, seat.y + 4, 0);
     let near = utils::place(&mut app, "pup", seat.x, seat.y + 3, 0);
     utils::run_ticks(&mut app, 1);
@@ -574,7 +604,7 @@ fn held_broodling_on_flee_stays_idle_in_its_berth_when_hit() {
     // since before the first strike.
     let (mut app, pup) = kennel_with_two_players();
     let seated = utils::position_of(app.world(), pup);
-    let seat = utils::cell_of(app.world(), pup);
+    let seat = utils::anchor_of(app.world(), pup);
     let pup_id = entity_def::simulation_id(app.world(), pup);
     utils::select(&mut app, pup_id);
     utils::push_command(
@@ -622,7 +652,7 @@ fn breeder_seating_broodling_is_refused_building_from_inside() {
 
     // Going inside would take the delver off the map from under its mite.
     let order = Order::Build {
-        task: BuildTask::found("ready_hatch", utils::pos(10, 10)),
+        task: BuildTask::found("ready_hatch", utils::cell(10, 10)),
     };
     assert_eq!(
         orders::can_start(app.world(), delver, &order),
@@ -633,7 +663,7 @@ fn breeder_seating_broodling_is_refused_building_from_inside() {
         PlayerCommand::BuildEntity {
             builder: delver_id,
             type_name: "ready_hatch".into(),
-            position: utils::pos(10, 10),
+            anchor: utils::cell(10, 10),
             flush: true,
         },
     );
@@ -652,7 +682,7 @@ fn breeder_given_broodling_on_way_gives_up_building_from_inside() {
         PlayerCommand::BuildEntity {
             builder: delver_id,
             type_name: "ready_hatch".into(),
-            position: utils::pos(20, 20),
+            anchor: utils::cell(20, 20),
             flush: true,
         },
     );
@@ -673,7 +703,7 @@ fn breeder_given_broodling_on_way_gives_up_building_from_inside() {
     assert_eq!(alive_of_type(&mut app, "ready_hatch").len(), 0);
     // It stands where the walk ended, in build range 1 of the ground at
     // (20, 20).
-    assert_eq!(utils::cell_of(app.world(), delver), CellPos::new(19, 19));
+    assert_eq!(utils::anchor_of(app.world(), delver), CellPos::new(19, 19));
 }
 
 #[test]
@@ -681,7 +711,7 @@ fn breeder_seating_broodling_is_refused_harvesting_from_inside() {
     let mut app = utils::brood_app(MovementModel::Cell);
     let (delver, _) = utils::create_owned(&mut app, "delver", 5, 5, 0);
     let (_, lode_id) =
-        utils::create_entity(app.world_mut(), "lode", utils::pos(10, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "lode", utils::cell(10, 5), None).unwrap();
     utils::run_ticks(&mut app, 20);
     let mite = alive_of_type(&mut app, "mite")[0];
     assert!(entity_def::attached(app.world(), mite));
@@ -734,7 +764,7 @@ fn breeder_given_broodling_on_way_gives_up_harvesting_from_inside() {
     let mut app = utils::brood_app(MovementModel::Cell);
     let (delver, delver_id) = utils::create_owned(&mut app, "delver", 5, 5, 0);
     let (lode, lode_id) =
-        utils::create_entity(app.world_mut(), "lode", utils::pos(12, 5), None).unwrap();
+        utils::create_entity(app.world_mut(), "lode", utils::cell(12, 5), None).unwrap();
     app.world_mut()
         .get_mut::<ResourceSourceComponent>(lode)
         .unwrap()
@@ -765,7 +795,7 @@ fn breeder_given_broodling_on_way_gives_up_harvesting_from_inside() {
     assert!(!queued(&app, delver, |_| true));
     // It stands where the walk ended, the first cell in harvest range 1 of the
     // lode at (12, 5) its path reached.
-    assert_eq!(utils::cell_of(app.world(), delver), CellPos::new(11, 6));
+    assert_eq!(utils::anchor_of(app.world(), delver), CellPos::new(11, 6));
 }
 
 #[test]
@@ -798,7 +828,7 @@ fn breeder_given_broodling_on_way_gives_up_mending_from_inside() {
     assert!(!queued(&app, delver, |_| true));
     // It stands where the walk ended, in repair range 1 of the sow at
     // (20, 20).
-    assert_eq!(utils::cell_of(app.world(), delver), CellPos::new(19, 19));
+    assert_eq!(utils::anchor_of(app.world(), delver), CellPos::new(19, 19));
 }
 
 #[test]
@@ -966,7 +996,7 @@ fn broodling_steps_out_of_footprint_before_changing() {
     // (10, 13), takes the egg.
     assert_eq!(type_name_of(&app, grub), "egg");
     assert!(!entity_def::attached(app.world(), grub));
-    assert_eq!(utils::cell_of(app.world(), grub), CellPos::new(10, 13));
+    assert_eq!(utils::anchor_of(app.world(), grub), CellPos::new(10, 13));
     assert_eq!(broodlings_of(&app, hatch).len(), 0);
     assert_eq!(utils::gold(app.world()), 0);
 }
@@ -984,7 +1014,7 @@ fn interim_form_holds_ground_its_own_solidity_says() {
 
     order_morph(&mut app, grub, "worker");
     utils::run_ticks(&mut app, 1);
-    let cell = utils::cell_of(app.world(), grub);
+    let cell = utils::anchor_of(app.world(), grub);
     let map = app.world().resource::<Map>();
     assert!(map.nav_grid().is_statically_occupied(utils::GROUND, cell));
 }
@@ -999,7 +1029,7 @@ fn step_out_searches_ground_interim_form_fits() {
 
     // A worker stands on the grub's cell: a passable grub shares it, an egg
     // cannot, so the egg is laid on the next free cell.
-    let cell = utils::cell_of(app.world(), grub);
+    let cell = utils::anchor_of(app.world(), grub);
     utils::create_owned(&mut app, "worker", cell.x, cell.y, 0);
     order_morph(&mut app, grub, "worker");
     utils::run_ticks(&mut app, 1);
@@ -1008,7 +1038,7 @@ fn step_out_searches_ground_interim_form_fits() {
     // nearest that middle, (9, 13) — (10, 12) above it is the hatch's own
     // ground.
     assert_eq!(type_name_of(&app, grub), "egg");
-    assert_eq!(utils::cell_of(app.world(), grub), CellPos::new(9, 13));
+    assert_eq!(utils::anchor_of(app.world(), grub), CellPos::new(9, 13));
 }
 
 #[test]
@@ -1040,11 +1070,11 @@ fn landing_takes_cell_interim_form_stood_on() {
 
     order_morph(&mut app, grub, "worker");
     utils::run_ticks(&mut app, 1);
-    let egg_cell = utils::cell_of(app.world(), grub);
+    let egg_cell = utils::anchor_of(app.world(), grub);
     utils::run_ticks(&mut app, 10);
 
     assert_eq!(type_name_of(&app, grub), "worker");
-    assert_eq!(utils::cell_of(app.world(), grub), egg_cell);
+    assert_eq!(utils::anchor_of(app.world(), grub), egg_cell);
     assert!(app.world().get::<BredComponent>(grub).is_none());
 }
 
@@ -1056,15 +1086,15 @@ fn nearby_landing_moves_form_that_does_not_fit_where_it_grew() {
     utils::run_ticks(&mut app, 10);
     let grub = alive_of_type(&mut app, "grub")[0];
 
-    // A 3×3 recentered on the egg's cell would overlap the hatch; it lands on
-    // the nearest ground that takes it instead.
+    // A 3×3 with its middle on the egg's cell would overlap the hatch; it lands
+    // on the nearest ground that takes it instead.
     order_morph(&mut app, grub, "bulk");
     utils::run_ticks(&mut app, 11);
 
     // The egg stood on (10, 13); a 3×3 anchored there covers rows 13–15,
     // clear of the hatch, so the search takes it as it is.
     assert_eq!(type_name_of(&app, grub), "bulk");
-    assert_eq!(utils::cell_of(app.world(), grub), CellPos::new(10, 13));
+    assert_eq!(utils::anchor_of(app.world(), grub), CellPos::new(10, 13));
 }
 
 #[test]
@@ -1192,7 +1222,7 @@ fn reserving_change_steps_out_where_new_form_settles_clear_of_breeder() {
     // (9, 13) and (11, 13), settling at (8, 12) and (10, 12), over it too, then
     // (10, 14), whose 3×3 settles at (9, 13), clear of it.
     assert_eq!(type_name_of(&app, grub), "mound");
-    assert_eq!(utils::cell_of(app.world(), grub), CellPos::new(9, 13));
+    assert_eq!(utils::anchor_of(app.world(), grub), CellPos::new(9, 13));
 }
 
 #[test]
@@ -2036,7 +2066,7 @@ fn broodlings_detached_from_berths_inside_breeder_stand_beside_it() {
     assert_eq!(piglets.len(), 2);
     let mut cells: Vec<CellPos> = piglets
         .iter()
-        .map(|&piglet| utils::cell_of(app.world(), piglet))
+        .map(|&piglet| utils::anchor_of(app.world(), piglet))
         .collect();
     cells.sort_unstable();
     assert_eq!(cells, vec![CellPos::new(9, 11), CellPos::new(11, 9)]);

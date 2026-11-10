@@ -96,16 +96,13 @@ fn think_returns_commands_as_player_commands() {
             },
             PlayerCommand::SelectByRect {
                 rect: FixedURect::from_corners(
-                    cell(1, 2),
-                    FixedUVec2::new(
-                        FixedU64::from_num(4) - FixedU64::DELTA,
-                        FixedU64::from_num(5) - FixedU64::DELTA,
-                    ),
+                    FixedUVec2::from(CellPos::new(1, 2)),
+                    FixedUVec2::from(CellPos::new(4, 5)),
                 ),
                 mode: SelectMode::Replace,
             },
             PlayerCommand::Move {
-                target: cell(5, 6),
+                target: utils::point("5.5", "6.5"),
                 flush: true,
             },
             PlayerCommand::Attack {
@@ -123,12 +120,12 @@ fn think_returns_commands_as_player_commands() {
             PlayerCommand::BuildEntity {
                 builder: SimulationId(11),
                 type_name: "barracks".to_string(),
-                position: cell(12, 13),
+                anchor: CellPos::new(12, 13),
                 flush: true,
             },
             PlayerCommand::SetRallyPoint {
                 entity: SimulationId(14),
-                target: Some(RallyTarget::Position(cell(15, 16))),
+                target: Some(RallyTarget::Position(utils::point("15.5", "16.5"))),
             },
             PlayerCommand::SetRallyPoint {
                 entity: SimulationId(17),
@@ -139,11 +136,11 @@ fn think_returns_commands_as_player_commands() {
                 target: None,
             },
             PlayerCommand::AttackMove {
-                target: cell(20, 21),
+                target: utils::point("20.5", "21.5"),
                 flush: true,
             },
             PlayerCommand::Patrol {
-                target: cell(22, 23),
+                target: utils::point("22.5", "23.5"),
                 flush: false,
             },
             PlayerCommand::Guard {
@@ -424,7 +421,7 @@ fn accepts_integral_floats_in_command_fields() {
     assert_eq!(
         commands,
         vec![PlayerCommand::Move {
-            target: cell(5, 0),
+            target: utils::point("5.5", "0.5"),
             flush: true,
         }]
     );
@@ -444,14 +441,14 @@ fn state_persists_across_think_calls() {
     assert_eq!(
         first,
         vec![PlayerCommand::Move {
-            target: cell(1, 0),
+            target: utils::point("1.5", "0.5"),
             flush: true,
         }]
     );
     assert_eq!(
         second,
         vec![PlayerCommand::Move {
-            target: cell(2, 0),
+            target: utils::point("2.5", "0.5"),
             flush: true,
         }]
     );
@@ -470,7 +467,7 @@ fn two_runtimes_from_one_script_have_independent_state() {
     assert_eq!(
         first_commands,
         vec![PlayerCommand::Move {
-            target: cell(2, 0),
+            target: utils::point("2.5", "0.5"),
             flush: true,
         }]
     );
@@ -479,7 +476,7 @@ fn two_runtimes_from_one_script_have_independent_state() {
     assert_eq!(
         second_commands,
         vec![PlayerCommand::Move {
-            target: cell(1, 0),
+            target: utils::point("1.5", "0.5"),
             flush: true,
         }]
     );
@@ -887,8 +884,9 @@ fn scripts_read_view_and_content_tables() {
 
     assert_eq!(
         commands,
+        // The cell (120 gold + 50 price, the hall's 8): its middle.
         vec![PlayerCommand::Move {
-            target: cell(120 + 50, 8),
+            target: utils::point("170.5", "8.5"),
             flush: true,
         }]
     );
@@ -911,7 +909,7 @@ fn scripts_read_bodies_on_ground() {
     assert_eq!(
         commands,
         vec![PlayerCommand::Move {
-            target: cell(6, 7),
+            target: utils::point("6.5", "7.5"),
             flush: true,
         }]
     );
@@ -949,10 +947,6 @@ const COUNTER: &str = r#"
         end,
     })
 "#;
-
-fn cell(x: u32, y: u32) -> FixedUVec2 {
-    FixedUVec2::from(CellPos::new(x, y))
-}
 
 /// A content view built from a real registry holding the `smithing` research
 /// (30 gold, 200 ticks, requires "lab") and the free `tactics` unlock, plus

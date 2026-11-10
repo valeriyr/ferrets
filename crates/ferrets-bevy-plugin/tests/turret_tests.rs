@@ -30,11 +30,11 @@ fn spreading_keep_answers_every_attacker() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (keep, _) =
-        utils::create_entity(world, "spreading_keep", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "spreading_keep", utils::cell(10, 10), Some(0)).unwrap();
     let raiders: Vec<SimulationId> = [(9, 8), (16, 9), (9, 16), (16, 16)]
         .into_iter()
         .map(|(x, y)| {
-            utils::create_entity(world, "hulk", utils::pos(x, y), Some(1))
+            utils::create_entity(world, "hulk", utils::cell(x, y), Some(1))
                 .unwrap()
                 .1
         })
@@ -60,9 +60,9 @@ fn focused_keep_puts_every_gun_on_one_attacker() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (keep, _) =
-        utils::create_entity(world, "focused_keep", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "focused_keep", utils::cell(10, 10), Some(0)).unwrap();
     for (x, y) in [(9, 8), (16, 9), (9, 16), (16, 16)] {
-        utils::create_entity(world, "hulk", utils::pos(x, y), Some(1)).unwrap();
+        utils::create_entity(world, "hulk", utils::cell(x, y), Some(1)).unwrap();
     }
 
     utils::run_ticks(&mut app, 12);
@@ -80,8 +80,8 @@ fn spreading_keep_answers_attacker_that_arrives_later() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (keep, _) =
-        utils::create_entity(world, "spreading_keep", utils::pos(10, 10), Some(0)).unwrap();
-    let (_, first) = utils::create_entity(world, "hulk", utils::pos(9, 8), Some(1)).unwrap();
+        utils::create_entity(world, "spreading_keep", utils::cell(10, 10), Some(0)).unwrap();
+    let (_, first) = utils::create_entity(world, "hulk", utils::cell(9, 8), Some(1)).unwrap();
     utils::run_ticks(&mut app, 12);
     assert_eq!(
         quarries_of(&app, keep),
@@ -91,7 +91,7 @@ fn spreading_keep_answers_attacker_that_arrives_later() {
 
     // The other side, well after the guns settled on the first.
     let (_, second) =
-        utils::create_entity(app.world_mut(), "hulk", utils::pos(16, 16), Some(1)).unwrap();
+        utils::create_entity(app.world_mut(), "hulk", utils::cell(16, 16), Some(1)).unwrap();
     utils::run_ticks(&mut app, 8);
 
     let worked = quarries_of(&app, keep);
@@ -114,8 +114,8 @@ fn spreading_keep_falls_back_onto_lone_attacker() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (keep, _) =
-        utils::create_entity(world, "spreading_keep", utils::pos(10, 10), Some(0)).unwrap();
-    let (_, raider) = utils::create_entity(world, "hulk", utils::pos(9, 8), Some(1)).unwrap();
+        utils::create_entity(world, "spreading_keep", utils::cell(10, 10), Some(0)).unwrap();
+    let (_, raider) = utils::create_entity(world, "hulk", utils::cell(9, 8), Some(1)).unwrap();
 
     utils::run_ticks(&mut app, 12);
 
@@ -134,8 +134,8 @@ fn working_gun_holds_nearer_fight_against_fresh_attacker() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (keep, keep_id) =
-        utils::create_entity(world, "spreading_keep", utils::pos(10, 10), Some(1)).unwrap();
-    let (_, near) = utils::create_entity(world, "hulk", utils::pos(9, 9), Some(0)).unwrap();
+        utils::create_entity(world, "spreading_keep", utils::cell(10, 10), Some(1)).unwrap();
+    let (_, near) = utils::create_entity(world, "hulk", utils::cell(9, 9), Some(0)).unwrap();
     utils::run_ticks(&mut app, 12);
     assert_eq!(
         quarries_of(&app, keep),
@@ -146,7 +146,7 @@ fn working_gun_holds_nearer_fight_against_fresh_attacker() {
     // A second attacker set on the far corner — the freshest mark there is, and
     // farther from the first gun's corner than what that gun holds.
     let (_, soldier_id) =
-        utils::create_entity(app.world_mut(), "soldier", utils::pos(15, 15), Some(0)).unwrap();
+        utils::create_entity(app.world_mut(), "soldier", utils::cell(15, 15), Some(0)).unwrap();
     utils::select(&mut app, soldier_id);
     utils::push_command(
         &mut app,
@@ -175,9 +175,9 @@ fn queued_attack_does_not_bind_guns_early() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (wagon, wagon_id) =
-        utils::create_entity(world, "rolling_gun", utils::pos(5, 5), Some(0)).unwrap();
-    let (_, near) = utils::create_entity(world, "hulk", utils::pos(6, 6), Some(1)).unwrap();
-    let (_, far) = utils::create_entity(world, "hulk", utils::pos(12, 9), Some(1)).unwrap();
+        utils::create_entity(world, "rolling_gun", utils::cell(5, 5), Some(0)).unwrap();
+    let (_, near) = utils::create_entity(world, "hulk", utils::cell(6, 6), Some(1)).unwrap();
+    let (_, far) = utils::create_entity(world, "hulk", utils::cell(12, 9), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -211,11 +211,12 @@ fn queued_attack_does_not_bind_guns_early() {
 fn attack_closes_to_reach_of_weapon_serving_target() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
-    let (_, escort_id) = utils::create_entity(world, "escort", utils::pos(2, 10), Some(0)).unwrap();
+    let (_, escort_id) =
+        utils::create_entity(world, "escort", utils::cell(2, 10), Some(0)).unwrap();
     // Ten cells out: exactly the anti-air gun's reach, five times the spear's —
     // judged by the gun, the escort would already be standing where it can never
     // land a hit.
-    let (_, dummy_id) = utils::create_entity(world, "dummy", utils::pos(12, 10), Some(1)).unwrap();
+    let (_, dummy_id) = utils::create_entity(world, "dummy", utils::cell(12, 10), Some(1)).unwrap();
 
     utils::select(&mut app, escort_id);
     utils::push_command(
@@ -242,10 +243,10 @@ fn ordered_keep_does_not_turn_its_walls() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (keep, keep_id) =
-        utils::create_entity(world, "bastion", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(world, "bastion", utils::cell(5, 5), Some(0)).unwrap();
     // Beyond the gun's reach of eight from the keep's edge, inside its notice of
     // twelve: the waiting-to-reach path is exactly where a hull was turned.
-    let (_, target_id) = utils::create_entity(world, "hulk", utils::pos(16, 5), Some(1)).unwrap();
+    let (_, target_id) = utils::create_entity(world, "hulk", utils::cell(16, 5), Some(1)).unwrap();
 
     utils::select(&mut app, keep_id);
     utils::push_command(
@@ -276,14 +277,14 @@ fn ordered_cell_is_worked_by_cell_aimed_gun_alone() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, bombardier_id) =
-        utils::create_entity(world, "bombardier", utils::pos(5, 10), Some(0)).unwrap();
-    let (bystander, _) = utils::create_entity(world, "hulk", utils::pos(8, 10), Some(1)).unwrap();
+        utils::create_entity(world, "bombardier", utils::cell(5, 10), Some(0)).unwrap();
+    let (bystander, _) = utils::create_entity(world, "hulk", utils::cell(8, 10), Some(1)).unwrap();
 
     utils::select(&mut app, bombardier_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: AttackTarget::Position(utils::pos(8, 10)),
+            target: AttackTarget::Cell(utils::cell(8, 10)),
             flush: true,
         },
     );
@@ -297,20 +298,19 @@ fn ordered_cell_is_worked_by_cell_aimed_gun_alone() {
 }
 
 #[test]
-fn ordered_point_is_reached_at_cell_it_lies_in() {
+fn ordered_cell_past_gun_reach_is_not_worked() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, bombardier_id) =
-        utils::create_entity(world, "bombardier", utils::pos(13, 10), Some(0)).unwrap();
-    let (bystander, _) = utils::create_entity(world, "hulk", utils::pos(8, 10), Some(1)).unwrap();
+        utils::create_entity(world, "bombardier", utils::cell(13, 10), Some(0)).unwrap();
+    let (bystander, _) = utils::create_entity(world, "hulk", utils::cell(8, 10), Some(1)).unwrap();
 
-    // (8.6, 10) lies in cell (8, 10), five cells off, one past the gun's four,
-    // though the point is nearer the cell's side toward the gun.
+    // The cell (8, 10) lies five cells off, one past the gun's four.
     utils::select(&mut app, bombardier_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: AttackTarget::Position(utils::part_way("8.6", "10")),
+            target: AttackTarget::Cell(utils::cell(8, 10)),
             flush: true,
         },
     );
@@ -326,13 +326,13 @@ fn ordered_cell_leaves_instant_gun_free() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (battery, battery_id) =
-        utils::create_entity(world, "battery", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "battery", utils::cell(5, 10), Some(0)).unwrap();
 
     utils::select(&mut app, battery_id);
     utils::push_command(
         &mut app,
         PlayerCommand::Attack {
-            target: AttackTarget::Position(utils::pos(8, 10)),
+            target: AttackTarget::Cell(utils::cell(8, 10)),
             flush: true,
         },
     );
@@ -357,8 +357,8 @@ fn attack_move_stops_for_what_turret_notices() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, prowler_id) =
-        utils::create_entity(world, "prowler", utils::pos(2, 10), Some(0)).unwrap();
-    let (_, dummy_id) = utils::create_entity(world, "dummy", utils::pos(10, 7), Some(1)).unwrap();
+        utils::create_entity(world, "prowler", utils::cell(2, 10), Some(0)).unwrap();
+    let (_, dummy_id) = utils::create_entity(world, "dummy", utils::cell(10, 7), Some(1)).unwrap();
 
     utils::select(&mut app, prowler_id);
     utils::push_command(
@@ -388,8 +388,8 @@ fn held_fire_takes_guns_off_what_they_hold() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (keep, keep_id) =
-        utils::create_entity(world, "spreading_keep", utils::pos(10, 10), Some(0)).unwrap();
-    utils::create_entity(world, "hulk", utils::pos(9, 8), Some(1)).unwrap();
+        utils::create_entity(world, "spreading_keep", utils::cell(10, 10), Some(0)).unwrap();
+    utils::create_entity(world, "hulk", utils::cell(9, 8), Some(1)).unwrap();
 
     utils::run_ticks(&mut app, 12);
     assert_eq!(
@@ -425,10 +425,10 @@ fn gun_recovers_from_phase_beyond_its_cycle() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (keep, keep_id) =
-        utils::create_entity(world, "bastion", utils::pos(5, 5), Some(0)).unwrap();
+        utils::create_entity(world, "bastion", utils::cell(5, 5), Some(0)).unwrap();
     // Due south, the way the gun is mounted, so its narrow arc gates nothing.
     let (target, target_id) =
-        utils::create_entity(world, "hulk", utils::pos(5, 10), Some(1)).unwrap();
+        utils::create_entity(world, "hulk", utils::cell(5, 10), Some(1)).unwrap();
 
     utils::select(&mut app, keep_id);
     utils::push_command(
@@ -469,11 +469,11 @@ fn order_binds_every_gun_that_can_take_it() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (keep, keep_id) =
-        utils::create_entity(world, "spreading_keep", utils::pos(10, 10), Some(0)).unwrap();
+        utils::create_entity(world, "spreading_keep", utils::cell(10, 10), Some(0)).unwrap();
     for (x, y) in [(9, 8), (16, 9), (9, 16)] {
-        utils::create_entity(world, "hulk", utils::pos(x, y), Some(1)).unwrap();
+        utils::create_entity(world, "hulk", utils::cell(x, y), Some(1)).unwrap();
     }
-    let (_, named) = utils::create_entity(world, "hulk", utils::pos(16, 16), Some(1)).unwrap();
+    let (_, named) = utils::create_entity(world, "hulk", utils::cell(16, 16), Some(1)).unwrap();
 
     // Spread had them on four different raiders; the order overrides all of it.
     utils::run_ticks(&mut app, 12);
@@ -501,8 +501,9 @@ fn turret_only_body_walks_to_what_it_was_ordered_onto() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (wagon, wagon_id) =
-        utils::create_entity(world, "rolling_gun", utils::pos(5, 10), Some(0)).unwrap();
-    let (_, target_id) = utils::create_entity(world, "dummy", utils::pos(17, 10), Some(1)).unwrap();
+        utils::create_entity(world, "rolling_gun", utils::cell(5, 10), Some(0)).unwrap();
+    let (_, target_id) =
+        utils::create_entity(world, "dummy", utils::cell(17, 10), Some(1)).unwrap();
 
     utils::select(&mut app, wagon_id);
     utils::push_command(
@@ -520,7 +521,7 @@ fn turret_only_body_walks_to_what_it_was_ordered_onto() {
         "it killed what it was sent at"
     );
     assert!(
-        utils::position_of(app.world(), wagon).x > utils::pos(10, 10).x,
+        utils::position_of(app.world(), wagon).x > utils::cell(10, 10).x,
         "having walked most of the way there to do it"
     );
 }
@@ -535,8 +536,8 @@ fn turret_only_body_walks_to_what_it_was_ordered_onto() {
 fn body_weapon_and_turret_both_fight() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
-    utils::create_entity(world, "gunship", utils::pos(5, 10), Some(0)).unwrap();
-    let (target, _) = utils::create_entity(world, "dummy", utils::pos(5, 8), Some(1)).unwrap();
+    utils::create_entity(world, "gunship", utils::cell(5, 10), Some(0)).unwrap();
+    let (target, _) = utils::create_entity(world, "dummy", utils::cell(5, 8), Some(1)).unwrap();
 
     // Ten ticks is one cycle apiece: two weapons, two hits, and a dummy carrying
     // twenty health has none left.
@@ -555,8 +556,8 @@ fn body_weapon_and_turret_both_fight() {
 fn turret_answers_what_body_weapon_cannot_reach() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
-    utils::create_entity(world, "flak_post", utils::pos(5, 5), Some(0)).unwrap();
-    let (kite, _) = utils::create_entity(world, "kite", utils::pos(5, 3), Some(1)).unwrap();
+    utils::create_entity(world, "flak_post", utils::cell(5, 5), Some(0)).unwrap();
+    let (kite, _) = utils::create_entity(world, "kite", utils::cell(5, 3), Some(1)).unwrap();
 
     utils::run_ticks(&mut app, 16);
 
@@ -574,10 +575,10 @@ fn body_weapon_waits_beyond_its_own_reach() {
     let mut app = utils::combat_app();
     let world = app.world_mut();
     let (_, longarm_id) =
-        utils::create_entity(world, "longarm", utils::pos(5, 10), Some(0)).unwrap();
+        utils::create_entity(world, "longarm", utils::cell(5, 10), Some(0)).unwrap();
     // Five cells out: inside the gun's eight, far beyond the spear's two.
     let (target, target_id) =
-        utils::create_entity(world, "hulk", utils::pos(10, 10), Some(1)).unwrap();
+        utils::create_entity(world, "hulk", utils::cell(10, 10), Some(1)).unwrap();
 
     utils::select(&mut app, longarm_id);
     utils::push_command(
@@ -604,8 +605,8 @@ fn shot_leaves_from_gun_that_fired_it() {
     let world = app.world_mut();
     // The gun sits three cells in from the keep's own origin and spans two, so it
     // stands at (14, 14) while the keep's middle is (12.5, 12.5).
-    utils::create_entity(world, "shell_keep", utils::pos(10, 10), Some(0)).unwrap();
-    utils::create_entity(world, "hulk", utils::pos(17, 17), Some(1)).unwrap();
+    utils::create_entity(world, "shell_keep", utils::cell(10, 10), Some(0)).unwrap();
+    utils::create_entity(world, "hulk", utils::cell(17, 17), Some(1)).unwrap();
 
     // Ten ticks in, its first shell is in the air.
     utils::run_ticks(&mut app, 10);
@@ -619,7 +620,7 @@ fn shot_leaves_from_gun_that_fired_it() {
         .collect();
     assert_eq!(
         shots,
-        vec![utils::pos(14, 14)],
+        vec![utils::point("14", "14")],
         "the shell left the corner the gun is mounted on"
     );
 }
@@ -637,7 +638,7 @@ fn quarries_of(app: &App, entity: Entity) -> Vec<SimulationId> {
         .iter()
         .filter_map(|turret| match turret.quarry {
             Some(AttackTarget::Entity(target)) => Some(target),
-            Some(AttackTarget::Position(_)) | None => None,
+            Some(AttackTarget::Cell(_)) | None => None,
         })
         .collect()
 }

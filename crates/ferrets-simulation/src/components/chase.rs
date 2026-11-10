@@ -1,4 +1,5 @@
-//! Chase progress shared by every order that walks toward something.
+//! Chase progress shared by every order that walks again until it reaches a
+//! goal.
 
 use ferrets_geometry::cell_pos::CellPos;
 
@@ -20,7 +21,7 @@ pub type ChaseState = Option<ChaseRound>;
 /// and how many rounds in a row started exactly there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChaseRound {
-    /// The cell under the chaser's body center when the round started.
+    /// The cell the chaser was anchored at when the round started.
     pub own: CellPos,
     /// The destination cell the round walked toward.
     pub destination: CellPos,

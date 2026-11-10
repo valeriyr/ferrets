@@ -6,7 +6,6 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize};
 use ferrets_nav_grid::mover_shape::MoverShape;
-use ferrets_physics::body;
 
 use crate::{
     berths, components::attached::Seating, entity_def, landing::ComesFrom, map::Map, regions,
@@ -106,7 +105,7 @@ impl Approach {
             .expect("only a body that stands somewhere approaches");
         let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location);
         if entity_def::may_close(world, entity) {
-            let anchor = body::anchor(entity_def::position(world, entity));
+            let anchor = entity_def::location(world, entity).anchor();
             Approach::Walks {
                 shape,
                 regions: regions::walked_into(
