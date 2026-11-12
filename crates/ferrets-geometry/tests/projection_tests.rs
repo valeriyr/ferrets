@@ -252,16 +252,16 @@ fn rect_wide_clamps_to_facing_side() {
 }
 
 //
-// ─── cells_in_range_of_rect ─────────────────────────────────────────────────
+// ─── cells_in_range_of_rect ───────────────────────────────────────────────────
 //
 
 #[test]
 fn cells_around_single_cell_follow_projection_metric() {
     let cell = CellRect::new(CellPos::new(5, 5), CellSize::ONE);
 
-    // Euclidean: the four neighbours and the cell itself, no corners.
+    // Euclidean: the four neighbors and the cell itself, no corners.
     assert_eq!(
-        Projection::Orthogonal.cells_in_range_of_rect(cell, 1),
+        Projection::Orthogonal.cells_in_range_of_rect(cell, 1, MAP),
         vec![
             CellPos::new(5, 4),
             CellPos::new(4, 5),
@@ -273,10 +273,40 @@ fn cells_around_single_cell_follow_projection_metric() {
 
     // Chebyshev: the whole 3×3 block, row-major.
     assert_eq!(
-        Projection::Isometric.cells_in_range_of_rect(cell, 1),
+        Projection::Isometric.cells_in_range_of_rect(cell, 1, MAP),
         (4..=6)
             .flat_map(|y| (4..=6).map(move |x| CellPos::new(x, y)))
             .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cells_in_range_keep_to_map_bounds() {
+    let cell = CellRect::new(CellPos::new(1, 1), CellSize::ONE);
+    let bounds = CellSize::new(3, 3);
+    let whole_map: Vec<CellPos> = (0..3)
+        .flat_map(|y| (0..3).map(move |x| CellPos::new(x, y)))
+        .collect();
+
+    // A thousand cells out reaches the whole 3×3 map and nothing past it.
+    for projection in [Projection::Orthogonal, Projection::Isometric] {
+        assert_eq!(
+            projection.cells_in_range_of_rect(cell, 1000, bounds),
+            whole_map
+        );
+    }
+}
+
+#[test]
+fn cells_in_range_at_integer_limit_keep_to_map() {
+    let cell = CellRect::new(CellPos::new(1, 1), CellSize::ONE);
+
+    // The farthest a distance can say still covers the 3×3 map: 9 cells.
+    assert_eq!(
+        Projection::Isometric
+            .cells_in_range_of_rect(cell, u32::MAX, CellSize::new(3, 3))
+            .len(),
+        9
     );
 }
 
@@ -285,7 +315,7 @@ fn cells_around_rect_are_measured_from_its_nearest_edge() {
     let rect = CellRect::new(CellPos::new(10, 10), CellSize::new(3, 3));
 
     for projection in [Projection::Orthogonal, Projection::Isometric] {
-        let cells = projection.cells_in_range_of_rect(rect, 2);
+        let cells = projection.cells_in_range_of_rect(rect, 2, MAP);
         assert!(
             cells.contains(&CellPos::new(14, 12)),
             "two right of the edge"
@@ -297,11 +327,11 @@ fn cells_around_rect_are_measured_from_its_nearest_edge() {
     // The block and a two-deep band on each edge are common to both; the
     // corners differ: Euclidean reaches one diagonal cell per corner (dx = dy
     // = 1 is within two; dx = 2, dy = 1 is not), Chebyshev the whole 2×2.
-    let orthogonal = Projection::Orthogonal.cells_in_range_of_rect(rect, 2);
+    let orthogonal = Projection::Orthogonal.cells_in_range_of_rect(rect, 2, MAP);
     assert!(!orthogonal.contains(&CellPos::new(14, 14)));
     assert_eq!(orthogonal.len(), 9 + 4 * 3 * 2 + 4);
 
-    let isometric = Projection::Isometric.cells_in_range_of_rect(rect, 2);
+    let isometric = Projection::Isometric.cells_in_range_of_rect(rect, 2, MAP);
     assert!(isometric.contains(&CellPos::new(14, 14)));
     assert_eq!(isometric.len(), 7 * 7);
 }
@@ -311,7 +341,7 @@ fn cells_around_rect_stop_at_zero() {
     let rect = CellRect::new(CellPos::new(0, 0), CellSize::ONE);
 
     for projection in [Projection::Orthogonal, Projection::Isometric] {
-        let cells = projection.cells_in_range_of_rect(rect, 2);
+        let cells = projection.cells_in_range_of_rect(rect, 2, MAP);
         assert!(
             cells.iter().all(|cell| cell.x <= 2 && cell.y <= 2),
             "only the quadrant with non-negative coordinates"
@@ -319,17 +349,21 @@ fn cells_around_rect_stop_at_zero() {
     }
     // Euclidean keeps the quarter disc, Chebyshev the whole quarter block.
     assert_eq!(
-        Projection::Orthogonal.cells_in_range_of_rect(rect, 2).len(),
+        Projection::Orthogonal
+            .cells_in_range_of_rect(rect, 2, MAP)
+            .len(),
         6
     );
     assert_eq!(
-        Projection::Isometric.cells_in_range_of_rect(rect, 2).len(),
+        Projection::Isometric
+            .cells_in_range_of_rect(rect, 2, MAP)
+            .len(),
         9
     );
 }
 
 //
-// ─── in_circle and circle_cells ──────────────────────────────────────────────
+// ─── in_circle and circle_cells ───────────────────────────────────────────────
 //
 
 #[test]
@@ -373,11 +407,11 @@ fn circle_cells_lists_orthogonal_disc_row_major() {
     let rect = CellRect::new(CellPos::new(5, 5), CellSize::ONE);
 
     assert_eq!(
-        projection::circle_cells(rect, 1),
-        Projection::Orthogonal.cells_in_range_of_rect(rect, 1)
+        projection::circle_cells(rect, 1, MAP),
+        Projection::Orthogonal.cells_in_range_of_rect(rect, 1, MAP)
     );
     assert_eq!(
-        projection::circle_cells(rect, 1),
+        projection::circle_cells(rect, 1, MAP),
         vec![
             CellPos::new(5, 4),
             CellPos::new(4, 5),
@@ -389,10 +423,26 @@ fn circle_cells_lists_orthogonal_disc_row_major() {
 }
 
 #[test]
+fn circle_cells_stop_at_map_bounds() {
+    let corner = CellRect::new(CellPos::new(0, 0), CellSize::ONE);
+
+    // Two out from the corner of a 2×2 map: the map's four cells, row-major.
+    assert_eq!(
+        projection::circle_cells(corner, 2, CellSize::new(2, 2)),
+        vec![
+            CellPos::new(0, 0),
+            CellPos::new(1, 0),
+            CellPos::new(0, 1),
+            CellPos::new(1, 1),
+        ]
+    );
+}
+
+#[test]
 fn circle_cells_stop_at_zero() {
     let rect = CellRect::new(CellPos::new(0, 0), CellSize::ONE);
 
-    let cells = projection::circle_cells(rect, 2);
+    let cells = projection::circle_cells(rect, 2, MAP);
 
     // The quarter disc: the origin, two along each axis, and one diagonal.
     assert_eq!(cells.len(), 6);
@@ -412,7 +462,7 @@ fn circle_cells_stop_at_zero() {
 
 #[test]
 fn abutting_rects_are_one_apart() {
-    // Distances are cell to cell, so neighbours are one apart and only an
+    // Distances are cell to cell, so neighbors are one apart and only an
     // overlap is zero — the same convention `in_range_of_rect` uses.
     let a = CellRect::new(utils::nav(1, 1), CellSize::new(2, 2));
     let abutting = CellRect::new(utils::nav(3, 1), CellSize::new(2, 2));
@@ -862,7 +912,7 @@ fn nearest_in_range_takes_point_itself_when_in_range() {
 
     // Chebyshev 2 from (10, 10).
     assert_eq!(
-        Projection::Isometric.nearest_in_range_of_rect(rect, 2, CellPos::new(11, 12)),
+        Projection::Isometric.nearest_in_range_of_rect(rect, 2, CellPos::new(11, 12), MAP),
         CellPos::new(11, 12)
     );
 }
@@ -875,7 +925,7 @@ fn nearest_in_range_breaks_metric_ties_by_straighter_way() {
     // Chebyshev 3 from (14, 13); by octile, 3·14 = 42 and 2·14 + 10 = 38, so
     // (11, 11), though its row comes later.
     assert_eq!(
-        Projection::Isometric.nearest_in_range_of_rect(rect, 1, CellPos::new(14, 13)),
+        Projection::Isometric.nearest_in_range_of_rect(rect, 1, CellPos::new(14, 13), MAP),
         CellPos::new(11, 11)
     );
 }
@@ -887,14 +937,28 @@ fn nearest_in_range_breaks_remaining_ties_by_row_then_column() {
     // Of the plus around (10, 10), (11, 10) and (10, 11) both lie octile
     // 14 + 10 = 24 from (12, 12); row 10 comes first.
     assert_eq!(
-        Projection::Orthogonal.nearest_in_range_of_rect(rect, 1, CellPos::new(12, 12)),
+        Projection::Orthogonal.nearest_in_range_of_rect(rect, 1, CellPos::new(12, 12), MAP),
         CellPos::new(11, 10)
+    );
+}
+
+#[test]
+fn nearest_in_range_keeps_to_map() {
+    let rect = CellRect::new(CellPos::new(63, 63), CellSize::ONE);
+
+    // (64, 64) would lie nearer (70, 70), but past the 64×64 map's last cell.
+    assert_eq!(
+        Projection::Isometric.nearest_in_range_of_rect(rect, 1, CellPos::new(70, 70), MAP),
+        CellPos::new(63, 63)
     );
 }
 
 //
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 //
+
+/// A map wide enough for every disc the tests list.
+const MAP: CellSize = CellSize::new(64, 64);
 
 /// Origin of the rectangle used by the `in_range_of_rect` tests.
 const RECT_ORIGIN: CellPos = CellPos::new(3, 3);

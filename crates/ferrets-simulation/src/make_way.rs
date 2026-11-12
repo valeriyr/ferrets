@@ -222,7 +222,7 @@ pub(crate) fn shove_off(
             Settling::Settled | Settling::AtRest => {}
         }
     }
-    spawn::relocate(world, &moves);
+    spawn::shove(world, &moves);
     for &(mover, _) in &moves {
         if let Some(mut walk) = world.entity_mut(mover).get_mut::<MoveComponent>() {
             walk.repath_avoiding_claims();

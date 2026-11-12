@@ -14,6 +14,7 @@ pub mod cooldown;
 pub mod entity_def;
 pub mod entity_index;
 pub mod events;
+pub mod field_cover;
 pub mod fields;
 pub mod game_loop;
 pub mod ground;

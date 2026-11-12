@@ -5,7 +5,7 @@
 use ferrets_nav_grid::{layer_mask::LayerMask, terrain_mask::TerrainMask};
 
 use crate::{
-    affiliation::Affiliation, coverage::Coverage, detection::Detection,
+    affiliation::Affiliation, area::Area, coverage::Coverage, detection::Detection,
     entity_effect::EntityEffect, requirement::Requirement, sight_block::SightBlock,
     terrains::Terrains,
 };
@@ -177,27 +177,29 @@ impl FieldDef {
     }
 }
 
-/// How a source's reach comes to cover its radius.
+/// How a source's reach comes to cover its area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldGrowth {
-    /// The whole radius is covered the tick the source stands.
+    /// The whole area is covered the tick the source stands.
     Instant,
-    /// The reach starts at `initial_radius` and grows by one cell every
-    /// `cycle` ticks until it spans the radius.
+    /// The reach starts at `starts_at` and grows by one cell every
+    /// `cycle` ticks until it spans the area.
     Gradual {
         /// Ticks between growth steps.
         cycle: u32,
-        /// The reach a source starts with.
-        initial_radius: u32,
+        /// The reach growth starts at, no farther than the area, read at the
+        /// source's first recompute once its body has risen, or while rising
+        /// if it projects in full then.
+        starts_at: Area,
     },
 }
 
 /// What an act does to a field around its performer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldAction {
-    /// Covers the cells within radius on the field's terrains.
+    /// Covers the cells within the area on the field's terrains.
     Cover,
-    /// Clears the cells within radius that no source sustains.
+    /// Clears the cells within the area that no source sustains.
     Clear,
 }
 
@@ -206,9 +208,9 @@ pub enum FieldAction {
 pub enum Emission {
     /// As much as when the entity operates.
     Full,
-    /// A patch this many cells out from the footprint, no farther than the
-    /// source's radius.
-    Held(u32),
+    /// A patch of this area around the footprint, no farther than the
+    /// source's area, read on every recompute.
+    Held(Area),
     /// Nothing; what it covered recedes by the field's decay.
     Nothing,
 }
@@ -218,10 +220,10 @@ pub enum Emission {
 pub struct FieldSourceDef {
     /// The field projected.
     field: FieldId,
-    /// How far from the footprint the field reaches, in cells. Zero reaches
-    /// the footprint cells alone.
-    radius: u32,
-    /// How the reach comes to cover the radius.
+    /// The area around the footprint the field reaches, read on every
+    /// recompute.
+    area: Area,
+    /// How the reach comes to cover the area.
     growth: FieldGrowth,
     /// What it projects while the entity is still rising.
     while_rising: Emission,
@@ -235,7 +237,7 @@ impl FieldSourceDef {
     /// Panics if a gradual growth has a zero cycle.
     pub fn new(
         field: FieldId,
-        radius: u32,
+        area: Area,
         growth: FieldGrowth,
         while_rising: Emission,
         while_disabled: Emission,
@@ -248,7 +250,7 @@ impl FieldSourceDef {
         }
         Self {
             field,
-            radius,
+            area,
             growth,
             while_rising,
             while_disabled,
@@ -261,13 +263,14 @@ impl FieldSourceDef {
         self.field
     }
 
-    /// How far from the footprint the field reaches, in cells.
+    /// The area around the footprint the field reaches, read on every
+    /// recompute.
     #[inline]
-    pub fn radius(&self) -> u32 {
-        self.radius
+    pub fn area(&self) -> Area {
+        self.area
     }
 
-    /// How the reach comes to cover the radius.
+    /// How the reach comes to cover the area.
     #[inline]
     pub fn growth(&self) -> FieldGrowth {
         self.growth

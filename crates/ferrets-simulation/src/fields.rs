@@ -35,6 +35,9 @@ struct FieldCells {
     sustained: Vec<PlayerMask>,
     /// Ticks until the next recession step of a gradually decaying field.
     decay_countdown: u32,
+    /// The players whose sources' reach in this field may no longer lie (see
+    /// [`FieldGrid::lost_by`]).
+    lost_by: PlayerMask,
 }
 
 /// Every field's coverage over the map, indexed by [`FieldId`] then cell.
@@ -72,6 +75,7 @@ impl FieldGrid {
                 covered: vec![PlayerMask::EMPTY; len],
                 sustained: vec![PlayerMask::EMPTY; len],
                 decay_countdown: 0,
+                lost_by: PlayerMask::EMPTY,
             });
         }
         &mut self.fields[field.index()]
@@ -145,7 +149,48 @@ impl FieldGrid {
     pub(crate) fn clear_unsustained(&mut self, field: FieldId, pos: CellPos) {
         let index = self.index(pos);
         let cells = self.cells_of_mut(field);
+        cells.lost_by |= cells.covered[index] & !cells.sustained[index];
         cells.covered[index] &= cells.sustained[index];
+    }
+
+    /// Gives `pos` in `field` to `to`'s cover, taking it from `from`, if
+    /// `from` covers it.
+    pub(crate) fn reassign(&mut self, field: FieldId, pos: CellPos, from: PlayerId, to: PlayerId) {
+        let index = self.index(pos);
+        let cells = self.cells_of_mut(field);
+        if cells.covered[index].contains(from) {
+            cells.lost_by |= PlayerMask::of(from);
+            cells.covered[index] &= !PlayerMask::of(from);
+            cells.covered[index] |= PlayerMask::of(to);
+        }
+    }
+
+    /// Adds `to` to the cover of `pos` in `field`, if `from` covers it.
+    pub(crate) fn share(&mut self, field: FieldId, pos: CellPos, from: PlayerId, to: PlayerId) {
+        let index = self.index(pos);
+        let cells = self.cells_of_mut(field);
+        if cells.covered[index].contains(from) {
+            cells.covered[index] |= PlayerMask::of(to);
+        }
+    }
+
+    /// The players whose sources' reach in `field` may no longer lie: whose
+    /// cover came off a cell since the last recompute, or who were handed a
+    /// source carrying such a reach.
+    pub fn lost_by(&self, field: FieldId) -> PlayerMask {
+        self.cells_of(field)
+            .map_or(PlayerMask::EMPTY, |cells| cells.lost_by)
+    }
+
+    /// Marks `player` in `field`'s [`lost_by`](Self::lost_by).
+    pub(crate) fn mark_lost_by(&mut self, field: FieldId, player: PlayerId) {
+        self.cells_of_mut(field).lost_by |= PlayerMask::of(player);
+    }
+
+    /// Empties `field`'s [`lost_by`](Self::lost_by), once a recompute has read
+    /// it.
+    pub(crate) fn clear_lost_by(&mut self, field: FieldId) {
+        self.cells_of_mut(field).lost_by = PlayerMask::EMPTY;
     }
 
     /// Forgets last tick's sustain of `field`.
@@ -172,13 +217,14 @@ impl FieldGrid {
     pub(crate) fn clear_all_unsustained(&mut self, field: FieldId) {
         let cells = self.cells_of_mut(field);
         for (covered, &sustained) in cells.covered.iter_mut().zip(&cells.sustained) {
+            cells.lost_by |= *covered & !sustained;
             *covered &= sustained;
         }
     }
 
     /// Removes every unsustained player from the cover of the cells of `field`
     /// that lie on the edge of that player's patch: a covered cell with a
-    /// four-neighbour the player does not cover, or on the map's border.
+    /// four-neighbor the player does not cover, or on the map's border.
     pub(crate) fn recede(&mut self, field: FieldId) {
         let (width, height) = (self.width as usize, self.height as usize);
         let cells = self.cells_of_mut(field);
@@ -189,20 +235,22 @@ impl FieldGrid {
                 continue;
             }
             let (x, y) = (index % width, index / width);
-            let neighbours = [
+            let neighbors = [
                 (x > 0).then(|| index - 1),
                 (x + 1 < width).then(|| index + 1),
                 (y > 0).then(|| index - width),
                 (y + 1 < height).then(|| index + width),
             ];
             let mut interior = unsustained;
-            for neighbour in neighbours {
-                interior &= match neighbour {
-                    Some(neighbour) => snapshot[neighbour],
+            for neighbor in neighbors {
+                interior &= match neighbor {
+                    Some(neighbor) => snapshot[neighbor],
                     None => PlayerMask::EMPTY,
                 };
             }
-            *covered &= !(unsustained & !interior);
+            let receding = unsustained & !interior;
+            cells.lost_by |= receding;
+            *covered &= !receding;
         }
     }
 

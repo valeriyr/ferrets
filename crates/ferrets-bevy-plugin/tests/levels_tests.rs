@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::map;
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     attack::Slain,
     berths::BerthGroup,
     brood::OrphanFate,
@@ -47,7 +48,11 @@ use ferrets_nav_grid::{
 };
 use ferrets_simulation::{
     command::PlayerCommand,
-    components::{order_queue::OrderQueueComponent, stance::Stance},
+    components::{
+        field_source::{Emitted, FieldReach, FieldSourcesComponent},
+        order_queue::OrderQueueComponent,
+        stance::Stance,
+    },
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
@@ -62,7 +67,7 @@ use ferrets_simulation::{
     order::Order,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
-    spawn::{self, At, Boarding, FieldReach},
+    spawn::{self, At, Boarding},
 };
 
 //
@@ -883,6 +888,33 @@ fn change_cut_short_sets_idle_ally_on_its_scaffold_down_beside_it() {
 }
 
 #[test]
+fn ally_set_down_by_change_cut_short_keeps_its_field() {
+    // A spreader of the kiln's side grows its lichen out to two on the
+    // scaffold at (3, 3); cut short, the change pushes it aside to (3, 2),
+    // a push and no jump: its lichen keeps both rings.
+    let mut app = hills_app(MovementModel::Cell, Ramps::Short, Rise::One);
+    let (kiln, _) = utils::create_owned(&mut app, "kiln", 3, 3, 0);
+    utils::order_morph(&mut app, kiln, "furnace");
+    utils::run_ticks(&mut app, 3);
+    let (spreader, _) = utils::create_owned(&mut app, "spreader", 3, 3, 0);
+    utils::run_ticks(&mut app, 2);
+    let lichen = |app: &App| {
+        app.world()
+            .get::<FieldSourcesComponent>(spreader)
+            .expect("a spreader carries its source")
+            .0[0]
+            .last_emitted
+    };
+    assert_eq!(lichen(&app), Emitted::Reach(2));
+
+    utils::soft_cancel_orders(app.world_mut(), kiln);
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(utils::anchor_of(app.world(), spreader), CellPos::new(3, 2));
+    assert_eq!(lichen(&app), Emitted::Reach(2));
+}
+
+#[test]
 fn change_cut_short_sets_ally_lying_past_its_claim_down_off_it() {
     // Under the continuous model an own walker rests with its middle at
     // (2.8, 3.5) while the kiln on (3, 3) changes through its scaffold: it
@@ -1445,6 +1477,31 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     ] {
         registry.register(mover(name, domain, ground, size));
     }
+    // A spreader walks with lichen growing a cell a tick from inside up to
+    // two cells out.
+    let lichen = registry.register_field(
+        "lichen",
+        FieldDef::new(
+            Terrains::Any,
+            ground.into(),
+            FieldDecay::Instant,
+            None,
+            None,
+            Detection::Blind,
+        ),
+    );
+    registry.register(mover("spreader", walking, ground, 1).with_field_sources([
+        FieldSourceDef::new(
+            lichen,
+            Area::Around(Quantity::from(2)),
+            FieldGrowth::Gradual {
+                cycle: 1,
+                starts_at: Area::Inside,
+            },
+            Emission::Nothing,
+            Emission::Full,
+        ),
+    ]));
     registry.register(
         EntityTypeDef::new("post")
             .with_location(striding, CellSize::ONE, Solidity::Solid, ground)
@@ -1719,7 +1776,7 @@ fn summon_nearby(registry: &mut ContentRegistry, name: &str, summoned: &str) -> 
                         reach: Reach::Wherever,
                     },
                     entity_type,
-                    count: Quantity::Constant(1),
+                    count: Quantity::from(1),
                     placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
@@ -1802,7 +1859,7 @@ fn nest_app() -> App {
             .with_dying(2, [])
             .with_tags(["building"])
             .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "3.5")], 1))])
-            .with_breeder("larva", Quantity::Constant(10), 1, 1, OrphanFate::Perish),
+            .with_breeder("larva", Quantity::from(10), 1, 1, OrphanFate::Perish),
     );
     registry.register(
         EntityTypeDef::new("larva")
@@ -1822,7 +1879,7 @@ fn nest_app() -> App {
             .with_dying(2, [])
             .with_tags(["building"])
             .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "3.5")], 1))])
-            .with_breeder("nymph", Quantity::Constant(10), 1, 1, OrphanFate::Perish),
+            .with_breeder("nymph", Quantity::from(10), 1, 1, OrphanFate::Perish),
     );
     registry.register(
         EntityTypeDef::new("offset_nymph_nest")
@@ -1831,7 +1888,7 @@ fn nest_app() -> App {
             .with_dying(2, [])
             .with_tags(["building"])
             .with_berths([("brood", BerthGroup::new([utils::berth("1.0", "3.5")], 1))])
-            .with_breeder("nymph", Quantity::Constant(10), 1, 1, OrphanFate::Perish),
+            .with_breeder("nymph", Quantity::from(10), 1, 1, OrphanFate::Perish),
     );
     registry.register(
         EntityTypeDef::new("nymph")
@@ -1858,7 +1915,7 @@ fn nest_app() -> App {
             .with_dying(2, [])
             .with_tags(["building"])
             .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "-2.5")], 1))])
-            .with_breeder("larva", Quantity::Constant(10), 1, 1, OrphanFate::Perish),
+            .with_breeder("larva", Quantity::from(10), 1, 1, OrphanFate::Perish),
     );
     registry.register(
         EntityTypeDef::new("pod_nest")
@@ -1867,7 +1924,7 @@ fn nest_app() -> App {
             .with_dying(2, [])
             .with_tags(["building"])
             .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "3.5")], 1))])
-            .with_breeder("pod", Quantity::Constant(10), 1, 1, OrphanFate::Perish),
+            .with_breeder("pod", Quantity::from(10), 1, 1, OrphanFate::Perish),
     );
     registry.register(
         EntityTypeDef::new("pod")
@@ -1907,7 +1964,7 @@ fn nest_app() -> App {
             .with_dying(1, [])
             .with_field_sources([FieldSourceDef::new(
                 mulch,
-                1,
+                Area::Around(Quantity::from(1)),
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Full,
@@ -2006,7 +2063,7 @@ fn change(into: &str, placement: MorphPlacement) -> MorphTransition {
     MorphTransition::new(
         into,
         MorphCourse::direct(MorphInterrupted::Reverts),
-        Quantity::Constant(10),
+        Quantity::from(10),
         placement,
         MorphCancel::Refundable,
         MorphReason::Change,
@@ -2029,7 +2086,7 @@ fn change_through(via: &str, into: &str, placement: MorphPlacement) -> MorphTran
                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
             )]),
         ),
-        Quantity::Constant(10),
+        Quantity::from(10),
         placement,
         MorphCancel::Refundable,
         MorphReason::Change,

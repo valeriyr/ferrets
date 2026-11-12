@@ -5,6 +5,7 @@ mod utils;
 
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     attack::Slain,
     brood::{BroodlingDef, Lingering, OrphanFate},
     build::BuilderAttendance,
@@ -18,7 +19,7 @@ use ferrets_content::{
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    field::{FieldAction, FieldDef, FieldPlacement, FieldSide, FieldWatch},
+    field::{FieldAction, FieldDecay, FieldDef, FieldPlacement, FieldSide, FieldWatch},
     kinds::{Kind, Kinds},
     landing::Landing,
     location::Solidity,
@@ -450,7 +451,7 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
     let hatchery = registry.entity("hatchery").expect("hatchery is registered");
     let brood = hatchery.breeder.as_ref().expect("the hatchery breeds");
     assert_eq!(brood.breeds(), "larva");
-    assert_eq!(brood.period(), Quantity::Constant(220));
+    assert_eq!(brood.period(), Quantity::from(220));
     assert_eq!(brood.limit(), 3);
     assert_eq!(brood.initial(), 1);
     assert_eq!(
@@ -595,7 +596,7 @@ fn hatchery_grows_into_hive_inside_cocoon_that_carries_its_brood() {
 
     let hive = registry.entity("hive").expect("hive is registered");
     let brood = hive.breeder.as_ref().expect("the hive breeds");
-    assert_eq!(brood.period(), Quantity::Constant(180));
+    assert_eq!(brood.period(), Quantity::from(180));
     assert_eq!(brood.initial(), 2);
     assert_eq!(
         brood.orphans(),
@@ -865,6 +866,16 @@ fn swarm_and_undead_ground_spreads_on_ground_alone() {
     for name in ["power", "veil", "true_sight"] {
         assert_eq!(spreads_on(name), ground | air, "{name}");
     }
+}
+
+#[test]
+fn blight_stays_once_nothing_sustains_it() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let blight = registry
+        .field("blight")
+        .expect("blight field is registered");
+
+    assert_eq!(registry.field_def(blight).decay(), FieldDecay::Never);
 }
 
 #[test]
@@ -1337,7 +1348,8 @@ fn missile_rack_bursts_in_air_sparing_its_side() {
         registry.turret_def(rack).weapon().splash(),
         Some(&SplashDef::new(
             SplashShape::Circular,
-            vec![(1, utils::fixed("0.5"))],
+            (Area::Around(Quantity::from(1)), utils::fixed("0.5")),
+            Vec::new(),
             air,
             false
         ))
@@ -1695,7 +1707,7 @@ fn gryphon_edges_wear_different_terms() {
         panic!("the airborne gryphon declares exactly one transition");
     };
     assert_eq!(landing.into_type(), "gryphon");
-    assert_eq!(landing.time(), Quantity::Constant(20));
+    assert_eq!(landing.time(), Quantity::from(20));
     assert_eq!(landing.placement(), MorphPlacement::Reserve);
     assert_eq!(landing.cancel(), MorphCancel::Committed);
     assert!(landing.costs().is_empty(), "landing is free");
@@ -1714,7 +1726,7 @@ fn tower_upgrade_is_paid_and_refundable() {
         panic!("the watch tower declares exactly one transition");
     };
     assert_eq!(upgrade.into_type(), "guard_tower");
-    assert_eq!(upgrade.time(), Quantity::Constant(60));
+    assert_eq!(upgrade.time(), Quantity::from(60));
     assert_eq!(upgrade.placement(), MorphPlacement::Reserve);
     assert_eq!(upgrade.cancel(), MorphCancel::Refundable);
     assert_eq!(
@@ -2097,13 +2109,13 @@ fn supply_depot_lowers_underfoot_and_raises_reserving_its_ground() {
         panic!("the raised depot changes only into its lowered form");
     };
     assert_eq!(lower.into_type(), "supply_depot_lowered");
-    assert_eq!(lower.time(), Quantity::Constant(10));
+    assert_eq!(lower.time(), Quantity::from(10));
     assert_eq!(lower.placement(), MorphPlacement::Revalidate);
     let [raise] = lowered.morphs.as_slice() else {
         panic!("the lowered depot changes only into its raised form");
     };
     assert_eq!(raise.into_type(), "supply_depot");
-    assert_eq!(raise.time(), Quantity::Constant(10));
+    assert_eq!(raise.time(), Quantity::from(10));
     assert_eq!(raise.placement(), MorphPlacement::Reserve);
     // It keeps its supply of 6 either way.
     assert_eq!(
@@ -2218,7 +2230,7 @@ fn raising_dead_names_bodies_it_raises_from() {
         effect.target(),
         EntityCastTarget::Fallen {
             kinds: &Kinds::only([Kind::Type("corpse".to_string())]),
-            reach: Reach::Within(Quantity::Constant(6)),
+            reach: Reach::Within(Area::Around(Quantity::from(6))),
         }
     );
     let EntityCastEffect::Summon {
@@ -2229,7 +2241,7 @@ fn raising_dead_names_bodies_it_raises_from() {
     };
     assert_eq!(
         (registry.def(*entity_type).name.as_str(), *count),
-        ("skeleton", Quantity::Constant(2))
+        ("skeleton", Quantity::from(2))
     );
 }
 
@@ -2409,7 +2421,7 @@ fn every_race_has_detector_sourcing_true_sight() {
         .field("true_sight")
         .expect("true_sight is registered");
 
-    for (detector, radius) in [
+    for (detector, cells) in [
         ("photon_cannon", 7),
         ("observer", 9),
         ("overlord", 8),
@@ -2425,7 +2437,11 @@ fn every_race_has_detector_sourcing_true_sight() {
             .iter()
             .find(|source| source.field() == true_sight)
             .unwrap_or_else(|| panic!("'{detector}' sources true sight"));
-        assert_eq!(source.radius(), radius, "'{detector}' detects to {radius}");
+        assert_eq!(
+            source.area(),
+            Area::Around(Quantity::from(cells)),
+            "'{detector}' detects to {cells}"
+        );
     }
     for blind in [
         "dark_templar",
@@ -2573,7 +2589,7 @@ fn huntress_dashes_four_cells_without_stopping_to_cast() {
             journey: Box::new(Journey::FromCaster {
                 party: CasterParty::Caster,
                 to: FromCasterTo::Aim(Away::Ground {
-                    reach: Reach::Within(Quantity::Constant(4)),
+                    reach: Reach::Within(Area::Around(Quantity::from(4))),
                 }),
             }),
             landing: Landing::Sighted,
@@ -2590,7 +2606,10 @@ fn arbiter_veils_its_side_but_not_itself() {
     let [source] = arbiter.field_sources.as_slice() else {
         panic!("the arbiter projects exactly one field");
     };
-    assert_eq!((source.field(), source.radius()), (veil, 4));
+    assert_eq!(
+        (source.field(), source.area()),
+        (veil, Area::Around(Quantity::from(4)))
+    );
     assert!(
         arbiter.field_effects.is_empty(),
         "the veil conceals nothing of the arbiter's own"
@@ -2673,6 +2692,57 @@ fn scanner_sweep_detects_what_it_watches() {
         panic!("the sweep is a watch");
     };
     assert_eq!(detection, Detection::Reveals(ground | air));
+}
+
+#[test]
+fn hall_creep_reaches_its_spread_and_fertile_creep_carries_it_further() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let creep = registry.field("creep").expect("creep is registered");
+    let spread = registry
+        .entity_stat("creep_spread")
+        .expect("creep spread is registered");
+    let fertile = registry
+        .research("fertile_creep")
+        .expect("fertile creep is registered");
+    for hall in ["hatchery", "hive_cocoon", "hive"] {
+        let def = registry.entity(hall).expect("hall is registered");
+        let source = def
+            .field_sources
+            .iter()
+            .find(|source| source.field() == creep)
+            .unwrap_or_else(|| panic!("'{hall}' spreads creep"));
+        assert_eq!(
+            source.area(),
+            Area::Around(Quantity::Stat(spread)),
+            "'{hall}'"
+        );
+        assert_eq!(
+            def.base_stat(spread),
+            Some(FixedU64::from_num(10)),
+            "'{hall}'"
+        );
+    }
+    for hall in ["hatchery", "hive"] {
+        assert!(
+            registry
+                .entity(hall)
+                .and_then(|def| def.researcher.as_ref())
+                .is_some_and(|researcher| researcher.can_research(fertile)),
+            "'{hall}' researches fertile creep"
+        );
+    }
+    let buff = registry
+        .research_def(fertile)
+        .and_then(|research| research.buff)
+        .expect("fertile creep grants a buff");
+    assert_eq!(
+        registry.player_buff_def(buff).entity_modifiers,
+        vec![EntityModifiers::Stats(vec![EntityModifier {
+            stat: spread,
+            op: ModifierOp::FlatAdd,
+            magnitude: FixedI64::from_num(4),
+        }])]
+    );
 }
 
 #[test]

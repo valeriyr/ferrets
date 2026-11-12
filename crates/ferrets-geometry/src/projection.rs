@@ -88,13 +88,28 @@ impl Projection {
     }
 
     /// Every cell within `distance` of `rect` (see
-    /// [`in_range_of_rect`](Self::in_range_of_rect)), row-major. Cells are
-    /// clamped to non-negative coordinates and unbounded above.
-    pub fn cells_in_range_of_rect(self, rect: CellRect, distance: u32) -> Vec<CellPos> {
+    /// [`in_range_of_rect`](Self::in_range_of_rect)) that lies on a map of
+    /// `bounds`, row-major.
+    pub fn cells_in_range_of_rect(
+        self,
+        rect: CellRect,
+        distance: u32,
+        bounds: CellSize,
+    ) -> Vec<CellPos> {
         let min_x = rect.origin.x.saturating_sub(distance);
         let min_y = rect.origin.y.saturating_sub(distance);
-        let max_x = rect.origin.x + rect.size.width + distance;
-        let max_y = rect.origin.y + rect.size.height + distance;
+        let max_x = rect
+            .origin
+            .x
+            .saturating_add(rect.size.width)
+            .saturating_add(distance)
+            .min(bounds.width);
+        let max_y = rect
+            .origin
+            .y
+            .saturating_add(rect.size.height)
+            .saturating_add(distance)
+            .min(bounds.height);
         let mut cells = Vec::new();
         for y in min_y..max_y {
             for x in min_x..max_x {
@@ -107,16 +122,19 @@ impl Projection {
         cells
     }
 
-    /// The cell within `distance` of `rect` nearest `point`: by this
-    /// projection's metric, ties by the straighter way to it ([`octile`]),
-    /// then by row, then column.
+    /// The cell within `distance` of `rect` on a map of `bounds` nearest
+    /// `point`: by this projection's metric, ties by the straighter way to it
+    /// ([`octile`]), then by row, then column.
+    ///
+    /// Panics if no cell of the map lies within `distance` of `rect`.
     pub fn nearest_in_range_of_rect(
         self,
         rect: CellRect,
         distance: u32,
         point: CellPos,
+        bounds: CellSize,
     ) -> CellPos {
-        self.cells_in_range_of_rect(rect, distance)
+        self.cells_in_range_of_rect(rect, distance, bounds)
             .into_iter()
             .min_by_key(|&cell| {
                 (
@@ -126,7 +144,7 @@ impl Projection {
                     cell.x,
                 )
             })
-            .expect("a rectangle is in range of its own cells")
+            .expect("a rectangle is in range of its own cells on the map")
     }
 
     /// Whether a `size` footprint anchored at `from` satisfies stopping
@@ -295,8 +313,7 @@ pub fn in_circle(cell: CellPos, rect: CellRect, distance: u32) -> bool {
 }
 
 /// Every cell within `distance` of `rect` by the Euclidean metric (see
-/// [`in_circle`]), row-major; clamped to non-negative coordinates and
-/// unbounded above.
-pub fn circle_cells(rect: CellRect, distance: u32) -> Vec<CellPos> {
-    Projection::Orthogonal.cells_in_range_of_rect(rect, distance)
+/// [`in_circle`]) that lies on a map of `bounds`, row-major.
+pub fn circle_cells(rect: CellRect, distance: u32, bounds: CellSize) -> Vec<CellPos> {
+    Projection::Orthogonal.cells_in_range_of_rect(rect, distance, bounds)
 }

@@ -43,6 +43,7 @@ use ferrets_script::{
             game::{EntityView, GameView, Glimpse, RemainsView},
         },
     },
+    content,
     engine::{ScriptEngine, lua::LuaEngine},
     error::ScriptError,
 };
@@ -915,6 +916,38 @@ fn scripts_read_bodies_on_ground() {
     );
 }
 
+#[test]
+fn content_view_reads_change_time_from_stat_at_base_rounded_up() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity_stat("change_time", 1)
+        define_entity("walker", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5", change_time = "2.5" },
+            morphs = { { into = "flier", time = { stat = "change_time" }, placement = "reserve", cancel = "committed" } },
+        })
+        define_entity("flier", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+        })
+    "#;
+    let registry = content::load(&LuaEngine, source).expect("content loads");
+    let view = ContentView::from_registry(&registry);
+    let walker = view
+        .entities
+        .iter()
+        .find(|entity| entity.name == "walker")
+        .expect("the walker is in the view");
+
+    // ⌈2.5⌉ = 3 ticks, as the change waits.
+    assert_eq!(
+        walker.morphs.as_ref().expect("the walker changes")[0].time,
+        3
+    );
+}
+
 //
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 //
@@ -1020,8 +1053,8 @@ fn research_content() -> (ContentView, ResearchId) {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 casting: Casting::Delayed {
-                    point: Quantity::Constant(10),
-                    period: Quantity::Constant(10),
+                    point: Quantity::from(10),
+                    period: Quantity::from(10),
                     pays: PaymentPoint::AtLanding,
                 },
                 effect: EntityCastEffect::Damage {
@@ -1201,7 +1234,7 @@ fn demo_like_content() -> ContentView {
                 morphs: Some(vec![MorphView {
                     into: "town_hall".to_string(),
                     price: vec![("gold".to_string(), 400)],
-                    time: Some(200),
+                    time: 200,
                 }]),
                 breeder: None,
             },

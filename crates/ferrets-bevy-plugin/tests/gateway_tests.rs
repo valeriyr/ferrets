@@ -50,10 +50,8 @@ use ferrets_simulation::{
     entity_def,
     entity_index::EntityIndex,
     events::SimulationEvent,
-    game_loop::{
-        fields,
-        warp::{self, WarpRefusal},
-    },
+    field_cover,
+    game_loop::warp::{self, WarpRefusal},
     links::{self, LinkKey, LinkPassengers, Membership},
     map::Map,
     movement_model::MovementModel,
@@ -2127,7 +2125,7 @@ fn register(app: &mut App) {
             effect: EntityCastEffect::Summon {
                 at,
                 entity_type: raised,
-                count: Quantity::Constant(1),
+                count: Quantity::from(1),
                 placement: SummonPlacement::Nearby,
                 landing: Landing::Anywhere,
                 within: Vec::new(),
@@ -2200,7 +2198,7 @@ fn register(app: &mut App) {
             .with_tags(["beast"])
             .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
             .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "1.5")], 1))])
-            .with_breeder("larva", Quantity::Constant(1000), 1, 1, OrphanFate::Perish),
+            .with_breeder("larva", Quantity::from(1000), 1, 1, OrphanFate::Perish),
     );
     registry.register(
         EntityTypeDef::new("larva")
@@ -2264,7 +2262,7 @@ fn change(into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
         MorphCourse::direct(MorphInterrupted::Reverts),
-        Quantity::Constant(CHANGE_TIME),
+        Quantity::from(CHANGE_TIME),
         MorphPlacement::Reserve,
         MorphCancel::Refundable,
         MorphReason::Change,
@@ -2287,7 +2285,7 @@ fn change_through(via: &str, into: &str) -> MorphTransition {
                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
             )]),
         ),
-        Quantity::Constant(CHANGE_TIME),
+        Quantity::from(CHANGE_TIME),
         MorphPlacement::Reserve,
         MorphCancel::Refundable,
         MorphReason::Change,
@@ -2384,7 +2382,7 @@ fn cover_with_creep(app: &mut App, cell: CellPos) {
         .resource::<ContentRegistry>()
         .field("creep")
         .expect("creep is registered");
-    fields::apply_action(app.world_mut(), 1, creep, cell, 0, FieldAction::Cover);
+    field_cover::apply_action(app.world_mut(), 1, creep, cell, 0, FieldAction::Cover);
 }
 
 /// Which end of a tunnel a rally names.

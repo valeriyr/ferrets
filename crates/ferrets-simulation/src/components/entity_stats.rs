@@ -9,6 +9,7 @@ use bevy_ecs::prelude::*;
 use ferrets_math::FixedU64;
 
 use ferrets_content::{
+    area::{Area, ResolvedArea},
     entity_stats::{EntityStatDef, EntityStatId},
     quantity::Quantity,
     stats::EntityModifier,
@@ -66,36 +67,45 @@ impl StatsComponent {
             .map(|value| value.saturating_ceil().to_num::<u32>())
     }
 
-    /// The ticks `quantity` comes to: a constant is what it says, a stat the
-    /// entity's effective value rounded up, or `None` if the entity does not
-    /// have it.
+    /// What `quantity` comes to: a constant is what it says, a stat the
+    /// entity's effective value, or `None` if the entity does not have it.
+    #[inline]
+    pub fn quantity(&self, quantity: Quantity) -> Option<FixedU64> {
+        match quantity {
+            Quantity::Constant(value) => Some(value),
+            Quantity::Stat(id) => self.effective(id),
+        }
+    }
+
+    /// The ticks `quantity` comes to, rounded up, or `None` if the entity
+    /// does not have the stat it names.
     #[inline]
     pub fn quantity_ticks(&self, quantity: Quantity) -> Option<u32> {
-        match quantity {
-            Quantity::Constant(value) => Some(value),
-            Quantity::Stat(id) => self.effective_ticks(id),
-        }
+        self.quantity(quantity)
+            .map(|value| value.saturating_ceil().to_num::<u32>())
     }
 
-    /// The cells `quantity` comes to: a constant is what it says, a stat the
-    /// entity's effective value truncated, or `None` if the entity does not
-    /// have it.
+    /// The whole cells `quantity` comes to, truncated, or `None` if the
+    /// entity does not have the stat it names.
     #[inline]
     pub fn quantity_cells(&self, quantity: Quantity) -> Option<u32> {
-        match quantity {
-            Quantity::Constant(value) => Some(value),
-            Quantity::Stat(id) => self.effective_as_u32(id),
-        }
+        self.quantity(quantity).map(|value| value.to_num::<u32>())
     }
 
-    /// The whole units `quantity` comes to: a constant is what it says, a stat
-    /// the entity's effective value truncated, or `None` if the entity does not
-    /// have it.
+    /// The whole units `quantity` comes to, truncated, or `None` if the
+    /// entity does not have the stat it names.
     #[inline]
     pub fn quantity_count(&self, quantity: Quantity) -> Option<u32> {
-        match quantity {
-            Quantity::Constant(value) => Some(value),
-            Quantity::Stat(id) => self.effective_as_u32(id),
+        self.quantity(quantity).map(|value| value.to_num::<u32>())
+    }
+
+    /// What `area` comes to, or `None` if the entity does not have the stat
+    /// it names.
+    #[inline]
+    pub fn area(&self, area: Area) -> Option<ResolvedArea> {
+        match area {
+            Area::Inside => Some(ResolvedArea::Inside),
+            Area::Around(quantity) => self.quantity(quantity).map(ResolvedArea::Around),
         }
     }
 

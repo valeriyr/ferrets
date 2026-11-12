@@ -35,6 +35,8 @@ use crate::{
     movement_model::MovementModel,
     occupancy::{GridMark, OccupancyClass},
     order::Order,
+    player_buffs::PlayerBuffs,
+    player_stats::PlayerStats,
     regions,
     reservation::Reservation,
     session::player_id::PlayerId,
@@ -42,11 +44,13 @@ use crate::{
 };
 use ferrets_content::{
     annex::AnnexDef,
+    area::{Area, ResolvedArea},
     attack::Weapon,
     build::BuilderAttendance,
     concealment::Concealment,
     entity_buffs::EntityBuffId,
     entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
     location::LocationDef,
@@ -55,6 +59,7 @@ use ferrets_content::{
     quantity::Quantity,
     registry::ContentRegistry,
     resource::HarvestData,
+    stats::EntityModifier,
     targeting,
     turret::TurretStats,
     warp::WarperDef,
@@ -342,6 +347,39 @@ pub fn bears(world: &World, entity: Entity, id: EntityBuffId) -> bool {
         .is_some_and(|buffs| buffs.contains(id))
 }
 
+/// What `player` lays over every unit it owns: the entity modifiers of each
+/// of its active buffs, once for each stack, then those applied to it.
+pub fn owner_entity_modifiers(world: &World, player: PlayerId) -> Vec<EntityModifiers> {
+    owner_entity_modifiers_of(
+        world.resource::<ContentRegistry>(),
+        world.resource::<PlayerBuffs>(),
+        world.resource::<PlayerStats>(),
+        player,
+    )
+}
+
+/// What `player` lays over every unit it owns, read from the player buffs
+/// and the player stats given: as [`owner_entity_modifiers`].
+pub fn owner_entity_modifiers_of(
+    registry: &ContentRegistry,
+    player_buffs: &PlayerBuffs,
+    player_stats: &PlayerStats,
+    player: PlayerId,
+) -> Vec<EntityModifiers> {
+    let mut entity_modifiers: Vec<EntityModifiers> = player_buffs
+        .active(player)
+        .flat_map(|(id, stacks)| {
+            registry
+                .player_buff_def(id)
+                .entity_modifiers
+                .iter()
+                .map(move |modifiers| modifiers.repeated(stacks))
+        })
+        .collect();
+    entity_modifiers.extend(player_stats.entity_modifiers(player).iter().cloned());
+    entity_modifiers
+}
+
 /// Whether `entity` can carry the buff `id`: it carries every stat the buff's
 /// modifiers name. An effect that names no stat asks for none; an entity with
 /// no stat store carries none.
@@ -466,6 +504,20 @@ pub fn morph_origin(world: &World, entity: Entity) -> EntityTypeId {
         .map_or_else(|| type_id(world, entity), |morph| morph.from)
 }
 
+/// What a declared quantity comes to for `entity`: a constant is what it
+/// says, and a stat names the entity's effective value.
+///
+/// Panics if `entity` carries no such stat — content registration checks that
+/// whoever reads a quantity carries the stat it names.
+pub fn quantity(world: &World, entity: Entity, quantity: Quantity) -> FixedU64 {
+    world
+        .entity(entity)
+        .get::<StatsComponent>()
+        .expect("simulation entity must have a stat store")
+        .quantity(quantity)
+        .expect("the capability pairs the entity with this stat")
+}
+
 /// What a declared quantity of ticks comes to for `entity`: a constant is
 /// what it says, and a stat names the entity's effective value, rounded up.
 ///
@@ -480,18 +532,71 @@ pub fn quantity_ticks(world: &World, entity: Entity, quantity: Quantity) -> u32 
         .expect("the capability pairs the entity with this stat")
 }
 
-/// What a declared quantity of cells comes to for `entity`: a constant is
-/// what it says, and a stat names the entity's effective value, truncated.
+/// What a declared quantity of ticks comes to for an instance of `def` as
+/// authored: a constant is what it says, and a stat names the type's base
+/// value, rounded up.
+///
+/// Panics if `def` carries no such stat — content registration checks that
+/// whoever reads a quantity carries the stat it names.
+pub fn base_quantity_ticks(def: &EntityTypeDef, quantity: Quantity) -> u32 {
+    match quantity {
+        Quantity::Constant(value) => value.saturating_ceil().to_num::<u32>(),
+        Quantity::Stat(stat) => def
+            .base_ticks(stat)
+            .expect("the capability pairs the type with this stat"),
+    }
+}
+
+/// What a declared area comes to for `entity`: a constant is what it says,
+/// and a stat names the entity's effective value.
 ///
 /// Panics if `entity` carries no such stat — content registration checks that
-/// whoever reads a quantity carries the stat it names.
-pub fn quantity_cells(world: &World, entity: Entity, quantity: Quantity) -> u32 {
+/// whoever reads an area carries the stat it names.
+pub fn resolve_area(world: &World, entity: Entity, area: Area) -> ResolvedArea {
     world
         .entity(entity)
         .get::<StatsComponent>()
         .expect("simulation entity must have a stat store")
-        .quantity_cells(quantity)
+        .area(area)
         .expect("the capability pairs the entity with this stat")
+}
+
+/// The whole cells a declared area reaches out for `entity`, measured from a
+/// footprint's own cells: `Inside` is `0`, and `Around` its cells truncated.
+///
+/// Panics as [`resolve_area`] does.
+pub fn area_reach(world: &World, entity: Entity, area: Area) -> u32 {
+    resolve_area(world, entity, area).reach()
+}
+
+/// The whole cells a declared area reaches out for a fresh instance of `def`
+/// under `owned`, what its owner lays over every unit it owns, measured from
+/// a footprint's own cells: `Inside` is `0`, and `Around` its cells
+/// truncated, a stat naming the type's base value with those modifiers folded
+/// in. Left out: what the instance would stand on, and the type's own
+/// passives.
+///
+/// Panics if `def` carries no such stat — content registration checks that
+/// whoever reads an area carries the stat it names.
+pub fn owned_area_reach(
+    registry: &ContentRegistry,
+    def: &EntityTypeDef,
+    owned: &[EntityModifiers],
+    area: Area,
+) -> u32 {
+    let mut stats = StatsComponent::default();
+    for (stat, value) in def.base_stats.iter() {
+        stats.set_base(stat, value);
+    }
+    let modifiers: Vec<EntityModifier> = owned
+        .iter()
+        .flat_map(|modifiers| modifiers.modifiers().iter().copied())
+        .collect();
+    stats.recompute(&modifiers, registry.entity_stat_defs());
+    stats
+        .area(area)
+        .expect("the capability pairs the type with this stat")
+        .reach()
 }
 
 /// What a declared quantity of whole units comes to for `entity`: a constant

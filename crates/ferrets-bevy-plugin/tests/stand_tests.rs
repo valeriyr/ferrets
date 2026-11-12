@@ -6,8 +6,10 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
+    area::Area,
     build::BuilderAttendance,
     detection::Detection,
+    entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
     field::{Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef},
@@ -16,26 +18,29 @@ use ferrets_content::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
         PoolCarry,
     },
+    player_buffs::PlayerBuffDef,
     pool::Pool,
     pool_def::PoolId,
     pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
     skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, Spot},
+    stack_rule::StackRule,
     stand::StandingAct,
+    stats::{EntityModifier, ModifierOp},
     terrains::Terrains,
     work::{CrewLimit, WorkPresence},
 };
 use ferrets_geometry::cell_size::CellSize;
-use ferrets_math::FixedU64;
-use ferrets_simulation::command::PlayerCommand;
+use ferrets_math::{FixedI64, FixedU64};
+use ferrets_simulation::{command::PlayerCommand, game_loop::buffs};
 
 //
 // ─── When the act happens ─────────────────────────────────────────────────────
 //
 
 #[test]
-fn standing_act_removes_only_unsustained_coverage_within_its_radius() {
+fn standing_act_removes_only_unsustained_coverage_within_its_area() {
     let mut app = stand_app();
     let blight = blight(&app);
     let hive = utils::place(&mut app, "hive", 4, 4, 0);
@@ -60,8 +65,34 @@ fn standing_act_removes_only_unsustained_coverage_within_its_radius() {
     );
     assert!(
         utils::covered_by(&app, blight, 5, 4, 0),
-        "beyond the radius it lingers"
+        "beyond the area it lingers"
     );
+}
+
+#[test]
+fn standing_act_reads_its_area_from_stat() {
+    let mut app = stand_app();
+    let blight = blight(&app);
+    let (_, overlord) = utils::create_owned(&mut app, "overlord", 20, 20, 0);
+    utils::cast_at(&mut app, overlord, "spew", 10, 10);
+    utils::run_ticks(&mut app, utils::APPLY);
+    utils::cast_at(&mut app, overlord, "spew", 13, 10);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(utils::covered_by(&app, blight, 14, 10, 0));
+
+    let wide = app
+        .world()
+        .resource::<ContentRegistry>()
+        .player_buff("wide_scrubbing")
+        .expect("the buff is registered");
+    buffs::apply_player_buff(app.world_mut(), 1, wide);
+    utils::create_owned(&mut app, "scrubber", 10, 10, 1);
+    utils::run_ticks(&mut app, 1);
+
+    // The scrub reach stat holds 2 + 1 = 3 under its owner's buff: (13, 10)
+    // is cleared, (14, 10) is not.
+    assert!(!utils::covered_by(&app, blight, 13, 10, 0));
+    assert!(utils::covered_by(&app, blight, 14, 10, 0));
 }
 
 #[test]
@@ -120,7 +151,7 @@ fn standing_act_is_performed_once() {
     utils::create_owned(&mut app, "cleanser", 26, 20, 1);
     utils::run_ticks(&mut app, 2);
 
-    // A patch spewed within its radius afterwards is left alone.
+    // A patch spewed within its area afterwards is left alone.
     spew_at(&mut app, 24, 20);
     utils::run_ticks(&mut app, 2);
     assert!(utils::covered_by(&app, blight, 24, 20, 0));
@@ -191,8 +222,9 @@ fn building(name: &str, side: u32, rise_time: u32) -> EntityTypeDef {
 /// App with two rival players over a blight field that never recedes on its
 /// own, so what a standing act clears and leaves is exactly what the tests
 /// see. A hive spreads blight; a cleanser and a purifier — two forms of one
-/// thing — each clear it as they come to stand; an overlord spews patches of
-/// it; a drone raises cleansers.
+/// thing — each clear it as they come to stand, and a scrubber as far as a
+/// stat of its reads; an overlord spews patches of it; a drone raises
+/// cleansers.
 fn stand_app() -> App {
     let mut app = utils::make_app(utils::human_slots(2));
     {
@@ -212,7 +244,7 @@ fn stand_app() -> App {
         registry.register(
             building("hive", 2, 4).with_field_sources([FieldSourceDef::new(
                 blight,
-                4,
+                Area::Around(Quantity::from(4)),
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Full,
@@ -221,14 +253,14 @@ fn stand_app() -> App {
 
         let clears_blight = StandingAct::Field {
             field: blight,
-            radius: 3,
+            area: Area::Around(Quantity::from(3)),
             action: FieldAction::Clear,
         };
         let refit = |into: &str| {
             MorphTransition::new(
                 into,
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(1),
+                Quantity::from(1),
                 MorphPlacement::Revalidate,
                 MorphCancel::Forfeit,
                 MorphReason::Change,
@@ -248,6 +280,30 @@ fn stand_app() -> App {
                 .with_morphs([refit("cleanser")]),
         );
 
+        let scrub_reach = registry.register_entity_stat("scrub_reach", FixedU64::ZERO);
+        registry.register_player_buff(
+            "wide_scrubbing",
+            PlayerBuffDef {
+                player_modifiers: Vec::new(),
+                entity_modifiers: vec![EntityModifiers::Stats(vec![EntityModifier {
+                    stat: scrub_reach,
+                    op: ModifierOp::FlatAdd,
+                    magnitude: FixedI64::from_num(1),
+                }])],
+                duration: None,
+                stack_rule: StackRule::Ignore,
+            },
+        );
+        registry.register(
+            building("scrubber", 1, 4)
+                .with_stat(scrub_reach, FixedU64::from_num(2))
+                .with_standing_acts([StandingAct::Field {
+                    field: blight,
+                    area: Area::Around(Quantity::Stat(scrub_reach)),
+                    action: FieldAction::Clear,
+                }]),
+        );
+
         let spew = registry.register_skill(
             "spew",
             SkillDef {
@@ -260,7 +316,7 @@ fn stand_app() -> App {
                             reach: Reach::Wherever,
                         },
                         field: blight,
-                        radius: Quantity::Constant(1),
+                        area: Area::Around(Quantity::from(1)),
                         action: FieldAction::Cover,
                     },
                 },

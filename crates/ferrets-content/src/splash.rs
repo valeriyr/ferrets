@@ -3,6 +3,8 @@
 use ferrets_math::FixedU64;
 use ferrets_nav_grid::layer_mask::LayerMask;
 
+use crate::{area::Area, quantity::Quantity};
+
 /// How a blast's bands are measured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplashShape {
@@ -20,9 +22,16 @@ pub enum SplashShape {
 pub struct SplashDef {
     /// How the bands are measured.
     shape: SplashShape,
-    /// `(radius in cells, fraction of the hit's damage)`, in increasing radius
-    /// order. A victim takes the fraction of the first band it falls inside.
-    bands: Vec<(u32, FixedU64)>,
+    /// The area the innermost band takes in, and the fraction of full
+    /// strength its hits land at. The area is read when the shot is released
+    /// and held while it flies.
+    core: (Area, FixedU64),
+    /// The bands around the core, outward: how many cells further each
+    /// reaches than the band inside it, and the fraction of full strength its
+    /// hits land at. A victim takes the fraction of the innermost band it
+    /// falls inside. The widths are read when the shot is released and held
+    /// while it flies.
+    rings: Vec<(Quantity, FixedU64)>,
     /// The navigation layers the blast reaches: a victim is caught only when the
     /// layers it can be attacked on intersect this mask, so content decides
     /// whether a ground blast touches what flies over it.
@@ -34,20 +43,29 @@ pub struct SplashDef {
 impl SplashDef {
     /// Creates a new `SplashDef` with the given data.
     ///
-    /// Panics if `bands` is empty, its radii are not strictly increasing, or
-    /// `layers` is empty (a blast that reaches no layer can never hit anything).
+    /// Panics if a ring of a constant width `0` reaches no further than the
+    /// band inside it (any but the first ring around an `Inside` core), or
+    /// `layers` is empty (a blast that reaches no layer can never hit
+    /// anything).
     pub fn new(
         shape: SplashShape,
-        bands: Vec<(u32, FixedU64)>,
+        core: (Area, FixedU64),
+        rings: Vec<(Quantity, FixedU64)>,
         layers: impl Into<LayerMask>,
         friendly_fire: bool,
     ) -> Self {
-        assert!(!bands.is_empty(), "splash needs at least one band");
-        assert!(
-            bands.windows(2).all(|pair| pair[0].0 < pair[1].0),
-            "splash band radii must be strictly increasing"
-        );
-
+        // Around an `Inside` core, a first ring of width 0 still reaches the
+        // bodies touching the one hit.
+        let exempt = match core.0 {
+            Area::Inside => 1,
+            Area::Around(_) => 0,
+        };
+        for &(width, _) in rings.iter().skip(exempt) {
+            assert!(
+                width != Quantity::from(0),
+                "a splash ring of constant width 0 reaches no further than the band inside it"
+            );
+        }
         let layers = layers.into();
         assert!(
             layers != LayerMask::EMPTY,
@@ -56,7 +74,8 @@ impl SplashDef {
 
         Self {
             shape,
-            bands,
+            core,
+            rings,
             layers,
             friendly_fire,
         }
@@ -80,16 +99,16 @@ impl SplashDef {
         self.friendly_fire
     }
 
-    /// The outermost radius the blast reaches, for gathering candidate victims.
-    pub fn reach(&self) -> u32 {
-        self.bands.last().expect("bands are never empty").0
+    /// The area the innermost band takes in, and the fraction of full
+    /// strength its hits land at.
+    #[inline]
+    pub fn core(&self) -> (Area, FixedU64) {
+        self.core
     }
 
-    /// The bands, innermost first: `(radius in cells, fraction of the damage)`.
-    ///
-    /// The caller measures distance, because the metric belongs to the map's
-    /// projection rather than to the definition.
-    pub fn bands(&self) -> impl Iterator<Item = (u32, FixedU64)> + '_ {
-        self.bands.iter().copied()
+    /// The bands around the core, outward: `(width beyond the band inside,
+    /// fraction of full strength)`.
+    pub fn rings(&self) -> impl Iterator<Item = (Quantity, FixedU64)> + '_ {
+        self.rings.iter().copied()
     }
 }

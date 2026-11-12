@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{ai::game_view, map};
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     detection::Detection,
     domain::DomainDef,
     entity_stats::EntityStatId,
@@ -471,7 +472,7 @@ fn watch_reveals_patch_no_entity_can_see() {
     // watch is set in the order phase, which the tick's fog pass has
     // already run.
     utils::run_ticks(&mut app, utils::APPLY + 1);
-    // Radius two around the aim, and nothing outside it.
+    // Two cells around the aim, and nothing outside it.
     assert!(visible(&app, 0, 20, 20));
     assert!(visible(&app, 0, 20, 22));
     assert!(!visible(&app, 0, 20, 23));
@@ -499,7 +500,7 @@ fn watch_lapses_exactly_when_its_duration_runs_out() {
 }
 
 #[test]
-fn watch_reads_its_radius_and_duration_off_caster() {
+fn watch_reads_its_area_and_duration_off_caster() {
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let (_, observatory) =
         utils::create_entity(app.world_mut(), "observatory", utils::cell(2, 2), Some(0)).unwrap();
@@ -547,9 +548,9 @@ fn watch_outlives_caster_and_is_shared_with_allies() {
 
 #[test]
 fn watch_around_caster_reaches_from_its_whole_footprint() {
-    // The beacon covers (10..13, 10..13). Its watch of radius 2 reaches out
-    // from that footprint, 2 past each edge: x 13 + 2 = 15 is held, 16 is
-    // not, and 10 − 2 = 8 is held, 7 is not.
+    // The beacon covers (10..13, 10..13). Its watch two cells around reaches
+    // out from that footprint, 2 past each edge: x 13 + 2 = 15 is held, 16
+    // is not, and 10 − 2 = 8 is held, 7 is not.
     let mut app = fog_app(vec![PlayerSlot::occupied(0, PlayerType::Human, None, None)]);
     let (_, beacon) =
         utils::create_entity(app.world_mut(), "beacon", utils::cell(10, 10), Some(0)).unwrap();
@@ -566,7 +567,7 @@ fn watch_around_caster_reaches_from_its_whole_footprint() {
         watch.patch,
         CellRect::new(CellPos::new(10, 10), CellSize::new(4, 4))
     );
-    let cells = watch.cells();
+    let cells = watch.cells(app.world().resource::<Map>().size());
     assert!(cells.contains(&CellPos::new(15, 11)));
     assert!(!cells.contains(&CellPos::new(16, 11)));
     assert!(cells.contains(&CellPos::new(8, 11)));
@@ -1259,8 +1260,8 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                         at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
-                        radius: Quantity::Constant(2),
-                        duration: Quantity::Constant(5),
+                        area: Area::Around(Quantity::from(2)),
+                        duration: Quantity::from(5),
                         detection: Detection::Blind,
                     },
                 },
@@ -1290,8 +1291,8 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Watch {
                         at: Spot::Caster,
-                        radius: Quantity::Constant(2),
-                        duration: Quantity::Constant(5),
+                        area: Area::Around(Quantity::from(2)),
+                        duration: Quantity::from(5),
                         detection: Detection::Blind,
                     },
                 },
@@ -1325,7 +1326,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                         at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
-                        radius: Quantity::Stat(scan_radius),
+                        area: Area::Around(Quantity::Stat(scan_radius)),
                         duration: Quantity::Stat(scan_time),
                         detection: Detection::Blind,
                     },
@@ -1435,7 +1436,7 @@ fn relief_app(ground_relief_blocks: &[&str]) -> App {
             .with_pool(Pool::health(20))
             .with_field_sources([FieldSourceDef::new(
                 smoke,
-                1,
+                Area::Around(Quantity::from(1)),
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Nothing,
@@ -1610,7 +1611,7 @@ fn shadow_app() -> App {
                 body(name, utils::GROUND_DOMAIN, utils::GROUND, 1).with_field_sources([
                     FieldSourceDef::new(
                         field,
-                        2,
+                        Area::Around(Quantity::from(2)),
                         FieldGrowth::Instant,
                         Emission::Nothing,
                         Emission::Nothing,

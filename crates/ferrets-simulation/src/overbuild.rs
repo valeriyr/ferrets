@@ -5,12 +5,15 @@ use ferrets_content::{registry::ContentRegistry, resource::DepletionPolicy};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 
 use crate::{
-    components::{build::OverbuiltComponent, hidden::Inside, resource::ResourceSourceComponent},
+    components::{
+        build::OverbuiltComponent, field_source::FieldReach, hidden::Inside,
+        resource::ResourceSourceComponent,
+    },
     entity_def,
     entity_index::EntityIndex,
     events::DeathCause,
     occupancy::GridMark,
-    spawn::{self, At, FieldReach},
+    spawn::{self, At},
 };
 
 /// What a footprint covers as it is set down.

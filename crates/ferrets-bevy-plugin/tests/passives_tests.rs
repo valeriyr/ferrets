@@ -994,7 +994,7 @@ fn app() -> (App, EntityBuffId) {
                     MorphTransition::new(
                         "oak",
                         MorphCourse::direct(MorphInterrupted::Reverts),
-                        Quantity::Constant(2),
+                        Quantity::from(2),
                         MorphPlacement::Reserve,
                         MorphCancel::Committed,
                         MorphReason::Change,
@@ -1012,7 +1012,7 @@ fn app() -> (App, EntityBuffId) {
                                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                             )]),
                         ),
-                        Quantity::Constant(8),
+                        Quantity::from(8),
                         MorphPlacement::Reserve,
                         MorphCancel::Forfeit,
                         MorphReason::Change,

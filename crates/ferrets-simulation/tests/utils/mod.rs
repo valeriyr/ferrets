@@ -11,6 +11,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Proje
 use ferrets_math::FixedU64;
 use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
+    components::field_source::FieldReach,
     control_groups::ControlGroups,
     entity_index::EntityIndex,
     events::EventRecord,
@@ -28,7 +29,7 @@ use ferrets_simulation::{
         player_type::PlayerType,
     },
     simulation_id::SimulationIds,
-    spawn::{self, Arrival, At, FieldReach},
+    spawn::{self, Arrival, At},
 };
 
 /// The players a [`world`] seats.

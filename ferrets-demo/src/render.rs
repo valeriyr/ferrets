@@ -3589,7 +3589,7 @@ pub fn draw_watch_reach(
         // a cell beyond the radius, so the outline encloses the outermost cells
         // the watch reveals instead of cutting through their middles: a
         // one-cell patch draws a circle.
-        let radius = held.radius as f32;
+        let radius = held.reach as f32;
         let size = Vec2::new(
             held.patch.size.width as f32 + 2.0 * radius,
             held.patch.size.height as f32 + 2.0 * radius,

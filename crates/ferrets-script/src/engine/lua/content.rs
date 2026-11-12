@@ -6,6 +6,7 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use ferrets_content::{
     annex::{AloneConduct, AnnexClaim, AnnexLife},
+    area::Area,
     attack::{Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::{Lingering, OrphanFate},
@@ -811,12 +812,22 @@ fn parse_weapon(
         Some(splash) => {
             let shape = required::<String>(&splash, "shape")?;
             let shape = content::splash_shape(&shape)?;
-            let bands = splash_bands(&splash)?;
+            let core = required::<Table>(&splash, "core")?;
+            let core = (
+                parse_area(
+                    "splash core area",
+                    &required::<Value>(&core, "area")?,
+                    registry,
+                )?,
+                content::fixed(&required::<String>(&core, "fraction")?)?,
+            );
+            let rings = splash_rings(&splash, registry)?;
             let layers = required::<u32>(&splash, "layers")?;
             let friendly_fire = required_flag(&splash, "friendly_fire")?;
             Some(SplashDef::new(
                 shape,
-                bands,
+                core,
+                rings,
                 LayerMask::from(layers),
                 friendly_fire,
             ))
@@ -899,21 +910,28 @@ fn parse_turret_mounts(
     Ok(out)
 }
 
-/// Reads a splash `bands` list: an array of `{ radius, fraction }` pairs, innermost
-/// first, where the fraction is a decimal string.
-fn splash_bands(splash: &Table) -> crate::Result<Vec<(u32, FixedU64)>> {
-    let bands: Vec<Table> = required(splash, "bands")?;
-    let mut out = Vec::with_capacity(bands.len());
-    for band in bands {
-        let radius = band
-            .get::<u32>(1)
-            .map_err(|error| field_error("splash band radius", error))?;
-        let fraction = band
-            .get::<String>(2)
-            .map_err(|error| field_error("splash band fraction", error))?;
-        out.push((radius, content::fixed(&fraction)?));
-    }
-    Ok(out)
+/// Reads a splash `rings` list: an array of `{ width, fraction }` tables,
+/// innermost first, where the width is a number of cells as
+/// [`parse_quantity`] reads one and the fraction a decimal string.
+fn splash_rings(
+    splash: &Table,
+    registry: &ContentRegistry,
+) -> crate::Result<Vec<(Quantity, FixedU64)>> {
+    let rings: Vec<Table> = required(splash, "rings")?;
+    rings
+        .iter()
+        .map(|ring| {
+            Ok((
+                parse_quantity(
+                    "splash ring width",
+                    "cell",
+                    &required::<Value>(ring, "width")?,
+                    registry,
+                )?,
+                content::fixed(&required::<String>(ring, "fraction")?)?,
+            ))
+        })
+        .collect()
 }
 
 /// Reads the `stats = { name = value }` table: each key is a registered stat
@@ -1489,20 +1507,31 @@ fn parse_costs(cost: &Table) -> crate::Result<Vec<Cost>> {
     Ok(costs)
 }
 
-/// Reads a number declared as a count of `unit`s or as `{ stat = ... }` naming
-/// a registered entity stat.
+/// Reads a number declared as a count of `unit`s — a non-negative integer,
+/// or a decimal string for a fractional one — or as `{ stat = ... }` naming a
+/// registered entity stat.
 fn parse_quantity(
     what: &str,
     unit: &str,
     value: &Value,
     registry: &ContentRegistry,
 ) -> crate::Result<Quantity> {
+    let count_form = format!("a {unit} count");
+    let forms = [
+        count_form.as_str(),
+        "a decimal string",
+        "a { stat = ... } table",
+    ];
     match value {
-        Value::Integer(count) => Ok(Quantity::Constant(u32::try_from(*count).map_err(|_| {
+        Value::Integer(count) => Ok(Quantity::from(u32::try_from(*count).map_err(|_| {
             ScriptError::ContentError(format!(
                 "{what} {count} must be a non-negative {unit} count"
             ))
         })?)),
+        Value::String(decimal) => match content::fixed(&decimal.to_string_lossy()) {
+            Ok(value) => Ok(Quantity::Constant(value)),
+            Err(_) => Err(content::unexpected(what, &forms, &found(value))),
+        },
         Value::Table(named) => {
             let name = required::<String>(named, "stat")?;
             let stat = registry.entity_stat(&name).ok_or_else(|| {
@@ -1510,11 +1539,29 @@ fn parse_quantity(
             })?;
             Ok(Quantity::Stat(stat))
         }
-        other => Err(content::unexpected(
-            what,
-            &[&format!("a {unit} count"), "a { stat = ... } table"],
-            &found(other),
-        )),
+        other => Err(content::unexpected(what, &forms, &found(other))),
+    }
+}
+
+/// Reads which cells around a shape something takes in: the keyword
+/// `"inside"`, or a number of cells as [`parse_quantity`] reads one.
+fn parse_area(what: &str, value: &Value, registry: &ContentRegistry) -> crate::Result<Area> {
+    let forms = [
+        "'inside'",
+        "a cell count",
+        "a decimal string",
+        "a { stat = ... } table",
+    ];
+    match value {
+        Value::String(keyword) if keyword == "inside" => Ok(Area::Inside),
+        Value::String(decimal) => match content::fixed(&decimal.to_string_lossy()) {
+            Ok(cells) => Ok(Area::Around(Quantity::Constant(cells))),
+            Err(_) => Err(content::unexpected(what, &forms, &found(value))),
+        },
+        Value::Integer(_) | Value::Table(_) => {
+            Ok(Area::Around(parse_quantity(what, "cell", value, registry)?))
+        }
+        other => Err(content::unexpected(what, &forms, &found(other))),
     }
 }
 
@@ -1706,12 +1753,7 @@ fn parse_casting(table: &Table, registry: &ContentRegistry) -> crate::Result<Cas
 fn parse_reach(table: &Table, registry: &ContentRegistry) -> crate::Result<Reach> {
     match optional::<Value>(table, "range")? {
         None => Ok(Reach::Wherever),
-        Some(range) => Ok(Reach::Within(parse_quantity(
-            "cast range",
-            "cell",
-            &range,
-            registry,
-        )?)),
+        Some(range) => Ok(Reach::Within(parse_area("cast range", &range, registry)?)),
     }
 }
 
@@ -1755,23 +1797,13 @@ fn parse_entity_effect(
         Ok(EntityCastEffect::Field {
             at: parse_spot(&required::<Value>(&field, "at")?, registry)?,
             field: field_id(&field, registry)?,
-            radius: parse_quantity(
-                "field radius",
-                "cell",
-                &required::<Value>(&field, "radius")?,
-                registry,
-            )?,
+            area: parse_area("field area", &required::<Value>(&field, "area")?, registry)?,
             action: content::field_action(&required::<String>(&field, "action")?)?,
         })
     } else if let Some(watch) = optional::<Table>(table, "watch")? {
         Ok(EntityCastEffect::Watch {
             at: parse_spot(&required::<Value>(&watch, "at")?, registry)?,
-            radius: parse_quantity(
-                "watch radius",
-                "cell",
-                &required::<Value>(&watch, "radius")?,
-                registry,
-            )?,
+            area: parse_area("watch area", &required::<Value>(&watch, "area")?, registry)?,
             duration: parse_quantity(
                 "watch duration",
                 "tick",
@@ -1940,15 +1972,14 @@ fn parse_from_aim_to(value: &Value) -> crate::Result<FromAimTo> {
     )
 }
 
-/// Reads the bodies a relocation gathers: `{ radius, side, kinds, sight,
+/// Reads the bodies a relocation gathers: `{ area, side, kinds, sight,
 /// count, shortfall }`, where `sight` is `"blind"` or `"seen"` and `count` is
 /// `"all"` or `{ at_most = n }`.
 fn parse_gathering(table: &Table, registry: &ContentRegistry) -> crate::Result<Gathering> {
     Ok(Gathering {
-        radius: parse_quantity(
-            "relocation radius",
-            "cell",
-            &required::<Value>(table, "radius")?,
+        area: parse_area(
+            "relocation area",
+            &required::<Value>(table, "area")?,
             registry,
         )?,
         side: content::affiliation(&required::<String>(table, "side")?)?,
@@ -2183,32 +2214,42 @@ fn parse_field_decay(value: Value) -> crate::Result<FieldDecay> {
     }
 }
 
-/// Reads a source's growth: `"instant"` or `{ cycle = ticks, initial_radius =
-/// cells }`.
-fn parse_field_growth(value: Value) -> crate::Result<FieldGrowth> {
+/// Reads a source's growth: `"instant"` or `{ cycle = ticks, starts_at =
+/// area }`.
+fn parse_field_growth(value: Value, registry: &ContentRegistry) -> crate::Result<FieldGrowth> {
     match &value {
         Value::String(name) if name == "instant" => Ok(FieldGrowth::Instant),
         Value::Table(gradual) => Ok(FieldGrowth::Gradual {
             cycle: required::<u32>(gradual, "cycle")?,
-            initial_radius: required::<u32>(gradual, "initial_radius")?,
+            starts_at: parse_area(
+                "growth start",
+                &required::<Value>(gradual, "starts_at")?,
+                registry,
+            )?,
         }),
         other => Err(content::unexpected(
             "field growth",
-            &["'instant'", "a { cycle = ..., initial_radius = ... } table"],
+            &["'instant'", "a { cycle = ..., starts_at = ... } table"],
             &found(other),
         )),
     }
 }
 
 /// Reads what a source projects while idle, declared under `what`: `"full"`,
-/// `"nothing"`, or `{ held = cells }`.
-fn parse_emission(what: &str, value: Value) -> crate::Result<Emission> {
+/// `"nothing"`, or `{ held = area }`.
+fn parse_emission(what: &str, value: Value, registry: &ContentRegistry) -> crate::Result<Emission> {
     keyword_or_table(
         what,
         &value,
         &[("full", Emission::Full), ("nothing", Emission::Nothing)],
-        &["a { held = cells } table"],
-        |held| Ok(Emission::Held(required::<u32>(held, "held")?)),
+        &["a { held = area } table"],
+        |held| {
+            Ok(Emission::Held(parse_area(
+                "held area",
+                &required::<Value>(held, "held")?,
+                registry,
+            )?))
+        },
     )
 }
 
@@ -2304,10 +2345,10 @@ fn field_by_name(name: &str, registry: &ContentRegistry) -> crate::Result<FieldI
         .ok_or_else(|| ScriptError::ContentError(format!("field '{name}' is not defined")))
 }
 
-/// Reads the `field_sources` list: each entry names a `field`, a `radius`, a
-/// `growth` — `"instant"` or `{ cycle = ticks, initial_radius = cells }` — and
-/// what it projects `while_rising` and `while_disabled`: `"full"`,
-/// `"nothing"`, or `{ held = cells }`.
+/// Reads the `field_sources` list: each entry names a `field`, an `area`, a
+/// `growth` — `"instant"` or `{ cycle = ticks, starts_at = area }` —
+/// and what it projects `while_rising` and `while_disabled`: `"full"`,
+/// `"nothing"`, or `{ held = area }`.
 fn parse_field_sources(
     sources: &[Table],
     registry: &ContentRegistry,
@@ -2315,15 +2356,24 @@ fn parse_field_sources(
     sources
         .iter()
         .map(|entry| {
-            let growth = parse_field_growth(required::<Value>(entry, "growth")?)?;
+            let growth = parse_field_growth(required::<Value>(entry, "growth")?, registry)?;
             Ok(FieldSourceDef::new(
                 field_id(entry, registry)?,
-                required::<u32>(entry, "radius")?,
+                parse_area(
+                    "field source area",
+                    &required::<Value>(entry, "area")?,
+                    registry,
+                )?,
                 growth,
-                parse_emission("while_rising", required::<Value>(entry, "while_rising")?)?,
+                parse_emission(
+                    "while_rising",
+                    required::<Value>(entry, "while_rising")?,
+                    registry,
+                )?,
                 parse_emission(
                     "while_disabled",
                     required::<Value>(entry, "while_disabled")?,
+                    registry,
                 )?,
             ))
         })
@@ -2331,7 +2381,7 @@ fn parse_field_sources(
 }
 
 /// Reads the `on_stand` list: each entry is one act, named by its one verb
-/// key — `field = { field, radius, action }` covers or clears a field around
+/// key — `field = { field, area, action }` covers or clears a field around
 /// the footprint.
 fn parse_on_stand(acts: &[Table], registry: &ContentRegistry) -> crate::Result<Vec<StandingAct>> {
     acts.iter()
@@ -2339,7 +2389,11 @@ fn parse_on_stand(acts: &[Table], registry: &ContentRegistry) -> crate::Result<V
             if let Some(field) = optional::<Table>(entry, "field")? {
                 Ok(StandingAct::Field {
                     field: field_id(&field, registry)?,
-                    radius: required::<u32>(&field, "radius")?,
+                    area: parse_area(
+                        "standing act area",
+                        &required::<Value>(&field, "area")?,
+                        registry,
+                    )?,
                     action: content::field_action(&required::<String>(&field, "action")?)?,
                 })
             } else {

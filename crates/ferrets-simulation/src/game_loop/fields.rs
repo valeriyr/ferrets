@@ -1,28 +1,77 @@
 //! Per-tick field recompute: grows every standing source's reach, re-derives
-//! what the sources sustain, and lets unsustained coverage decay by each
-//! field's policy. Also the one-off acts on a field a cast or a standing
-//! entity performs.
+//! what the sources sustain, lets unsustained coverage decay by each field's
+//! policy, and reads how far the field of each source holding up less than
+//! it reaches still lies.
 
-use std::collections::VecDeque;
-
-use bevy_ecs::world::World;
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection};
+use bevy_ecs::{entity::Entity, world::World};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 
 use crate::{
     components::{
-        field_source::{Emitted, FieldSourcesComponent},
+        field_source::{Emitted, FieldReach, FieldSourceState, FieldSourcesComponent, Growth},
         hidden::HiddenComponent,
     },
     entity_def::{self, Operation},
     entity_index::EntityIndex,
+    field_cover,
     fields::FieldGrid,
     map::Map,
     session::player_id::PlayerId,
 };
 use ferrets_content::{
-    field::{Emission, FieldAction, FieldDecay, FieldDef, FieldGrowth, FieldId},
+    field::{Emission, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef},
     registry::ContentRegistry,
 };
+
+/// What a source projects this recompute, its area read.
+#[derive(Clone, Copy)]
+enum Emitting {
+    /// As much as when the entity operates.
+    Full,
+    /// A patch this many cells out from the footprint.
+    Held(u32),
+    /// Nothing.
+    Nothing,
+}
+
+/// Whether a source's body is still rising.
+#[derive(Clone, Copy)]
+enum Stage {
+    /// Still rising into the world.
+    Rising,
+    /// Risen, or arrived finished.
+    Risen,
+}
+
+/// One source's areas read for this recompute.
+#[derive(Clone, Copy)]
+struct SourceRead {
+    /// Whether its body is still rising.
+    stage: Stage,
+    /// What it projects.
+    emitting: Emitting,
+    /// Its area in cells.
+    area: u32,
+    /// How far its field reaches before it grows: a start read no farther
+    /// than the area, or the reach it holds, read again off the grid when it
+    /// held up less than it at the last recompute and its owner is in the
+    /// field's `lost_by`.
+    grown: u32,
+}
+
+/// A source holding up less than it reaches this recompute.
+struct Reduced {
+    /// The entity it belongs to.
+    entity: Entity,
+    /// Its index among the entity's sources.
+    index: usize,
+    /// The player whose cover it reads.
+    player: PlayerId,
+    /// The footprint its field lies around.
+    footprint: CellRect,
+    /// What it projects this recompute.
+    holds: Emitted,
+}
 
 /// One source's projection this tick.
 struct Patch {
@@ -41,23 +90,47 @@ struct Patch {
 /// Sources are read from the alive index, so a dying source stops projecting
 /// the tick it dies. While rising a source projects its `while_rising`
 /// emission and disabled its `while_disabled` one — one of: all it would
-/// project operating, a held patch, or nothing; its growth stands where it
-/// was, and never below a patch it held. A field outage is read from the grid
-/// as it stands before this pass rewrites it, so a source switched off by
-/// losing a field follows one tick after the field does; a buff outage, or
-/// the rise, is read as it is. Operating, a gradual source
-/// grows one cell per cycle up to its radius. Sustained cells are
-/// re-derived from scratch, covered cells absorb them, and the rest decays per
-/// field: at once, from the edge inward every cycle, or never.
+/// project operating, a held patch, or nothing. A field outage is read from
+/// the grid as it stands before this pass rewrites it, so a source switched
+/// off by losing a field follows one tick after the field does; a buff
+/// outage, or the rise, is read as it is. A source reads its start at its
+/// first recompute once its body has risen, or while rising projecting all
+/// it would operating, and takes as its reach what it places then, never
+/// below a patch it held while rising.
+/// Operating, a gradual source grows one cell per cycle up to its area.
+/// Sustained cells are re-derived from scratch, covered cells absorb them,
+/// and the rest decays per field: at once, from the edge inward every cycle,
+/// or never. A source holding up less than it reaches — held, emitting
+/// nothing, or over a lowered area — keeps as its reach only how far its
+/// field still lies around it, never below a patch it holds: read off the
+/// grid before it grows and again as this recompute leaves the grid,
+/// whenever its owner is in the field's `lost_by`.
 ///
 /// Every fold is either commutative or reads a snapshot taken before the pass
 /// writes, so source order cannot reach the grid.
 pub fn recompute_fields(world: &mut World) {
-    let mut patches: Vec<Patch> = Vec::new();
+    let fields: Vec<(FieldId, FieldDef)> = {
+        let registry = world.resource::<ContentRegistry>();
+        registry
+            .field_ids()
+            .map(|id| (id, *registry.field_def(id)))
+            .collect()
+    };
+    let (patches, reduced) = advance_sources(world, &fields);
+    sustain_and_decay(world, &fields, &patches);
+    read_reduced(world, &fields, &reduced);
+}
 
+/// Advances every standing source's growth and lists what each projects and
+/// which hold up less than they reach.
+fn advance_sources(
+    world: &mut World,
+    fields: &[(FieldId, FieldDef)],
+) -> (Vec<Patch>, Vec<Reduced>) {
+    let mut patches: Vec<Patch> = Vec::new();
+    let mut reduced: Vec<Reduced> = Vec::new();
     for (_, entity) in world.resource::<EntityIndex>().alive_entries() {
-        let entity_ref = world.entity(entity);
-        if entity_ref.contains::<HiddenComponent>() {
+        if world.entity(entity).contains::<HiddenComponent>() {
             continue;
         }
         let def = entity_def::of(world, entity);
@@ -68,14 +141,76 @@ pub fn recompute_fields(world: &mut World) {
             continue;
         };
         let footprint = entity_def::location(world, entity).footprint();
-        let operation = entity_def::operation(world, entity);
         let sources = def.field_sources.clone();
+        let reads = read_sources(world, entity, fields, &sources, player, footprint);
 
-        let mut entity_mut = world.entity_mut(entity);
-        let mut component = entity_mut
-            .get_mut::<FieldSourcesComponent>()
+        let mut component = world
+            .get_mut::<FieldSourcesComponent>(entity)
             .expect("a type with field sources carries their state");
-        for (source, state) in sources.iter().zip(component.0.iter_mut()) {
+        for (index, ((source, read), state)) in sources
+            .iter()
+            .zip(reads)
+            .zip(component.0.iter_mut())
+            .enumerate()
+        {
+            let (projected, growth) = advance(source, *state, read);
+            state.growth = growth;
+            // A source holding up less than it reaches reads, once the grid
+            // has changed, how far its field still lies.
+            if let Some(reach) = growth.reach() {
+                let holds_less = match projected {
+                    Emitted::Reach(holds) => holds < reach,
+                    Emitted::Nothing => true,
+                };
+                if holds_less {
+                    reduced.push(Reduced {
+                        entity,
+                        index,
+                        player,
+                        footprint,
+                        holds: projected,
+                    });
+                }
+            }
+            match projected {
+                Emitted::Reach(reach) => patches.push(Patch {
+                    field: source.field(),
+                    player,
+                    footprint,
+                    reach,
+                }),
+                Emitted::Nothing => {}
+            }
+            state.last_emitted = projected;
+        }
+    }
+    (patches, reduced)
+}
+
+/// Reads each of `entity`'s `sources` for this recompute: what it projects,
+/// its area, and how far its field reaches before it grows. An area read
+/// from a stat is read as the entity holds it now.
+fn read_sources(
+    world: &World,
+    entity: Entity,
+    fields: &[(FieldId, FieldDef)],
+    sources: &[FieldSourceDef],
+    player: PlayerId,
+    footprint: CellRect,
+) -> Vec<SourceRead> {
+    let operation = entity_def::operation(world, entity);
+    let stage = match operation {
+        Operation::Rising => Stage::Rising,
+        Operation::Operating | Operation::Disabled(_) | Operation::Stranded => Stage::Risen,
+    };
+    let area_reach = |area| entity_def::area_reach(world, entity, area);
+    let states = world
+        .get::<FieldSourcesComponent>(entity)
+        .expect("a type with field sources carries their state");
+    sources
+        .iter()
+        .zip(&states.0)
+        .map(|(source, state)| {
             let emission = match operation {
                 Operation::Operating => Emission::Full,
                 Operation::Rising => source.while_rising(),
@@ -83,52 +218,141 @@ pub fn recompute_fields(world: &mut World) {
                 // Off the map, a source stands on no cell to emit from.
                 Operation::Stranded => unreachable!("a stranded body is hidden"),
             };
-            let reach = match emission {
-                Emission::Nothing => {
-                    state.last_emitted = Emitted::Nothing;
-                    continue;
-                }
-                // A held patch is kept rather than shrunk when the source
-                // operates again: its growth carries on from there.
-                Emission::Held(radius) => {
-                    if state.reach < radius {
-                        state.reach = radius;
-                    }
-                    radius
-                }
-                Emission::Full => match source.growth() {
-                    FieldGrowth::Instant => source.radius(),
-                    FieldGrowth::Gradual { cycle, .. } => {
-                        if state.reach < source.radius() {
-                            state.countdown -= 1;
-                            if state.countdown == 0 {
-                                state.reach += 1;
-                                state.countdown = cycle;
-                            }
-                        }
-                        state.reach
-                    }
-                },
+            let emitting = match emission {
+                Emission::Full => Emitting::Full,
+                Emission::Held(area) => Emitting::Held(area_reach(area)),
+                Emission::Nothing => Emitting::Nothing,
             };
-            state.last_emitted = Emitted::Reach(reach);
-            patches.push(Patch {
-                field: source.field(),
-                player,
-                footprint,
-                reach,
-            });
+            let area = area_reach(source.area());
+            let grown = match state.growth {
+                // A start is never below the patch held while rising.
+                Growth::Unread(FieldReach::Initial) => match source.growth() {
+                    FieldGrowth::Gradual { starts_at, .. } => {
+                        let start = area_reach(starts_at);
+                        let start = match state.last_emitted {
+                            Emitted::Reach(held) => start.max(held),
+                            Emitted::Nothing => start,
+                        };
+                        start.min(area)
+                    }
+                    FieldGrowth::Instant => area,
+                },
+                Growth::Unread(FieldReach::Full) => area,
+                Growth::Spanning { reach } | Growth::Growing { reach, .. } => {
+                    match state.last_emitted {
+                        // Holding up its whole reach, it sustained every cell
+                        // of it.
+                        Emitted::Reach(held) if held == reach => reach,
+                        Emitted::Reach(_) | Emitted::Nothing => reach_still_lying(
+                            world,
+                            fields,
+                            source.field(),
+                            footprint,
+                            player,
+                            reach,
+                        ),
+                    }
+                }
+            };
+            SourceRead {
+                stage,
+                emitting,
+                area,
+                grown,
+            }
+        })
+        .collect()
+}
+
+/// Where the growth of `state`, a source of `source`, goes this recompute
+/// given its `read`: what it projects and its growth after. A source read
+/// once risen takes the wider of what it places and the patch it held while
+/// rising.
+fn advance(
+    source: &FieldSourceDef,
+    state: FieldSourceState,
+    read: SourceRead,
+) -> (Emitted, Growth) {
+    let growth = state.growth;
+    let SourceRead {
+        stage,
+        emitting,
+        area,
+        grown,
+    } = read;
+    match (growth, emitting) {
+        (Growth::Unread(_), Emitting::Nothing) => match stage {
+            Stage::Rising => (Emitted::Nothing, growth),
+            Stage::Risen => {
+                let lies = match state.last_emitted {
+                    Emitted::Reach(patch) => patch.min(area),
+                    Emitted::Nothing => 0,
+                };
+                (Emitted::Nothing, read_at(source, lies))
+            }
+        },
+        (Growth::Spanning { .. } | Growth::Growing { .. }, Emitting::Nothing) => {
+            (Emitted::Nothing, growth.with_reach(grown))
+        }
+        (Growth::Unread(_), Emitting::Held(held)) => {
+            let held = held.min(area);
+            match stage {
+                Stage::Rising => (Emitted::Reach(held), growth),
+                Stage::Risen => {
+                    let lies = match state.last_emitted {
+                        Emitted::Reach(patch) => held.max(patch.min(area)),
+                        Emitted::Nothing => held,
+                    };
+                    (Emitted::Reach(held), read_at(source, lies))
+                }
+            }
+        }
+        (Growth::Spanning { .. } | Growth::Growing { .. }, Emitting::Held(held)) => {
+            let held = held.min(area);
+            (Emitted::Reach(held), growth.with_reach(grown.max(held)))
+        }
+        (Growth::Unread(_) | Growth::Spanning { .. } | Growth::Growing { .. }, Emitting::Full) => {
+            match source.growth() {
+                FieldGrowth::Instant => (
+                    Emitted::Reach(area),
+                    Growth::Spanning {
+                        reach: area.max(grown),
+                    },
+                ),
+                FieldGrowth::Gradual { cycle, .. } => {
+                    let mut countdown = match growth {
+                        Growth::Unread(_) => cycle,
+                        Growth::Growing { countdown, .. } => countdown,
+                        Growth::Spanning { .. } => {
+                            unreachable!("a gradual source grows by cycles")
+                        }
+                    };
+                    let mut projected = grown.min(area);
+                    if projected < area {
+                        countdown -= 1;
+                        if countdown == 0 {
+                            projected += 1;
+                            countdown = cycle;
+                        }
+                    }
+                    (
+                        Emitted::Reach(projected),
+                        Growth::Growing {
+                            reach: projected.max(grown),
+                            countdown,
+                        },
+                    )
+                }
+            }
         }
     }
+}
 
+/// Re-derives what every patch sustains, lets every field's unsustained
+/// cover decay by its policy.
+fn sustain_and_decay(world: &mut World, fields: &[(FieldId, FieldDef)], patches: &[Patch]) {
     // Cells are derived against the map first; the grid is written after, so
     // the two resources are never borrowed together.
-    let fields: Vec<(FieldId, FieldDef)> = {
-        let registry = world.resource::<ContentRegistry>();
-        registry
-            .field_ids()
-            .map(|id| (id, *registry.field_def(id)))
-            .collect()
-    };
     let map = world.resource::<Map>();
     let sustained: Vec<(FieldId, PlayerId, Vec<CellPos>)> = patches
         .iter()
@@ -137,13 +361,13 @@ pub fn recompute_fields(world: &mut World) {
             (
                 patch.field,
                 patch.player,
-                flood(map, def, patch.footprint, patch.reach),
+                field_cover::flood(map, def, patch.footprint, patch.reach),
             )
         })
         .collect();
 
     let mut grid = world.resource_mut::<FieldGrid>();
-    for &(field, def) in &fields {
+    for &(field, def) in fields {
         grid.reset_sustained(field);
         for (_, player, cells) in sustained.iter().filter(|(f, _, _)| *f == field) {
             for &cell in cells {
@@ -163,109 +387,123 @@ pub fn recompute_fields(world: &mut World) {
     }
 }
 
-/// Covers or clears `field` around the cell `center` for `player`: the
-/// one-cell [`apply_action_around`].
-///
-/// Covered cells have no source sustaining them, so they live by the field's
-/// decay policy from the next recompute on; clearing removes only what no
-/// source sustained at the last recompute.
-pub fn apply_action(
-    world: &mut World,
-    player: PlayerId,
-    field: FieldId,
-    center: CellPos,
-    radius: u32,
-    action: FieldAction,
-) {
-    apply_action_around(world, player, field, CellRect::cell(center), radius, action);
+/// Reads how far each reduced source's field still lies, off the grid as this
+/// recompute left it, never below a patch it holds; then empties every
+/// field's `lost_by`.
+fn read_reduced(world: &mut World, fields: &[(FieldId, FieldDef)], reduced: &[Reduced]) {
+    let lying: Vec<(Entity, usize, u32)> = reduced
+        .iter()
+        .map(|reduced| {
+            let state = world
+                .get::<FieldSourcesComponent>(reduced.entity)
+                .expect("a reduced source carries its state")
+                .0[reduced.index];
+            let reach = state
+                .growth
+                .reach()
+                .expect("a reduced source has read its reach");
+            let lies = reach_still_lying(
+                world,
+                fields,
+                state.field,
+                reduced.footprint,
+                reduced.player,
+                reach,
+            );
+            let lies = match reduced.holds {
+                Emitted::Reach(holds) => lies.max(holds),
+                Emitted::Nothing => lies,
+            };
+            (reduced.entity, reduced.index, lies)
+        })
+        .collect();
+    for (entity, index, lies) in lying {
+        let mut component = world
+            .get_mut::<FieldSourcesComponent>(entity)
+            .expect("a reduced source carries its state");
+        let state = &mut component.0[index];
+        state.growth = state.growth.with_reach(lies);
+    }
+    let mut grid = world.resource_mut::<FieldGrid>();
+    for &(field, _) in fields {
+        grid.clear_lost_by(field);
+    }
 }
 
-/// Covers or clears `field` within `radius` of `footprint`. A cover spreads
-/// from the footprint through cells on the field's terrains, for `player`;
-/// a clear takes the whole disc, walls and all, and drops whatever cover in it
-/// no source sustains, whoever's it is.
-pub fn apply_action_around(
-    world: &mut World,
-    player: PlayerId,
+/// The growth a start read at `reach` takes: spanning for a source that grows
+/// at once, growing with a fresh cycle for one that grows by cycles.
+fn read_at(source: &FieldSourceDef, reach: u32) -> Growth {
+    match source.growth() {
+        FieldGrowth::Instant => Growth::Spanning { reach },
+        FieldGrowth::Gradual { cycle, .. } => Growth::Growing {
+            reach,
+            countdown: cycle,
+        },
+    }
+}
+
+/// How far `field` still lies around `footprint` for `player`, out to
+/// `reach`: `reach` unless the player is in the field's `lost_by`, else read
+/// off the grid ([`lying_reach`]).
+fn reach_still_lying(
+    world: &World,
+    fields: &[(FieldId, FieldDef)],
     field: FieldId,
     footprint: CellRect,
-    radius: u32,
-    action: FieldAction,
-) {
-    let def = *world.resource::<ContentRegistry>().field_def(field);
-    let map = world.resource::<Map>();
-    let cells = match action {
-        FieldAction::Cover => flood(map, &def, footprint, radius),
-        FieldAction::Clear => projection::circle_cells(footprint, radius)
-            .into_iter()
-            .filter(|&cell| map.contains(cell))
-            .collect(),
-    };
-    let mut grid = world.resource_mut::<FieldGrid>();
-    for cell in cells {
-        match action {
-            FieldAction::Cover => grid.cover(field, cell, player),
-            FieldAction::Clear => grid.clear_unsustained(field, cell),
-        }
+    player: PlayerId,
+    reach: u32,
+) -> u32 {
+    let grid = world.resource::<FieldGrid>();
+    if !grid.lost_by(field).contains(player) {
+        return reach;
     }
+    let def = &fields[field.index()].1;
+    lying_reach(
+        world.resource::<Map>(),
+        grid,
+        (field, def),
+        footprint,
+        player,
+        reach,
+    )
 }
 
-/// The cells on the field's terrains within `reach` of `footprint` and
-/// connected to it through such cells, in the order a breadth-first walk
-/// from the footprint visits them. The walk starts from every cell of the
-/// footprint, whatever its terrain; a footprint cell the field's terrains
-/// reject is walked from but not covered.
-fn flood(map: &Map, def: &FieldDef, footprint: CellRect, reach: u32) -> Vec<CellPos> {
-    let (width, height) = (map.width(), map.height());
-    // The walk never leaves the disc's bounding box, so that is all the
-    // bookkeeping it needs.
-    let low = CellPos::new(
-        footprint.origin.x.saturating_sub(reach),
-        footprint.origin.y.saturating_sub(reach),
-    );
-    let span = CellSize::new(
-        (footprint.origin.x + footprint.size.width + reach).min(width) - low.x,
-        (footprint.origin.y + footprint.size.height + reach).min(height) - low.y,
-    );
-    let mut visited = vec![false; (span.width * span.height) as usize];
-    let index = |cell: CellPos| ((cell.y - low.y) * span.width + (cell.x - low.x)) as usize;
-    let mut queue: VecDeque<CellPos> = VecDeque::new();
-    let mut out = Vec::new();
-    let lies_on = |cell: CellPos| {
-        map.nav_grid()
-            .terrain(cell)
-            .is_some_and(|terrain| def.terrains().admits(terrain))
+/// How far `field` still lies around `footprint` for `player`: the largest
+/// reach no farther than `grown` whose every cell is in the player's cover.
+/// The search starts at the farthest reach that still adds a map cell and
+/// halves the reaches between.
+fn lying_reach(
+    map: &Map,
+    grid: &FieldGrid,
+    (field, def): (FieldId, &FieldDef),
+    footprint: CellRect,
+    player: PlayerId,
+    grown: u32,
+) -> u32 {
+    let whole = |reach| {
+        field_cover::flood(map, def, footprint, reach)
+            .into_iter()
+            .all(|cell| grid.covered(field, cell).contains(player))
     };
-
-    for cell in footprint.cells().filter(|&cell| map.contains(cell)) {
-        visited[index(cell)] = true;
-        queue.push_back(cell);
-        if lies_on(cell) {
-            out.push(cell);
+    let across = |origin: u32, size: u32, extent: u32| {
+        origin.max(extent.saturating_sub(origin.saturating_add(size)))
+    };
+    let farthest = across(footprint.origin.x, footprint.size.width, map.width()).saturating_add(
+        across(footprint.origin.y, footprint.size.height, map.height()),
+    );
+    let top = grown.min(farthest);
+    if whole(top) {
+        return grown;
+    }
+    // `lies` is whole or the floor, `broken` is not.
+    let (mut lies, mut broken) = (0, top);
+    while broken - lies > 1 {
+        let middle = lies + (broken - lies) / 2;
+        if whole(middle) {
+            lies = middle;
+        } else {
+            broken = middle;
         }
     }
-
-    while let Some(cell) = queue.pop_front() {
-        let neighbours = [
-            (cell.x > 0).then(|| CellPos::new(cell.x - 1, cell.y)),
-            (cell.x + 1 < width).then(|| CellPos::new(cell.x + 1, cell.y)),
-            (cell.y > 0).then(|| CellPos::new(cell.x, cell.y - 1)),
-            (cell.y + 1 < height).then(|| CellPos::new(cell.x, cell.y + 1)),
-        ];
-        for next in neighbours.into_iter().flatten() {
-            if !projection::in_circle(next, footprint, reach) {
-                continue;
-            }
-            if visited[index(next)] {
-                continue;
-            }
-            visited[index(next)] = true;
-            if !lies_on(next) {
-                continue;
-            }
-            queue.push_back(next);
-            out.push(next);
-        }
-    }
-    out
+    lies
 }

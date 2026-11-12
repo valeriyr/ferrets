@@ -430,19 +430,19 @@ fn empty_berth_group_name_panics() {
 #[test]
 #[should_panic(expected = "breeds must not be empty")]
 fn breeder_of_nothing_panics() {
-    BreederDef::new("", Quantity::Constant(10), 2, 0, OrphanFate::Perish);
+    BreederDef::new("", Quantity::from(10), 2, 0, OrphanFate::Perish);
 }
 
 #[test]
 #[should_panic(expected = "a brood limit must admit at least one broodling")]
 fn breeder_with_limit_of_zero_panics() {
-    BreederDef::new("grub", Quantity::Constant(10), 0, 0, OrphanFate::Perish);
+    BreederDef::new("grub", Quantity::from(10), 0, 0, OrphanFate::Perish);
 }
 
 #[test]
 #[should_panic(expected = "a brood cannot owe more broodlings than its limit admits")]
 fn breeder_owing_more_than_its_limit_panics() {
-    BreederDef::new("grub", Quantity::Constant(10), 2, 3, OrphanFate::Perish);
+    BreederDef::new("grub", Quantity::from(10), 2, 3, OrphanFate::Perish);
 }
 
 #[test]

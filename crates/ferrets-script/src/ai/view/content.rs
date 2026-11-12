@@ -7,13 +7,13 @@ use ferrets_content::{
     coverage::Coverage,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
-    quantity::Quantity,
     registry::ContentRegistry,
     requirement::{Bound, Requirement, Threshold},
     research::ResearchId,
     skills::{Casting, EntityCastTarget, SkillCaster, SkillId, Whom},
 };
 use ferrets_nav_grid::layer_mask::LayerMask;
+use ferrets_simulation::entity_def;
 
 /// The limit a requirement compares against, as a script reads it: an amount,
 /// or a fraction of the reference, as a decimal string.
@@ -244,8 +244,9 @@ pub struct BreederView {
     pub breeds: String,
     /// How many broodlings live at once.
     pub limit: u32,
-    /// Ticks between births. `None` when the period is read from a stat.
-    pub period: Option<u32>,
+    /// Ticks between births: a constant as declared, a stat at the
+    /// breeder's base, rounded up.
+    pub period: u32,
 }
 
 /// One change of form a type declares.
@@ -255,8 +256,9 @@ pub struct MorphView {
     /// The stockpile price per resource kind, in ascending kind order. Empty
     /// means the change draws nothing from the stockpile.
     pub price: Vec<(String, u32)>,
-    /// Ticks the change takes. `None` when the time is read from a stat.
-    pub time: Option<u32>,
+    /// Ticks the change takes: a constant as declared, a stat at the type's
+    /// base, rounded up.
+    pub time: u32,
 }
 
 /// A type's weapon — the combat stats a script reads together (a type carries
@@ -335,20 +337,14 @@ impl EntityContentView {
                                 Cost::Energy(_) | Cost::Health(_) => Vec::new(),
                             })
                             .collect(),
-                        time: match transition.time() {
-                            Quantity::Constant(ticks) => Some(ticks),
-                            Quantity::Stat(_) => None,
-                        },
+                        time: entity_def::base_quantity_ticks(def, transition.time()),
                     })
                     .collect()
             }),
             breeder: def.breeder.as_ref().map(|brood| BreederView {
                 breeds: brood.breeds().to_string(),
                 limit: u32::try_from(brood.limit()).expect("a brood limit fits in u32"),
-                period: match brood.period() {
-                    Quantity::Constant(ticks) => Some(ticks),
-                    Quantity::Stat(_) => None,
-                },
+                period: entity_def::base_quantity_ticks(def, brood.period()),
             }),
         }
     }

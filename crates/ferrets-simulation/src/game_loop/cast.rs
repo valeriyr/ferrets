@@ -43,6 +43,7 @@ use crate::{
     components::{
         cast::{CastComponent, CastStage, Paid},
         entity_skills::{self, SkillsComponent},
+        field_source::FieldReach,
         order_queue::{CancelPolicy, OrderState},
         owner, pools,
         rise::{RiseAttendance, RiseOrigin},
@@ -50,7 +51,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::{EventRecord, SimulationEvent, SpendCause},
-    game_loop::fields,
+    field_cover,
     landing::{self, Bound, ComesFrom, Lander, Landings},
     map::Map,
     order::Order,
@@ -60,7 +61,7 @@ use crate::{
     resources::{self, PlayerResources},
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
-    spawn::{self, Arrival, At, FieldReach},
+    spawn::{self, Arrival, At},
     supply, tunnels,
     visibility::{self, Senses},
     watches,
@@ -573,7 +574,7 @@ fn reach_of(world: &World, caster: Entity, def: &SkillDef) -> Option<u32> {
             | EntityCastTarget::Standing { reach, .. }
             | EntityCastTarget::Fallen { reach, .. } => match reach {
                 Reach::Wherever => None,
-                Reach::Within(reach) => Some(entity_def::quantity_cells(world, caster, reach)),
+                Reach::Within(area) => Some(entity_def::area_reach(world, caster, area)),
             },
             EntityCastTarget::Caster => None,
         },
@@ -1201,7 +1202,7 @@ fn relocation(
 
 /// The bodies `gathering` takes around the cells `patch`, nearest first,
 /// ties by id, up to its count: each one that can be moved, standing within
-/// its radius by map distance, on its side judged from `player`, of its kinds,
+/// its area by map distance, on its side judged from `player`, of its kinds,
 /// and made out by `player` where its sight asks. None of `not_gathered` is
 /// taken.
 fn gather(
@@ -1212,7 +1213,7 @@ fn gather(
     patch: CellRect,
     not_gathered: &[Entity],
 ) -> Vec<Entity> {
-    let radius = entity_def::quantity_cells(world, caster, gathering.radius);
+    let reach = entity_def::area_reach(world, caster, gathering.area);
     let projection = world.resource::<Map>().projection();
     let session = world.resource::<GameSession>();
     let mut found: Vec<(u32, SimulationId, Entity)> = world
@@ -1224,7 +1225,7 @@ fn gather(
                 return None;
             }
             let standing = entity_def::standing_rect(world, entity);
-            if !projection.in_range_for_rects(standing, patch, radius) {
+            if !projection.in_range_for_rects(standing, patch, reach) {
                 return None;
             }
             let owner = entity_def::owner(world, entity);
@@ -1346,7 +1347,7 @@ fn perform(
             // called up out of nothing names only its caster.
             for (cell, cover) in cells {
                 // What a cast calls up is as new as anything trained: its
-                // field sources start at their initial reach.
+                // field sources start at their growth start.
                 let reach = FieldReach::Initial;
                 // A rising one rises on its own, for its caster.
                 let arrival = match arrives {
@@ -1430,26 +1431,26 @@ fn apply_effect(
     match effect {
         &EntityCastEffect::Field {
             field,
-            radius,
+            area,
             action,
             ..
         } => {
             let patch = aimed_patch(world, aim);
-            let radius = entity_def::quantity_cells(world, caster, radius);
-            fields::apply_action_around(world, player, field, patch, radius, action);
+            let reach = entity_def::area_reach(world, caster, area);
+            field_cover::apply_action_around(world, player, field, patch, reach, action);
             return;
         }
         &EntityCastEffect::Watch {
-            radius,
+            area,
             duration,
             detection,
             ..
         } => {
             let patch = aimed_patch(world, aim);
-            let radius = entity_def::quantity_cells(world, caster, radius);
+            let reach = entity_def::area_reach(world, caster, area);
             let duration = entity_def::quantity_ticks(world, caster, duration);
             let caster_id = entity_def::simulation_id(world, caster);
-            watches::open(world, player, caster_id, patch, radius, duration, detection);
+            watches::open(world, player, caster_id, patch, reach, duration, detection);
             return;
         }
         EntityCastEffect::ApplyBuff { .. }

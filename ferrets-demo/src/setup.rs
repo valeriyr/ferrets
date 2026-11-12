@@ -9,12 +9,13 @@ use ferrets_content::player_stats::PlayerStatId;
 use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
+    components::field_source::FieldReach,
     map::Map,
     movement_model::MovementModel,
     player_stats::PlayerStats,
     resources::PlayerResources,
     session::{GameSession, player_id::PlayerId},
-    spawn::{self, At, FieldReach},
+    spawn::{self, At},
 };
 
 use crate::{map, settings::Settings};

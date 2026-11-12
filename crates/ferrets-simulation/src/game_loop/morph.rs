@@ -49,6 +49,7 @@ use crate::{
     brood,
     components::{
         entity_info::EntityInfoComponent,
+        field_source::FieldReach,
         last_hit::LastHitComponent,
         location::LocationComponent,
         morph::{MorphComponent, MorphStage, MorphUnderWay},
@@ -74,7 +75,7 @@ use crate::{
     rally, requirements, reservation,
     session::player_id::PlayerId,
     simulation_id::SimulationId,
-    spawn::{self, BroodlingSeat, FieldReach, StandingActs},
+    spawn::{self, BroodlingSeat, StandingActs},
     supply,
 };
 

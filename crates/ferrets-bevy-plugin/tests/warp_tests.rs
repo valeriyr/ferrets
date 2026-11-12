@@ -5,6 +5,7 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     build::BuilderAttendance,
     coverage::Coverage,
     detection::Detection,
@@ -16,6 +17,7 @@ use ferrets_content::{
     pool::Pool,
     pool_def::PoolId,
     price,
+    quantity::Quantity,
     registry::ContentRegistry,
     requirement::Requirement,
     resource::DepletionPolicy,
@@ -74,7 +76,7 @@ fn relay_refuses_cell_outside_its_power() {
     let (relay, _) = utils::create_owned(&mut app, "relay", 5, 10, 0);
     utils::run_ticks(&mut app, 1);
 
-    // Four cells east of the beacon, past its power radius of three.
+    // Four cells east of the beacon, past its power area of three.
     assert_eq!(judged(&app, relay, 14, 10), Err(WarpRefusal::OutsideField));
 }
 
@@ -758,7 +760,7 @@ fn app() -> App {
                 .with_stat(EntityStatId::SUPPLY_PROVIDED, FixedU64::ONE)
                 .with_field_sources([FieldSourceDef::new(
                     power,
-                    3,
+                    Area::Around(Quantity::from(3)),
                     FieldGrowth::Instant,
                     Emission::Nothing,
                     Emission::Nothing,
@@ -816,7 +818,7 @@ fn app() -> App {
         registry.register(
             utils::building("puddle").with_field_sources([FieldSourceDef::new(
                 mud,
-                1,
+                Area::Around(Quantity::from(1)),
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Nothing,

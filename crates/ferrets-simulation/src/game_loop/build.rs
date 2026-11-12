@@ -26,6 +26,7 @@ use crate::{
         build::{BuildComponent, BuildStage},
         dying::DyingComponent,
         entity_info::EntityInfoComponent,
+        field_source::FieldReach,
         hidden::{self, Inside},
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderState},
@@ -47,7 +48,7 @@ use crate::{
     resources::{self, PlayerResources},
     session::player_id::PlayerId,
     simulation_id::SimulationId,
-    spawn::{self, At, FieldReach},
+    spawn::{self, At},
     supply, tunnels,
 };
 use ferrets_content::{

@@ -955,7 +955,7 @@ fn app() -> App {
                 .with_morphs([MorphTransition::new(
                     "shuttered_forge",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(1),
+                    Quantity::from(1),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphReason::Change,

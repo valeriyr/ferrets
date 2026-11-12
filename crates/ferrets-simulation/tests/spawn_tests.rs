@@ -8,10 +8,13 @@ use ferrets_content::{
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
-    components::rise::{RiseAttendance, RiseOrigin},
+    components::{
+        field_source::FieldReach,
+        rise::{RiseAttendance, RiseOrigin},
+    },
     entity_def,
     simulation_id::SimulationId,
-    spawn::{self, Arrival, At, FieldReach},
+    spawn::{self, Arrival, At},
 };
 
 mod utils;

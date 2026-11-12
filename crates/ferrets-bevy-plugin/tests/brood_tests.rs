@@ -8,6 +8,7 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::OrphanFate,
@@ -2282,6 +2283,7 @@ fn shot_following_broodling_hidden_by_same_batch_is_lost_with_it() {
         origin: utils::pos(2, 2),
         impact: utils::pos(11, 11),
         damage: FixedU64::from_num(damage),
+        blast: None,
         emitted_on_tick: tick,
         lands_on_tick: tick,
     };
@@ -2590,7 +2592,7 @@ fn kennel_with_seated_pup_for(slots: Vec<PlayerSlot>) -> (App, Entity) {
                                 side: Affiliation::Own,
                                 kinds: Kinds::Any,
                             },
-                            reach: Reach::Within(Quantity::Constant(3)),
+                            reach: Reach::Within(Area::Around(Quantity::from(3))),
                         },
                     },
                 },
@@ -2653,7 +2655,7 @@ fn kennel_with_seated_pup_for(slots: Vec<PlayerSlot>) -> (App, Entity) {
             .entity("sow")
             .expect("the brood content declares a sow")
             .clone()
-            .with_breeder("pup", Quantity::Constant(10), 2, 0, OrphanFate::Perish);
+            .with_breeder("pup", Quantity::from(10), 2, 0, OrphanFate::Perish);
         kennel.name = "kennel".to_string();
         registry.register(kennel);
     }

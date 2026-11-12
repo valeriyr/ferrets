@@ -8,6 +8,7 @@ use ferrets_geometry::cell_rect::CellRect;
 use super::orders::{self, Processing, Refusal};
 use crate::{
     components::{
+        field_source::FieldReach,
         order_queue::{CancelPolicy, OrderState},
         train::{TrainComponent, TrainQueueComponent},
     },
@@ -16,7 +17,7 @@ use crate::{
     make_way::{self, Asked},
     order::Order,
     rally,
-    spawn::{self, At, FieldReach},
+    spawn::{self, At},
 };
 
 /// Whether `entity` may start a Train: its type trains and it has risen.

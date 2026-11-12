@@ -4,6 +4,7 @@
 use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     attack::Slain,
     cost::Cost,
     coverage::Coverage,
@@ -48,9 +49,10 @@ use ferrets_simulation::{
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent, SpawnCause},
+    field_cover,
     game_loop::{
         cast::{self, AimRefusal, Aiming, CastAim, CastRefusal},
-        damage, fields,
+        damage,
     },
     movement_model::MovementModel,
     order::Order,
@@ -342,7 +344,7 @@ fn summon_sets_down_only_where_summoned_types_placement_rules_admit() {
         .resource::<ContentRegistry>()
         .field("blight")
         .expect("blight is registered");
-    fields::apply_action(
+    field_cover::apply_action(
         app.world_mut(),
         1,
         blight,
@@ -419,7 +421,7 @@ fn summon_around_caster_lands_beside_its_footprint() {
                     effect: EntityCastEffect::Summon {
                         at: SummonAt::Caster,
                         entity_type,
-                        count: Quantity::Constant(1),
+                        count: Quantity::from(1),
                         placement: SummonPlacement::Nearby,
                         landing: Landing::Anywhere,
                         within: Vec::new(),
@@ -2060,7 +2062,7 @@ fn app() -> App {
                                 reach,
                             },
                             entity_type,
-                            count: Quantity::Constant(2),
+                            count: Quantity::from(2),
                             placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
@@ -2075,32 +2077,32 @@ fn app() -> App {
             &mut registry,
             "raise_dead",
             "skeleton",
-            Reach::Within(Quantity::Constant(4)),
+            Reach::Within(Area::Around(Quantity::from(4))),
         );
         let raise_colossus = raises(
             &mut registry,
             "raise_colossus",
             "colossus",
-            Reach::Within(Quantity::Constant(4)),
+            Reach::Within(Area::Around(Quantity::from(4))),
         );
         let raise_wardens = raises(
             &mut registry,
             "raise_wardens",
             "warden",
-            Reach::Within(Quantity::Constant(4)),
+            Reach::Within(Area::Around(Quantity::from(4))),
         );
         let raise_ghouls = raises(
             &mut registry,
             "raise_ghouls",
             "ghoul",
-            Reach::Within(Quantity::Constant(4)),
+            Reach::Within(Area::Around(Quantity::from(4))),
         );
         // A raise the caster must stand on the body for: reach 0.
         let raise_atop = raises(
             &mut registry,
             "raise_atop",
             "skeleton",
-            Reach::Within(Quantity::Constant(0)),
+            Reach::Within(Area::Around(Quantity::from(0))),
         );
         // A cast that brings its own caster down.
         let self_immolate = registry.register_skill(
@@ -2133,17 +2135,17 @@ fn app() -> App {
                     caster: SkillCaster::Entity {
                         costs: vec![Cost::Energy(FixedU64::from_num(40))],
                         casting: Casting::Delayed {
-                            point: Quantity::Constant(5),
-                            period: Quantity::Constant(8),
+                            point: Quantity::from(5),
+                            period: Quantity::from(8),
                             pays: PaymentPoint::AtLanding,
                         },
                         effect: EntityCastEffect::Summon {
                             at: SummonAt::Fallen {
                                 kinds: Kinds::Any,
-                                reach: Reach::Within(Quantity::Constant(4)),
+                                reach: Reach::Within(Area::Around(Quantity::from(4))),
                             },
                             entity_type,
-                            count: Quantity::Constant(2),
+                            count: Quantity::from(2),
                             placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
@@ -2171,16 +2173,16 @@ fn app() -> App {
                         costs: vec![Cost::Energy(FixedU64::from_num(40))],
                         casting: Casting::Delayed {
                             point: Quantity::Stat(ritual_time),
-                            period: Quantity::Constant(12),
+                            period: Quantity::from(12),
                             pays: PaymentPoint::AtLanding,
                         },
                         effect: EntityCastEffect::Summon {
                             at: SummonAt::Fallen {
                                 kinds: Kinds::Any,
-                                reach: Reach::Within(Quantity::Constant(4)),
+                                reach: Reach::Within(Area::Around(Quantity::from(4))),
                             },
                             entity_type,
-                            count: Quantity::Constant(2),
+                            count: Quantity::from(2),
                             placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
@@ -2246,7 +2248,7 @@ fn app() -> App {
                         effect: EntityCastEffect::Summon {
                             at: SummonAt::Fallen {
                                 kinds: Kinds::Any,
-                                reach: Reach::Within(Quantity::Constant(4)),
+                                reach: Reach::Within(Area::Around(Quantity::from(4))),
                             },
                             entity_type,
                             count: Quantity::Stat(host_size),
@@ -2274,17 +2276,17 @@ fn app() -> App {
                     caster: SkillCaster::Entity {
                         costs,
                         casting: Casting::Delayed {
-                            point: Quantity::Constant(5),
-                            period: Quantity::Constant(8),
+                            point: Quantity::from(5),
+                            period: Quantity::from(8),
                             pays: PaymentPoint::AtStart(refund),
                         },
                         effect: EntityCastEffect::Summon {
                             at: SummonAt::Fallen {
                                 kinds: Kinds::Any,
-                                reach: Reach::Within(Quantity::Constant(4)),
+                                reach: Reach::Within(Area::Around(Quantity::from(4))),
                             },
                             entity_type,
-                            count: Quantity::Constant(2),
+                            count: Quantity::from(2),
                             placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
@@ -2325,8 +2327,8 @@ fn app() -> App {
                 caster: SkillCaster::Entity {
                     costs: vec![Cost::Energy(FixedU64::from_num(40))],
                     casting: Casting::Delayed {
-                        point: Quantity::Constant(10),
-                        period: Quantity::Constant(10),
+                        point: Quantity::from(10),
+                        period: Quantity::from(10),
                         pays: PaymentPoint::AtStart(Refund::None),
                     },
                     effect: EntityCastEffect::Damage {
@@ -2336,7 +2338,7 @@ fn app() -> App {
                                 side: Affiliation::Enemy,
                                 kinds: Kinds::Any,
                             },
-                            reach: Reach::Within(Quantity::Constant(4)),
+                            reach: Reach::Within(Area::Around(Quantity::from(4))),
                         },
                     },
                 },
@@ -2361,8 +2363,8 @@ fn app() -> App {
                     caster: SkillCaster::Entity {
                         costs: vec![Cost::Energy(FixedU64::from_num(40))],
                         casting: Casting::Delayed {
-                            point: Quantity::Constant(5),
-                            period: Quantity::Constant(8),
+                            point: Quantity::from(5),
+                            period: Quantity::from(8),
                             pays: PaymentPoint::AtLanding,
                         },
                         effect: EntityCastEffect::Summon {
@@ -2371,7 +2373,7 @@ fn app() -> App {
                                 reach: Reach::Wherever,
                             },
                             entity_type,
-                            count: Quantity::Constant(2),
+                            count: Quantity::from(2),
                             placement: SummonPlacement::Nearby,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
@@ -2407,7 +2409,7 @@ fn app() -> App {
                                 reach: Reach::Wherever,
                             },
                             entity_type,
-                            count: Quantity::Constant(1),
+                            count: Quantity::from(1),
                             placement: SummonPlacement::Exact,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
@@ -2436,7 +2438,7 @@ fn app() -> App {
                                 reach: Reach::Wherever,
                             },
                             entity_type,
-                            count: Quantity::Constant(1),
+                            count: Quantity::from(1),
                             placement: SummonPlacement::Exact,
                             landing: Landing::Anywhere,
                             within: Vec::new(),
@@ -2541,7 +2543,7 @@ fn app() -> App {
                 .with_dying(1, [])
                 .with_field_sources([FieldSourceDef::new(
                     glow,
-                    2,
+                    Area::Around(Quantity::from(2)),
                     FieldGrowth::Instant,
                     Emission::Nothing,
                     Emission::Nothing,
@@ -2921,7 +2923,7 @@ fn pool_caller_app() -> App {
             summon_skill(
                 landlubber,
                 SummonAt::Ground {
-                    reach: Reach::Within(Quantity::Constant(3)),
+                    reach: Reach::Within(Area::Around(Quantity::from(3))),
                 },
                 Landing::Anywhere,
                 Vec::new(),
@@ -3002,7 +3004,7 @@ fn summon_skill(
             effect: EntityCastEffect::Summon {
                 at,
                 entity_type,
-                count: Quantity::Constant(1),
+                count: Quantity::from(1),
                 placement: SummonPlacement::Nearby,
                 landing,
                 within,
@@ -3068,11 +3070,11 @@ fn shore_app() -> App {
                 side: Affiliation::Own,
                 kinds: Kinds::Any,
             },
-            reach: Reach::Within(Quantity::Constant(cells)),
+            reach: Reach::Within(Area::Around(Quantity::from(cells))),
         };
         let delayed = |pays| Casting::Delayed {
-            point: Quantity::Constant(5),
-            period: Quantity::Constant(6),
+            point: Quantity::from(5),
+            period: Quantity::from(6),
             pays,
         };
         let skill = |casting, buff, on, requires| SkillDef {

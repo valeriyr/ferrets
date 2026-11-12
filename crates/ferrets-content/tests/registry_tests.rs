@@ -10,7 +10,8 @@ use std::collections::BTreeSet;
 use ferrets_content::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
-    attack::{Delivery, Slain, Weapon},
+    area::Area,
+    attack::{AttackDef, Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::OrphanFate,
     build::BuilderAttendance,
@@ -58,6 +59,7 @@ use ferrets_content::{
         GatherSight, Gathering, Journey, PaymentPoint, PlayerCastEffect, Reach, Recipient,
         Shortfall, SkillCaster, SkillDef, Spot, SummonArrival, SummonAt, SummonPlacement, Whom,
     },
+    splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
     stand::StandingAct,
     stats::{EntityModifier, ModifierOp},
@@ -997,7 +999,7 @@ fn register_rejects_rising_summon_of_type_that_never_rises() {
                 effect: EntityCastEffect::Summon {
                     at: SummonAt::Caster,
                     entity_type: mound,
-                    count: Quantity::Constant(1),
+                    count: Quantity::from(1),
                     placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
@@ -4140,7 +4142,7 @@ fn validate_rejects_change_over_terrain_its_domain_never_takes() {
     registry.register(dry_knight(dry).with_morphs([MorphTransition::new(
         "sentry",
         MorphCourse::direct(MorphInterrupted::Reverts),
-        Quantity::Constant(20),
+        Quantity::from(20),
         MorphPlacement::Reserve,
         MorphCancel::Committed,
         MorphReason::Change,
@@ -4321,7 +4323,7 @@ fn validate_rejects_idle_in_change_requirements() {
     registry.register(dry_knight(dry).with_morphs([MorphTransition::new(
         "sentry",
         MorphCourse::direct(MorphInterrupted::Reverts),
-        Quantity::Constant(20),
+        Quantity::from(20),
         MorphPlacement::Reserve,
         MorphCancel::Committed,
         MorphReason::Change,
@@ -4344,7 +4346,7 @@ fn validate_rejects_unless_idle_in_change_requirements() {
     registry.register(dry_knight(dry).with_morphs([MorphTransition::new(
         "sentry",
         MorphCourse::direct(MorphInterrupted::Reverts),
-        Quantity::Constant(20),
+        Quantity::from(20),
         MorphPlacement::Reserve,
         MorphCancel::Committed,
         MorphReason::Change,
@@ -5358,7 +5360,7 @@ fn validate_rejects_change_of_form_requiring_tag_nothing_carries() {
         MorphTransition::new(
             "keep",
             MorphCourse::direct(MorphInterrupted::Reverts),
-            Quantity::Constant(20),
+            Quantity::from(20),
             MorphPlacement::Reserve,
             MorphCancel::Committed,
             MorphReason::Change,
@@ -5747,7 +5749,7 @@ fn validate_rejects_nearby_landing_into_form_that_cannot_move() {
             .with_morphs([MorphTransition::new(
                 "keep",
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(20),
+                Quantity::from(20),
                 MorphPlacement::Nearby,
                 MorphCancel::Committed,
                 MorphReason::Change,
@@ -5836,7 +5838,7 @@ fn validate_rejects_transition_with_unresolved_requirement() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(20),
+                Quantity::from(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 MorphReason::Change,
@@ -5919,7 +5921,7 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(20),
+                Quantity::from(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 MorphReason::Change,
@@ -5960,7 +5962,7 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(20),
+                Quantity::from(20),
                 MorphPlacement::Revalidate,
                 MorphCancel::Committed,
                 MorphReason::Change,
@@ -6117,7 +6119,7 @@ fn validate_accepts_transition_with_payable_costs() {
             .with_morphs([MorphTransition::new(
                 "flier",
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(20),
+                Quantity::from(20),
                 MorphPlacement::Reserve,
                 MorphCancel::Refundable,
                 MorphReason::Change,
@@ -6294,7 +6296,7 @@ fn register_rejects_standing_act_on_foreign_field() {
             .with_pool(Pool::health(100))
             .with_standing_acts([StandingAct::Field {
                 field: foreign,
-                radius: 3,
+                area: Area::Around(Quantity::from(3)),
                 action: FieldAction::Clear,
             }]),
     );
@@ -6310,7 +6312,7 @@ fn register_accepts_standing_act_on_registered_field() {
             .with_pool(Pool::health(100))
             .with_standing_acts([StandingAct::Field {
                 field: creep,
-                radius: 3,
+                area: Area::Around(Quantity::from(3)),
                 action: FieldAction::Clear,
             }]),
     );
@@ -6321,7 +6323,7 @@ fn register_accepts_standing_act_on_registered_field() {
         pylon.on_stand,
         vec![StandingAct::Field {
             field: creep,
-            radius: 3,
+            area: Area::Around(Quantity::from(3)),
             action: FieldAction::Clear,
         }]
     );
@@ -6583,17 +6585,17 @@ fn field_rejects_zero_decay_cycle() {
 }
 
 #[test]
-#[should_panic(expected = "entity type 'hive' starts a field beyond its radius")]
-fn register_rejects_source_starting_beyond_radius() {
+#[should_panic(expected = "entity type 'hive' starts a field beyond its area")]
+fn register_rejects_source_starting_beyond_area() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
         utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
             creep,
-            3,
+            Area::Around(Quantity::from(3)),
             FieldGrowth::Gradual {
                 cycle: 2,
-                initial_radius: 5,
+                starts_at: Area::Around(Quantity::from(5)),
             },
             Emission::Nothing,
             Emission::Full,
@@ -6602,8 +6604,8 @@ fn register_rejects_source_starting_beyond_radius() {
 }
 
 #[test]
-#[should_panic(expected = "entity type 'hive' projects a field beyond its radius while rising")]
-fn register_rejects_source_rising_beyond_radius() {
+#[should_panic(expected = "entity type 'hive' projects a field beyond its area while rising")]
+fn register_rejects_source_rising_beyond_area() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
@@ -6611,9 +6613,9 @@ fn register_rejects_source_rising_beyond_radius() {
             .with_rise(4, [])
             .with_field_sources([FieldSourceDef::new(
                 creep,
-                3,
+                Area::Around(Quantity::from(3)),
                 FieldGrowth::Instant,
-                Emission::Held(5),
+                Emission::Held(Area::Around(Quantity::from(5))),
                 Emission::Full,
             )]),
     );
@@ -6627,26 +6629,26 @@ fn register_rejects_source_rising_on_type_that_never_rises() {
     registry.register(
         utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
             creep,
-            3,
+            Area::Around(Quantity::from(3)),
             FieldGrowth::Instant,
-            Emission::Held(1),
+            Emission::Held(Area::Around(Quantity::from(1))),
             Emission::Full,
         )]),
     );
 }
 
 #[test]
-#[should_panic(expected = "entity type 'hive' projects a field beyond its radius while disabled")]
-fn register_rejects_source_holding_beyond_radius_while_disabled() {
+#[should_panic(expected = "entity type 'hive' projects a field beyond its area while disabled")]
+fn register_rejects_source_holding_beyond_area_while_disabled() {
     let mut registry = utils::ground_registry();
     let creep = creep_field(&mut registry);
     registry.register(
         utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
             creep,
-            3,
+            Area::Around(Quantity::from(3)),
             FieldGrowth::Instant,
             Emission::Nothing,
-            Emission::Held(4),
+            Emission::Held(Area::Around(Quantity::from(4))),
         )]),
     );
 }
@@ -6753,8 +6755,8 @@ fn register_rejects_watch_that_lasts_no_time() {
                     at: Spot::Ground {
                         reach: Reach::Wherever,
                     },
-                    radius: Quantity::Constant(3),
-                    duration: Quantity::Constant(0),
+                    area: Area::Around(Quantity::from(3)),
+                    duration: Quantity::from(0),
                     detection: Detection::Blind,
                 },
             },
@@ -6837,7 +6839,7 @@ fn register_accepts_ground_cast_with_field_effect() {
                         reach: Reach::Wherever,
                     },
                     field: creep,
-                    radius: Quantity::Constant(2),
+                    area: Area::Around(Quantity::from(2)),
                     action: FieldAction::Cover,
                 },
             },
@@ -6869,7 +6871,7 @@ fn register_rejects_summon_of_remains() {
                         reach: Reach::Wherever,
                     },
                     entity_type: corpse,
-                    count: Quantity::Constant(2),
+                    count: Quantity::from(2),
                     placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
@@ -6899,7 +6901,7 @@ fn register_accepts_remains_cast_with_summon_effect() {
                         reach: Reach::Wherever,
                     },
                     entity_type: skeleton,
-                    count: Quantity::Constant(2),
+                    count: Quantity::from(2),
                     placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
@@ -6989,7 +6991,7 @@ fn register_accepts_summon_aimed_at_caster_and_at_cell() {
             effect: EntityCastEffect::Summon {
                 at,
                 entity_type: skeleton,
-                count: Quantity::Constant(1),
+                count: Quantity::from(1),
                 placement: SummonPlacement::Nearby,
                 landing: Landing::Anywhere,
                 within: Vec::new(),
@@ -7026,7 +7028,7 @@ fn register_rejects_summon_of_foreign_type() {
                         reach: Reach::Wherever,
                     },
                     entity_type: skeleton,
-                    count: Quantity::Constant(1),
+                    count: Quantity::from(1),
                     placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
@@ -7112,7 +7114,7 @@ fn register_rejects_summon_of_nobody() {
                         reach: Reach::Wherever,
                     },
                     entity_type: skeleton,
-                    count: Quantity::Constant(0),
+                    count: Quantity::from(0),
                     placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within: Vec::new(),
@@ -7142,7 +7144,7 @@ fn register_accepts_reach_read_from_stat_caster_carries() {
                             side: Affiliation::Enemy,
                             kinds: Kinds::Any,
                         },
-                        reach: Reach::Within(Quantity::Stat(raise_range)),
+                        reach: Reach::Within(Area::Around(Quantity::Stat(raise_range))),
                     },
                 },
             },
@@ -7177,7 +7179,7 @@ fn register_rejects_reach_by_stat_caster_lacks() {
                             side: Affiliation::Enemy,
                             kinds: Kinds::Any,
                         },
-                        reach: Reach::Within(Quantity::Stat(raise_range)),
+                        reach: Reach::Within(Area::Around(Quantity::Stat(raise_range))),
                     },
                 },
             },
@@ -7189,16 +7191,49 @@ fn register_rejects_reach_by_stat_caster_lacks() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'observatory' has skill 'scan' reading its watch radius from a stat it does not carry"
+    expected = "entity type 'observatory' has skill 'scan' reading its watch area from a stat it does not carry"
 )]
-fn register_rejects_watch_radius_by_stat_caster_lacks() {
+fn register_rejects_watch_area_by_stat_caster_lacks() {
     let mut registry = utils::ground_registry();
     let scan_radius = registry.register_entity_stat("scan_radius", FixedU64::ZERO);
     let scan = registry.register_skill(
         "scan",
-        watching(Quantity::Stat(scan_radius), Quantity::Constant(40)),
+        watching(
+            Area::Around(Quantity::Stat(scan_radius)),
+            Quantity::from(40),
+        ),
     );
     registry.register(utils::standing("observatory", utils::GROUND_DOMAIN).with_skills([scan]));
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'blighter' has skill 'blight' reading its field area from a stat it does not carry"
+)]
+fn register_rejects_field_area_by_stat_caster_lacks() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    let blight_reach = registry.register_entity_stat("blight_reach", FixedU64::ZERO);
+    let blight = registry.register_skill(
+        "blight",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Field {
+                    at: Spot::Ground {
+                        reach: Reach::Wherever,
+                    },
+                    field: creep,
+                    area: Area::Around(Quantity::Stat(blight_reach)),
+                    action: FieldAction::Cover,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+    registry.register(utils::standing("blighter", utils::GROUND_DOMAIN).with_skills([blight]));
 }
 
 #[test]
@@ -7208,7 +7243,7 @@ fn register_rejects_watch_duration_by_stat_with_zero_floor() {
     let scan_time = registry.register_entity_stat("scan_time", FixedU64::ZERO);
     registry.register_skill(
         "scan",
-        watching(Quantity::Constant(6), Quantity::Stat(scan_time)),
+        watching(Area::Around(Quantity::from(6)), Quantity::Stat(scan_time)),
     );
 }
 
@@ -7250,7 +7285,7 @@ fn register_rejects_cast_point_by_stat_caster_lacks() {
                 costs: Vec::new(),
                 casting: Casting::Delayed {
                     point: Quantity::Stat(ritual_time),
-                    period: Quantity::Constant(20),
+                    period: Quantity::from(20),
                     pays: PaymentPoint::AtLanding,
                 },
                 effect: EntityCastEffect::Damage {
@@ -7283,8 +7318,8 @@ fn register_rejects_cast_over_no_time() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 casting: Casting::Delayed {
-                    point: Quantity::Constant(0),
-                    period: Quantity::Constant(10),
+                    point: Quantity::from(0),
+                    period: Quantity::from(10),
                     pays: PaymentPoint::AtLanding,
                 },
                 effect: EntityCastEffect::Damage {
@@ -7311,7 +7346,7 @@ fn register_rejects_cast_period_stat_that_folds_under_its_point() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 casting: Casting::Delayed {
-                    point: Quantity::Constant(10),
+                    point: Quantity::from(10),
                     period: Quantity::Stat(recovery),
                     pays: PaymentPoint::AtLanding,
                 },
@@ -7336,8 +7371,8 @@ fn register_rejects_cast_period_shorter_than_its_point() {
             caster: SkillCaster::Entity {
                 costs: Vec::new(),
                 casting: Casting::Delayed {
-                    point: Quantity::Constant(10),
-                    period: Quantity::Constant(5),
+                    point: Quantity::from(10),
+                    period: Quantity::from(5),
                     pays: PaymentPoint::AtLanding,
                 },
                 effect: EntityCastEffect::Damage {
@@ -7489,7 +7524,7 @@ fn register_rejects_cast_on_foreign_field() {
                         reach: Reach::Wherever,
                     },
                     field: creep,
-                    radius: Quantity::Constant(2),
+                    area: Area::Around(Quantity::from(2)),
                     action: FieldAction::Cover,
                 },
             },
@@ -7679,8 +7714,8 @@ fn register_rejects_watch_detecting_unregistered_layer() {
                     at: Spot::Ground {
                         reach: Reach::Wherever,
                     },
-                    radius: Quantity::Constant(3),
-                    duration: Quantity::Constant(5),
+                    area: Area::Around(Quantity::from(3)),
+                    duration: Quantity::from(5),
                     detection: Detection::Reveals(utils::WATER.into()),
                 },
             },
@@ -7802,7 +7837,7 @@ fn validate_rejects_berthed_broodling_in_group_breeder_lacks() {
     registry.register(
         utils::sized("hatch", utils::GROUND_DOMAIN, CellSize::new(3, 3))
             .with_pool(Pool::health(300))
-            .with_breeder("grub", Quantity::Constant(10), 2, 0, OrphanFate::Perish),
+            .with_breeder("grub", Quantity::from(10), 2, 0, OrphanFate::Perish),
     );
     registry.register(grub("grub"));
     registry.validate();
@@ -7866,7 +7901,7 @@ fn validate_rejects_breeder_breeding_its_own_type() {
     let mut registry = utils::ground_registry();
     registry.register(
         hatch("hatch", 3, 2)
-            .with_breeder("hatch", Quantity::Constant(10), 2, 0, OrphanFate::Perish)
+            .with_breeder("hatch", Quantity::from(10), 2, 0, OrphanFate::Perish)
             .with_broodling(Attachment::new("brood", BerthStance::Still)),
     );
     registry.validate();
@@ -8070,7 +8105,7 @@ fn register_accepts_every_journey() {
         (
             "portal",
             from_caster(
-                CasterParty::CasterAndAround(gathering(Count::AtMost(Quantity::Constant(24)))),
+                CasterParty::CasterAndAround(gathering(Count::AtMost(Quantity::from(24)))),
                 FromCasterTo::Aim(Away::Standing {
                     whom: own_anything(),
                     reach: Reach::Wherever,
@@ -8099,7 +8134,7 @@ fn register_accepts_every_journey() {
             "swap",
             Journey::Swap {
                 whom: own_anything(),
-                reach: Reach::Within(Quantity::Constant(10)),
+                reach: Reach::Within(Area::Around(Quantity::from(10))),
             },
         ),
     ];
@@ -8117,7 +8152,7 @@ fn register_rejects_relocation_of_nobody() {
         relocating(from_aim(
             AimParty::Around {
                 at: cell(),
-                gathering: gathering(Count::AtMost(Quantity::Constant(0))),
+                gathering: gathering(Count::AtMost(Quantity::from(0))),
             },
             FromAimTo::Caster,
         )),
@@ -8130,7 +8165,7 @@ fn register_rejects_home_journey_of_nobody() {
     utils::ground_registry().register_skill(
         "homeward",
         relocating(from_caster(
-            CasterParty::Around(gathering(Count::AtMost(Quantity::Constant(0)))),
+            CasterParty::Around(gathering(Count::AtMost(Quantity::from(0)))),
             FromCasterTo::Home(Kinds::Any),
         )),
     );
@@ -8155,13 +8190,13 @@ fn register_rejects_relocation_count_by_stat_with_zero_floor() {
 
 #[test]
 #[should_panic(
-    expected = "entity type 'recaller' has skill 'recall' reading its gathering radius from a stat it does not carry"
+    expected = "entity type 'recaller' has skill 'recall' reading its gathering area from a stat it does not carry"
 )]
-fn register_rejects_gathering_radius_by_stat_caster_lacks() {
+fn register_rejects_gathering_area_by_stat_caster_lacks() {
     let mut registry = utils::ground_registry();
     let recall_radius = registry.register_entity_stat("recall_radius", FixedU64::ZERO);
     let mut taken = gathering(Count::All);
-    taken.radius = Quantity::Stat(recall_radius);
+    taken.area = Area::Around(Quantity::Stat(recall_radius));
     let recall = registry.register_skill(
         "recall",
         relocating(from_aim(
@@ -8226,6 +8261,335 @@ fn validate_rejects_swap_aimed_at_unregistered_type() {
             reach: Reach::Wherever,
         }),
     );
+    registry.validate();
+}
+
+//
+// ─── Declared numbers ─────────────────────────────────────────────────────────
+//
+
+#[test]
+#[should_panic(expected = "skill 'bolt' cast point 1.5 is not a whole number")]
+fn register_rejects_fractional_cast_point() {
+    utils::ground_registry().register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Delayed {
+                    point: Quantity::Constant(utils::fixed("1.5")),
+                    period: Quantity::from(10),
+                    pays: PaymentPoint::AtLanding,
+                },
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Caster,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'bolt' cast period 10.5 is not a whole number")]
+fn register_rejects_fractional_cast_period() {
+    utils::ground_registry().register_skill(
+        "bolt",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Delayed {
+                    point: Quantity::from(1),
+                    period: Quantity::Constant(utils::fixed("10.5")),
+                    pays: PaymentPoint::AtLanding,
+                },
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Caster,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'raise_dead' summon count 1.5 is not a whole number")]
+fn register_rejects_fractional_summon_count() {
+    let mut registry = utils::ground_registry();
+    registry.register(utils::standing("skeleton", utils::GROUND_DOMAIN));
+    let skeleton = registry.type_id("skeleton").expect("just registered");
+    registry.register_skill(
+        "raise_dead",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Summon {
+                    at: SummonAt::Fallen {
+                        kinds: Kinds::Any,
+                        reach: Reach::Wherever,
+                    },
+                    entity_type: skeleton,
+                    count: Quantity::Constant(utils::fixed("1.5")),
+                    placement: SummonPlacement::Nearby,
+                    landing: Landing::Anywhere,
+                    within: Vec::new(),
+                    arrives: SummonArrival::Standing,
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'scan' watch duration 2.5 is not a whole number")]
+fn register_rejects_fractional_watch_duration() {
+    utils::ground_registry().register_skill(
+        "scan",
+        watching(
+            Area::Around(Quantity::from(3)),
+            Quantity::Constant(utils::fixed("2.5")),
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'recall' gathering count 1.5 is not a whole number")]
+fn register_rejects_fractional_gathering_count() {
+    utils::ground_registry().register_skill(
+        "recall",
+        relocating(from_aim(
+            AimParty::Around {
+                at: cell(),
+                gathering: gathering(Count::AtMost(Quantity::Constant(utils::fixed("1.5")))),
+            },
+            FromAimTo::Caster,
+        )),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'knight' morphing into 'sentry' time 2.5 is not a whole number"
+)]
+fn validate_rejects_fractional_change_time() {
+    let (mut registry, dry, _) = dry_registry();
+    let mut sentry = dry_knight(dry);
+    sentry.name = "sentry".to_string();
+    registry.register(sentry);
+    registry.register(dry_knight(dry).with_morphs([MorphTransition::new(
+        "sentry",
+        MorphCourse::direct(MorphInterrupted::Reverts),
+        Quantity::Constant(utils::fixed("2.5")),
+        MorphPlacement::Reserve,
+        MorphCancel::Committed,
+        MorphReason::Change,
+        Vec::new(),
+        [],
+        [],
+    )]));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'hatch' breeding 'grub' period 2.5 is not a whole number")]
+fn validate_rejects_fractional_brood_period() {
+    let mut registry = utils::ground_registry();
+    registry.register(hatch("hatch", 3, 2).with_breeder(
+        "grub",
+        Quantity::Constant(utils::fixed("2.5")),
+        2,
+        0,
+        OrphanFate::Perish,
+    ));
+    registry.register(grub("grub"));
+    registry.validate();
+}
+
+//
+// ─── Areas read from stats ────────────────────────────────────────────────────
+//
+
+#[test]
+#[should_panic(expected = "entity type 'hive' reads its field area from a stat it does not carry")]
+fn register_rejects_source_area_from_stat_type_lacks() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    let spread = registry.register_entity_stat("spread", FixedU64::ONE);
+    registry.register(
+        utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
+            creep,
+            Area::Around(Quantity::Stat(spread)),
+            FieldGrowth::Instant,
+            Emission::Nothing,
+            Emission::Full,
+        )]),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hive' reads its field growth start from a stat it does not carry"
+)]
+fn register_rejects_growth_start_from_stat_type_lacks() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    let start = registry.register_entity_stat("start", FixedU64::ONE);
+    registry.register(
+        utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
+            creep,
+            Area::Around(Quantity::from(4)),
+            FieldGrowth::Gradual {
+                cycle: 1,
+                starts_at: Area::Around(Quantity::Stat(start)),
+            },
+            Emission::Nothing,
+            Emission::Full,
+        )]),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'hive' reads its field held area from a stat it does not carry"
+)]
+fn register_rejects_held_area_from_stat_type_lacks() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    let glow = registry.register_entity_stat("glow", FixedU64::ONE);
+    registry.register(
+        utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
+            creep,
+            Area::Around(Quantity::from(4)),
+            FieldGrowth::Instant,
+            Emission::Nothing,
+            Emission::Held(Area::Around(Quantity::Stat(glow))),
+        )]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'hive' starts a field beyond its area")]
+fn register_rejects_source_starting_beyond_inside_area() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("hive", utils::GROUND_DOMAIN).with_field_sources([FieldSourceDef::new(
+            creep,
+            Area::Inside,
+            FieldGrowth::Gradual {
+                cycle: 2,
+                starts_at: Area::Around(Quantity::from(0)),
+            },
+            Emission::Nothing,
+            Emission::Full,
+        )]),
+    );
+}
+
+#[test]
+fn register_leaves_stat_growth_start_to_its_reading() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    let start = registry.register_entity_stat("start", FixedU64::ONE);
+    registry.register(
+        utils::standing("hive", utils::GROUND_DOMAIN)
+            .with_stat(start, FixedU64::from_num(9))
+            .with_field_sources([FieldSourceDef::new(
+                creep,
+                Area::Around(Quantity::from(3)),
+                FieldGrowth::Gradual {
+                    cycle: 2,
+                    starts_at: Area::Around(Quantity::Stat(start)),
+                },
+                Emission::Nothing,
+                Emission::Full,
+            )]),
+    );
+
+    assert_eq!(
+        registry.entity("hive").expect("registered").field_sources[0].growth(),
+        FieldGrowth::Gradual {
+            cycle: 2,
+            starts_at: Area::Around(Quantity::Stat(start)),
+        }
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "entity type 'pylon' reads the area of its act on standing from a stat it does not carry"
+)]
+fn register_rejects_standing_act_area_from_stat_type_lacks() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    let spread = registry.register_entity_stat("spread", FixedU64::ONE);
+    registry.register(
+        utils::standing("pylon", utils::GROUND_DOMAIN).with_standing_acts([StandingAct::Field {
+            field: creep,
+            area: Area::Around(Quantity::Stat(spread)),
+            action: FieldAction::Clear,
+        }]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'mortar' reads a splash band from a stat it does not carry")]
+fn validate_rejects_splash_ring_from_stat_type_lacks() {
+    let mut registry = utils::ground_registry();
+    let blast = registry.register_entity_stat("blast", FixedU64::ONE);
+    registry.register(utils::standing("mortar", utils::GROUND_DOMAIN).with_attack(
+        AttackDef::new(Weapon::new(
+            utils::GROUND,
+            Delivery::Instant,
+            Some(SplashDef::new(
+                SplashShape::Circular,
+                (Area::Inside, FixedU64::ONE),
+                vec![(Quantity::Stat(blast), utils::fixed("0.5"))],
+                utils::GROUND,
+                true,
+            )),
+            Slain::Remains,
+        )),
+        1,
+        1,
+        1,
+        2,
+        1,
+    ));
+    registry.validate();
+}
+
+#[test]
+#[should_panic(expected = "entity type 'mortar' reads a splash band from a stat it does not carry")]
+fn validate_rejects_splash_core_from_stat_type_lacks() {
+    let mut registry = utils::ground_registry();
+    let blast = registry.register_entity_stat("blast", FixedU64::ONE);
+    registry.register(utils::standing("mortar", utils::GROUND_DOMAIN).with_attack(
+        AttackDef::new(Weapon::new(
+            utils::GROUND,
+            Delivery::Instant,
+            Some(SplashDef::new(
+                SplashShape::Circular,
+                (Area::Around(Quantity::Stat(blast)), FixedU64::ONE),
+                Vec::new(),
+                utils::GROUND,
+                true,
+            )),
+            Slain::Remains,
+        )),
+        1,
+        1,
+        1,
+        2,
+        1,
+    ));
     registry.validate();
 }
 
@@ -8331,7 +8695,7 @@ fn hatch(name: &str, slots: usize, limit: usize) -> EntityTypeDef {
                 slots,
             ),
         )])
-        .with_breeder("grub", Quantity::Constant(10), limit, 0, OrphanFate::Perish)
+        .with_breeder("grub", Quantity::from(10), limit, 0, OrphanFate::Perish)
 }
 
 /// A passable one-cell broodling that sits still in the `brood` group.
@@ -8352,7 +8716,7 @@ fn morph_through(via: &str, into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
         MorphCourse::via((via).to_string(), [], ViaInterrupted::reverts([])),
-        Quantity::Constant(20),
+        Quantity::from(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
         MorphReason::Change,
@@ -8367,7 +8731,7 @@ fn morph_into(into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
         MorphCourse::direct(MorphInterrupted::Reverts),
-        Quantity::Constant(20),
+        Quantity::from(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
         MorphReason::Change,
@@ -8387,7 +8751,7 @@ fn carrying_into(
     MorphTransition::new(
         into,
         course,
-        Quantity::Constant(20),
+        Quantity::from(20),
         MorphPlacement::Revalidate,
         MorphCancel::Committed,
         MorphReason::Change,
@@ -8474,7 +8838,7 @@ fn tide_field(registry: &mut ContentRegistry) -> FieldId {
 fn emitter(field: FieldId) -> FieldSourceDef {
     FieldSourceDef::new(
         field,
-        3,
+        Area::Around(Quantity::from(3)),
         FieldGrowth::Instant,
         Emission::Nothing,
         Emission::Full,
@@ -8556,9 +8920,9 @@ fn health_starting(initial: PoolInitial) -> Pool {
     )
 }
 
-/// A free, instant entity skill that watches `radius` cells around an aimed
-/// cell for `duration` ticks.
-fn watching(radius: Quantity, duration: Quantity) -> SkillDef {
+/// A free, instant entity skill that watches `area` around an aimed cell
+/// for `duration` ticks.
+fn watching(area: Area, duration: Quantity) -> SkillDef {
     SkillDef {
         cooldown: 1,
         caster: SkillCaster::Entity {
@@ -8568,7 +8932,7 @@ fn watching(radius: Quantity, duration: Quantity) -> SkillDef {
                 at: Spot::Ground {
                     reach: Reach::Wherever,
                 },
-                radius,
+                area,
                 duration,
                 detection: Detection::Blind,
             },
@@ -8612,7 +8976,7 @@ fn summoning_exactly(entity_type: EntityTypeId, at: SummonAt, count: u32) -> Ski
             effect: EntityCastEffect::Summon {
                 at,
                 entity_type,
-                count: Quantity::Constant(count),
+                count: Quantity::from(count),
                 placement: SummonPlacement::Exact,
                 landing: Landing::Anywhere,
                 within: Vec::new(),
@@ -8643,7 +9007,7 @@ fn relocating(journey: Journey) -> SkillDef {
 /// Every own body within 2 cells, up to `count`, the rest left standing.
 fn gathering(count: Count) -> Gathering {
     Gathering {
-        radius: Quantity::Constant(2),
+        area: Area::Around(Quantity::from(2)),
         side: Affiliation::Own,
         kinds: Kinds::Any,
         sight: GatherSight::Blind,
@@ -8721,7 +9085,7 @@ fn summoning_end(entity_type: EntityTypeId, count: u32) -> SkillDef {
                     reach: Reach::Wherever,
                 },
                 entity_type,
-                count: Quantity::Constant(count),
+                count: Quantity::from(count),
                 placement: SummonPlacement::Nearby,
                 landing: Landing::Anywhere,
                 within: Vec::new(),
@@ -8801,7 +9165,7 @@ fn register_summon(
                 effect: EntityCastEffect::Summon {
                     at: SummonAt::Caster,
                     entity_type,
-                    count: Quantity::Constant(1),
+                    count: Quantity::from(1),
                     placement: SummonPlacement::Nearby,
                     landing: Landing::Anywhere,
                     within,

@@ -4,15 +4,23 @@
 use bevy::prelude::*;
 use ferrets_bevy_plugin::map;
 use ferrets_content::{
+    area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
+    entity_buffs::{EntityBuffDef, Lasting},
+    entity_effect::EntityEffect,
+    entity_modifiers::EntityModifiers,
     entity_type_def::EntityTypeDef,
     location::Solidity,
     pool::Pool,
     projectile::{Aim, ProjectileDef},
+    quantity::Quantity,
     registry::ContentRegistry,
     splash::{SplashDef, SplashShape},
+    stack_rule::StackRule,
+    stats::{EntityModifier, ModifierOp},
 };
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
+use ferrets_math::{FixedI64, FixedU64};
 use ferrets_nav_grid::nav_grid::NavGrid;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
@@ -285,6 +293,54 @@ fn blast_scales_bonus_and_subtracts_armor_in_full() {
     assert_eq!(100 - utils::health_as_u32(&app, tank), 10);
 }
 
+#[test]
+fn blast_core_read_from_stat_pushes_its_ring_out() {
+    let mut app = app();
+    let (bombard, bombard_id) =
+        utils::create_entity(app.world_mut(), "bombard", utils::cell(5, 20), Some(0))
+            .expect("bombard spawns");
+    let (target, target_id) =
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 20), Some(1))
+            .expect("target spawns");
+    let bystanders = bystanders_east_of(&mut app, 9, 20);
+    let wider = utils::entity_buff_id(&app, "wider_charges");
+    utils::apply_buff(app.world_mut(), bombard, wider);
+
+    utils::attack(&mut app, bombard_id, target_id);
+    utils::run_ticks(&mut app, 14);
+
+    // The core reaches 1 + 1 = 2 cells at half of 20, and the ring one cell
+    // further, 3, at a quarter.
+    assert_eq!(losses(&app, target, bystanders), (20, [10, 10, 5]));
+}
+
+#[test]
+fn blast_is_read_off_attacker_when_shot_is_released() {
+    let mut app = app();
+    let (bombard, bombard_id) =
+        utils::create_entity(app.world_mut(), "bombard", utils::cell(5, 12), Some(0))
+            .expect("bombard spawns");
+    let (target, target_id) =
+        utils::create_entity(app.world_mut(), "dummy", utils::cell(9, 12), Some(1))
+            .expect("target spawns");
+    let bystanders = bystanders_east_of(&mut app, 9, 12);
+    let wider = utils::entity_buff_id(&app, "wider_charges");
+
+    utils::attack(&mut app, bombard_id, target_id);
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(
+        app.world().resource::<PendingImpacts>().in_flight().len(),
+        1,
+        "the shot is in flight"
+    );
+    utils::apply_buff(app.world_mut(), bombard, wider);
+    utils::run_ticks(&mut app, 8);
+
+    // The core reaches the 1 cell it read at release at half of 20, the ring
+    // 2 at a quarter: the buff after release widens nothing.
+    assert_eq!(losses(&app, target, bystanders), (20, [10, 5, 0]));
+}
+
 //
 // ─── Cell-aimed shots ───────────────────────────────────────────────────────
 //
@@ -483,6 +539,28 @@ fn shot_lands_after_its_attacker_dies() {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 //
 
+/// Three of player 1's dummies, one, two and three cells east of `(x, y)`.
+fn bystanders_east_of(app: &mut App, x: u32, y: u32) -> [Entity; 3] {
+    [1, 2, 3].map(|offset| {
+        utils::create_entity(
+            app.world_mut(),
+            "dummy",
+            utils::cell(x + offset, y),
+            Some(1),
+        )
+        .expect("bystander spawns")
+        .0
+    })
+}
+
+/// The health `target` and each of `bystanders` lost from their 100.
+fn losses(app: &App, target: Entity, bystanders: [Entity; 3]) -> (u32, [u32; 3]) {
+    (
+        100 - utils::health_as_u32(app, target),
+        bystanders.map(|bystander| 100 - utils::health_as_u32(app, bystander)),
+    )
+}
+
 /// Two players and a roster with a `gunner` firing slow bursting shells, a
 /// `flak` gun whose shell bursts in the air, a stationary 100-hp `dummy` to
 /// catch them, a `skimmer` on the ground that is attacked only in the air, and
@@ -533,7 +611,8 @@ fn app() -> App {
                         Delivery::Projectile(shell),
                         Some(SplashDef::new(
                             SplashShape::Circular,
-                            vec![(1, utils::fixed("0.5")), (2, utils::fixed("0.25"))],
+                            (Area::Around(Quantity::from(1)), utils::fixed("0.5")),
+                            vec![(Quantity::from(1), utils::fixed("0.25"))],
                             utils::GROUND,
                             false,
                         )),
@@ -545,6 +624,58 @@ fn app() -> App {
                     4,
                     2,
                 ),
+        );
+        // A gun whose blast core reads a stat, ringed one cell further, and a
+        // buff that widens the core by a cell.
+        let blast_core = registry.register_entity_stat("blast_core", FixedU64::ONE);
+        registry.register(
+            EntityTypeDef::new("bombard")
+                .with_location(
+                    utils::GROUND_DOMAIN,
+                    CellSize::ONE,
+                    Solidity::Solid,
+                    utils::GROUND,
+                )
+                .with_sight_range(12)
+                .with_pool(Pool::health(40))
+                .with_stat(blast_core, FixedU64::ONE)
+                .with_attack(
+                    AttackDef::new(Weapon::new(
+                        utils::GROUND,
+                        Delivery::Projectile(shell),
+                        Some(SplashDef::new(
+                            SplashShape::Circular,
+                            (
+                                Area::Around(Quantity::Stat(blast_core)),
+                                utils::fixed("0.5"),
+                            ),
+                            vec![(Quantity::from(1), utils::fixed("0.25"))],
+                            utils::GROUND,
+                            false,
+                        )),
+                        Slain::Remains,
+                    )),
+                    20,
+                    6,
+                    6,
+                    4,
+                    2,
+                ),
+        );
+        registry.register_entity_buff(
+            "wider_charges",
+            EntityBuffDef {
+                effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                    EntityModifier {
+                        stat: blast_core,
+                        op: ModifierOp::FlatAdd,
+                        magnitude: FixedI64::ONE,
+                    },
+                ]))],
+                lasting: Lasting::Forever,
+                stack_rule: StackRule::Ignore,
+                interrupted_by: Vec::new(),
+            },
         );
         // A two-cell-wide gun and target, for flights from and to a middle
         // between cells.
@@ -664,7 +795,8 @@ fn app() -> App {
                         Delivery::Projectile(shell),
                         Some(SplashDef::new(
                             SplashShape::Circular,
-                            vec![(1, utils::fixed("0.5"))],
+                            (Area::Around(Quantity::from(1)), utils::fixed("0.5")),
+                            Vec::new(),
                             utils::AIR,
                             false,
                         )),

@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     cost::Cost,
     detection::Detection,
     entity_buffs::EntityBuffId,
@@ -556,8 +557,8 @@ fn app() -> App {
                         at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
-                        radius: Quantity::Constant(2),
-                        duration: Quantity::Constant(5),
+                        area: Area::Around(Quantity::from(2)),
+                        duration: Quantity::from(5),
                         detection: Detection::Blind,
                     },
                 },

@@ -45,6 +45,8 @@ use ferrets_simulation::{
     map::Map,
     occupancy::OccupancyClass,
     order::AttackTarget,
+    player_buffs::PlayerBuffs,
+    player_stats::PlayerStats,
     selection::Selection,
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
@@ -372,9 +374,9 @@ pub(crate) fn entity_at(
             continue;
         }
         if bounds.contains_half_open(world_to_pos(lifted)) {
-            let area = size.width * size.height;
-            if best.is_none_or(|(best_area, _)| area < best_area) {
-                best = Some((area, info.id()));
+            let cells = size.width * size.height;
+            if best.is_none_or(|(best_cells, _)| cells < best_cells) {
+                best = Some((cells, info.id()));
             }
         }
     }
@@ -1279,6 +1281,7 @@ pub fn placement_input(
     registry: Res<ContentRegistry>,
     session: Res<GameSession>,
     (fields, fog, ghosts): (Res<FieldGrid>, Res<VisibilityGrid>, Res<render::Ghosts>),
+    (player_buffs, player_stats): (Res<PlayerBuffs>, Res<PlayerStats>),
     interactions: Query<&Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -1362,16 +1365,19 @@ pub fn placement_input(
     );
     let (cx, cy) = (anchor.x, anchor.y);
 
-    // The area each field the type projects would cover, and the areas the
-    // standing sources of those fields already cover, so a pylon is placed
-    // where it links up and a tumor where it reaches.
+    // The area each field the type projects would cover, its stats under what
+    // the local player lays over its units, and the areas the standing
+    // sources of those fields already cover, so a pylon is placed where it
+    // links up and a tumor where it reaches.
+    let owned =
+        entity_def::owner_entity_modifiers_of(&registry, &player_buffs, &player_stats, local);
     for source in &def.field_sources {
         let color = render::field_reach_color(&registry, source.field());
         draw_reach(
             &mut gizmos,
             CellPos::new(cx, cy),
             size,
-            source.radius(),
+            entity_def::owned_area_reach(&registry, def, &owned, source.area()),
             color,
         );
         // Other sources of the same field, at what they put on the grid: the

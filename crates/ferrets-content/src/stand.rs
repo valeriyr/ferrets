@@ -1,6 +1,9 @@
 //! Content-defined acts an entity performs once, the tick it comes to stand.
 
-use crate::field::{FieldAction, FieldId};
+use crate::{
+    area::Area,
+    field::{FieldAction, FieldId},
+};
 
 /// One act an instance performs once, the first tick it stands finished:
 /// risen, landed, or placed by the map.
@@ -10,8 +13,8 @@ pub enum StandingAct {
     Field {
         /// The field acted on.
         field: FieldId,
-        /// How far from the footprint the act reaches, in cells.
-        radius: u32,
+        /// The area around the footprint the act reaches, read when it acts.
+        area: Area,
         /// Whether the cells are covered or cleared.
         action: FieldAction,
     },

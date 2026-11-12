@@ -10,11 +10,13 @@ use ferrets_bevy_plugin::{
 use ferrets_content::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
+    area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::{Lingering, OrphanFate},
     build::BuilderAttendance,
     cost::Cost,
+    detection::Detection,
     domain::{DomainDef, DomainId},
     dying::{Bequest, LeftBy},
     entity_buffs::{EntityBuffDef, EntityBuffId, Lasting},
@@ -22,7 +24,7 @@ use ferrets_content::{
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
-    field::FieldId,
+    field::{Emission, FieldDecay, FieldDef, FieldGrowth, FieldId, FieldSourceDef},
     kinds::Kinds,
     layer::LayerLevel,
     location::Solidity,
@@ -79,6 +81,7 @@ use ferrets_simulation::{
     components::{
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
+        field_source::FieldReach,
         location::LocationComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner::OwnerComponent,
@@ -109,7 +112,7 @@ use ferrets_simulation::{
     },
     simulation_id::SimulationId,
     skirmish::Skirmish,
-    spawn::{self, Arrival, At, FieldReach},
+    spawn::{self, Arrival, At},
     statistics::Statistics,
     visibility::{self, Senses, Sighting},
 };
@@ -447,7 +450,7 @@ pub fn offset(from: FixedUVec2, to: FixedUVec2) -> FixedVec2 {
 }
 
 /// Creates an entity of `type_name` anchored at `anchor` for `owner`, its
-/// field sources at their initial reach, announcing nothing.
+/// field sources at their growth start, announcing nothing.
 pub fn create_entity(
     world: &mut World,
     type_name: &str,
@@ -749,7 +752,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                     MorphTransition::new(
                         "giant",
                         MorphCourse::direct(MorphInterrupted::Reverts),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -761,7 +764,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                     MorphTransition::new(
                         "brute",
                         MorphCourse::direct(MorphInterrupted::Reverts),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -772,7 +775,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                     MorphTransition::new(
                         "boulder",
                         MorphCourse::direct(MorphInterrupted::Dies),
-                        Quantity::Constant(0),
+                        Quantity::from(0),
                         MorphPlacement::Revalidate,
                         MorphCancel::Committed,
                         MorphReason::Change,
@@ -783,7 +786,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                     MorphTransition::new(
                         "ogre",
                         MorphCourse::direct(MorphInterrupted::Reverts),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -794,7 +797,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                     MorphTransition::new(
                         "husk",
                         MorphCourse::direct(MorphInterrupted::Reverts),
-                        Quantity::Constant(0),
+                        Quantity::from(0),
                         MorphPlacement::Revalidate,
                         MorphCancel::Committed,
                         MorphReason::Change,
@@ -805,7 +808,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                     MorphTransition::new(
                         "wisp",
                         MorphCourse::direct(MorphInterrupted::Reverts),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Forfeit,
                         MorphReason::Change,
@@ -825,7 +828,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                             )]),
                         ),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -925,7 +928,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 .with_morphs([MorphTransition::new(
                     "whelp",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
                     MorphReason::Change,
@@ -947,7 +950,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 .with_morphs([MorphTransition::new(
                     "golem",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
                     MorphReason::Change,
@@ -971,7 +974,7 @@ pub fn morph_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 .with_morphs([MorphTransition::new(
                     "shrine",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
                     MorphReason::Change,
@@ -1035,7 +1038,7 @@ fn brood_change(into: &str) -> MorphTransition {
     MorphTransition::new(
         into,
         MorphCourse::direct(MorphInterrupted::Reverts),
-        Quantity::Constant(10),
+        Quantity::from(10),
         MorphPlacement::Revalidate,
         MorphCancel::Refundable,
         MorphReason::Change,
@@ -1065,7 +1068,8 @@ pub fn brood_app(model: MovementModel) -> App {
 ///   reads its period from the `brood_period` stat, 6. `rug_hatch` breeds as
 ///   a hatch and changes for 10 gold, refunded when called off, into a
 ///   `great_hatch` through a `rug_shell` lying underfoot (which seats but
-///   breeds nothing).
+///   breeds nothing). `glow_hatch` breeds `glow_grub`s, grubs whose `glow`
+///   field grows a cell a tick from inside out to two.
 /// - `grub` is passable, roams, and grows for 10 gold into a
 ///   `worker` (1 supply, counted as production) or, in 20 ticks, a `brute`
 ///   (2 supply, needs a `den`) inside a solid `egg`, both returning it when the growth ends
@@ -1098,7 +1102,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
         registry.register(
             brood_building("hatch")
                 .with_berths(brood_berths(4))
-                .with_breeder("grub", Quantity::Constant(10), 3, 0, OrphanFate::Perish)
+                .with_breeder("grub", Quantity::from(10), 3, 0, OrphanFate::Perish)
                 .with_morphs([
                     MorphTransition::new(
                         "great_hatch",
@@ -1110,7 +1114,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                             )]),
                         ),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Revalidate,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -1126,7 +1130,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
         registry.register(
             brood_building("rug_hatch")
                 .with_berths(brood_berths(4))
-                .with_breeder("grub", Quantity::Constant(10), 3, 0, OrphanFate::Perish)
+                .with_breeder("grub", Quantity::from(10), 3, 0, OrphanFate::Perish)
                 .with_morphs([MorphTransition::new(
                     "great_hatch",
                     MorphCourse::via(
@@ -1137,7 +1141,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                             RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                         )]),
                     ),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
                     MorphReason::Change,
@@ -1159,20 +1163,20 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
         registry.register(
             brood_building("great_hatch")
                 .with_berths(brood_berths(4))
-                .with_breeder("grub", Quantity::Constant(10), 3, 2, OrphanFate::Perish)
+                .with_breeder("grub", Quantity::from(10), 3, 2, OrphanFate::Perish)
                 .with_morphs([brood_change("hatch")]),
         );
         registry.register(brood_building("bare_hatch"));
         registry.register(
             brood_building("tight_hatch")
                 .with_berths(brood_berths(2))
-                .with_breeder("grub", Quantity::Constant(10), 2, 0, OrphanFate::Perish),
+                .with_breeder("grub", Quantity::from(10), 2, 0, OrphanFate::Perish),
         );
         registry.register(
             brood_building("ready_hatch")
                 .with_rise(20, rise_initial_pools(&[PoolId::HEALTH]))
                 .with_berths(brood_berths(4))
-                .with_breeder("grub", Quantity::Constant(10), 3, 2, OrphanFate::Perish),
+                .with_breeder("grub", Quantity::from(10), 3, 2, OrphanFate::Perish),
         );
         registry.register(
             brood_building("stat_hatch")
@@ -1191,7 +1195,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 .with_berths(brood_berths(2))
                 .with_breeder(
                     "piglet",
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     2,
                     0,
                     OrphanFate::Linger(Lingering::Stay),
@@ -1206,7 +1210,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 )])
                 .with_breeder(
                     "piglet",
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     2,
                     0,
                     OrphanFate::Linger(Lingering::Stay),
@@ -1217,7 +1221,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
         registry.register(
             brood_building("sty")
                 .with_berths(brood_berths(2))
-                .with_breeder("runt", Quantity::Constant(10), 2, 0, OrphanFate::Perish)
+                .with_breeder("runt", Quantity::from(10), 2, 0, OrphanFate::Perish)
                 .with_morphs([brood_change("bare_sty")]),
         );
         registry.register(brood_building("bare_sty"));
@@ -1225,7 +1229,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
         registry.register(
             brood_building("reseat_pen")
                 .with_berths(brood_berths(2))
-                .with_breeder("piglet", Quantity::Constant(10), 2, 0, reseat)
+                .with_breeder("piglet", Quantity::from(10), 2, 0, reseat)
                 .with_morphs([MorphTransition::new(
                     "roomy_pen",
                     MorphCourse::via(
@@ -1236,7 +1240,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                             RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                         )]),
                     ),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
                     MorphReason::Change,
@@ -1249,9 +1253,48 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
         registry.register(
             brood_building("roomy_pen")
                 .with_berths(brood_berths(2))
-                .with_breeder("piglet", Quantity::Constant(10), 2, 0, reseat),
+                .with_breeder("piglet", Quantity::from(10), 2, 0, reseat),
         );
 
+        let glow = registry.register_field(
+            "glow",
+            FieldDef::new(
+                Terrains::Any,
+                GROUND.into(),
+                FieldDecay::Instant,
+                None,
+                None,
+                Detection::Blind,
+            ),
+        );
+        registry.register(
+            brood_building("glow_hatch")
+                .with_berths(brood_berths(4))
+                .with_breeder("glow_grub", Quantity::from(10), 3, 0, OrphanFate::Perish),
+        );
+        registry.register(
+            EntityTypeDef::new("glow_grub")
+                .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Passable, GROUND)
+                .with_pool(Pool::health(25))
+                .with_dying(1, [])
+                .with_broodling(Attachment::new(
+                    "brood",
+                    BerthStance::Roaming {
+                        speed: fixed("0.1"),
+                        dwell: 5,
+                    },
+                ))
+                .with_field_sources([FieldSourceDef::new(
+                    glow,
+                    Area::Around(Quantity::from(2)),
+                    FieldGrowth::Gradual {
+                        cycle: 1,
+                        starts_at: Area::Inside,
+                    },
+                    Emission::Nothing,
+                    Emission::Full,
+                )]),
+        );
         registry.register(
             EntityTypeDef::new("grub")
                 .with_location(GROUND_DOMAIN, CellSize::ONE, Solidity::Passable, GROUND)
@@ -1276,7 +1319,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                             )]),
                         ),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphReason::Production,
@@ -1294,7 +1337,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                             )]),
                         ),
-                        Quantity::Constant(20),
+                        Quantity::from(20),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -1305,7 +1348,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                     MorphTransition::new(
                         "mound",
                         MorphCourse::direct(MorphInterrupted::Reverts),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -1320,7 +1363,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                             [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                             ViaInterrupted::Dies,
                         ),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -1338,7 +1381,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                             )]),
                         ),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -1353,7 +1396,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                             [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
                             ViaInterrupted::Dies,
                         ),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Nearby,
                         MorphCancel::Refundable,
                         MorphReason::Change,
@@ -1405,8 +1448,8 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 caster: SkillCaster::Entity {
                     costs: Vec::new(),
                     casting: Casting::Delayed {
-                        point: Quantity::Constant(6),
-                        period: Quantity::Constant(8),
+                        point: Quantity::from(6),
+                        period: Quantity::from(8),
                         pays: PaymentPoint::AtLanding,
                     },
                     effect: EntityCastEffect::Damage {
@@ -1440,7 +1483,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 .with_morphs([MorphTransition::new(
                     "worker",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
                     MorphReason::Change,
@@ -1488,7 +1531,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
             brood_mover("sow", 40)
                 .with_stat(EntityStatId::CARGO_SIZE, FixedU64::ONE)
                 .with_berths(brood_berths(2))
-                .with_breeder("hog", Quantity::Constant(10), 2, 0, OrphanFate::Perish),
+                .with_breeder("hog", Quantity::from(10), 2, 0, OrphanFate::Perish),
         );
         registry.register(
             EntityTypeDef::new("hog")
@@ -1510,7 +1553,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_berths(brood_berths(2))
-                .with_breeder("mite", Quantity::Constant(10), 1, 0, OrphanFate::Perish)
+                .with_breeder("mite", Quantity::from(10), 1, 0, OrphanFate::Perish)
                 .with_builder(["ready_hatch"], BuilderAttendance::Crew(hidden.clone()))
                 .with_resource_carrier([(
                     "gold",
@@ -1531,7 +1574,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_stat(EntityStatId::REPAIR_RANGE, FixedU64::ONE)
                 .with_berths(brood_berths(2))
-                .with_breeder("mite", Quantity::Constant(10), 1, 0, OrphanFate::Perish)
+                .with_breeder("mite", Quantity::from(10), 1, 0, OrphanFate::Perish)
                 .with_repairer(
                     Kinds::Any,
                     RepairRate::PerTick(FixedU64::ONE),
@@ -2252,7 +2295,8 @@ pub fn combat_app() -> App {
                     Delivery::Projectile(lob),
                     Some(SplashDef::new(
                         SplashShape::Circular,
-                        vec![(1, FixedU64::ONE)],
+                        (Area::Around(Quantity::from(1)), FixedU64::ONE),
+                        Vec::new(),
                         GROUND,
                         true,
                     )),
@@ -2891,7 +2935,7 @@ pub fn annex_app() -> App {
                 .with_morphs([MorphTransition::new(
                     "keep_aloft",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(4),
+                    Quantity::from(4),
                     MorphPlacement::Revalidate,
                     MorphCancel::Committed,
                     MorphReason::Change,
@@ -2917,7 +2961,7 @@ pub fn annex_app() -> App {
                 .with_morphs([MorphTransition::new(
                     "keep",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(4),
+                    Quantity::from(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphReason::Change,
@@ -3384,7 +3428,8 @@ pub fn transport_app() -> App {
                         Delivery::Projectile(stone),
                         Some(SplashDef::new(
                             SplashShape::Circular,
-                            vec![(1, fixed("0.5"))],
+                            (Area::Around(Quantity::from(1)), fixed("0.5")),
+                            Vec::new(),
                             GROUND,
                             true,
                         )),
@@ -3428,7 +3473,7 @@ pub fn transport_app() -> App {
                 .with_morphs([MorphTransition::new(
                     "moth",
                     MorphCourse::direct(MorphInterrupted::Dies),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Committed,
                     MorphReason::Change,
@@ -3549,7 +3594,8 @@ pub fn transport_app() -> App {
                         Delivery::Instant,
                         Some(SplashDef::new(
                             SplashShape::Circular,
-                            vec![(2, fixed("0.5"))],
+                            (Area::Around(Quantity::from(2)), fixed("0.5")),
+                            Vec::new(),
                             GROUND,
                             true,
                         )),
@@ -4780,7 +4826,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_morphs([MorphTransition::new(
                     "walking_shaft",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(4),
+                    Quantity::from(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphReason::Change,
@@ -4807,7 +4853,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_morphs([MorphTransition::new(
                     "shaft_house",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(4),
+                    Quantity::from(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphReason::Change,
@@ -4832,7 +4878,7 @@ pub fn register_orders_content(app: &mut App) {
                 .with_morphs([MorphTransition::new(
                     "walking_pump",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(4),
+                    Quantity::from(4),
                     MorphPlacement::Reserve,
                     MorphCancel::Committed,
                     MorphReason::Change,

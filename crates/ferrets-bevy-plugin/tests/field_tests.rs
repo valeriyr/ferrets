@@ -11,6 +11,7 @@ use ferrets_bevy_plugin::ai::game_view;
 use ferrets_bevy_plugin::instantiate_map;
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     attack::{Delivery, Slain, Weapon},
     build::BuilderAttendance,
     coverage::Coverage,
@@ -30,6 +31,7 @@ use ferrets_content::{
         MorphCancel, MorphCourse, MorphInterrupted, MorphPlacement, MorphReason, MorphTransition,
         PoolCarry, RevertCarry, ViaInterrupted,
     },
+    player_buffs::PlayerBuffDef,
     pool::Pool,
     pool_def::PoolId,
     pool_shift::PoolShift,
@@ -51,16 +53,23 @@ use ferrets_content::{
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, projection::Projection};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
+    beside::{Beside, Lean},
     checksum,
     command::PlayerCommand,
     components::{
-        hidden::Inside, pools, research::ResearchComponent, resource::ResourceSourceComponent,
+        field_source::{Emitted, FieldReach, FieldSourcesComponent, Growth},
+        hidden::Inside,
+        pools,
+        research::ResearchComponent,
+        resource::ResourceSourceComponent,
         train::TrainComponent,
     },
     entity_def::{self, Operation, Outage},
     entity_index::EntityIndex,
     events::{DeathCause, SimulationEvent},
+    field_cover,
     fields::{self, FieldGrid},
+    game_loop::buffs,
     map_data::{MapData, Placement},
     movement_model::MovementModel,
     order::Order,
@@ -70,7 +79,7 @@ use ferrets_simulation::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
         player_mask::PlayerMask, player_slot::PlayerSlot, player_type::PlayerType,
     },
-    spawn,
+    spawn::{self, Arrival, At},
     visibility::{CellVisibility, VisibilityGrid},
 };
 
@@ -79,7 +88,7 @@ use ferrets_simulation::{
 //
 
 #[test]
-fn instant_source_covers_its_radius_when_it_stands() {
+fn instant_source_covers_its_area_when_it_stands() {
     let mut app = field_app();
     let Fields { power, .. } = fields(&app);
     utils::create_owned(&mut app, "pylon", 10, 10, 0);
@@ -93,7 +102,7 @@ fn instant_source_covers_its_radius_when_it_stands() {
 }
 
 #[test]
-fn gradual_source_grows_one_cell_per_cycle_up_to_its_radius() {
+fn gradual_source_grows_one_cell_per_cycle_up_to_its_area() {
     let mut app = field_app();
     let Fields { creep, .. } = fields(&app);
     utils::create_owned(&mut app, "hive", 10, 10, 0);
@@ -113,11 +122,984 @@ fn gradual_source_grows_one_cell_per_cycle_up_to_its_radius() {
     assert!(!utils::covered_by(&app, creep, 14, 10, 0));
 
     utils::run_ticks(&mut app, 10);
-    assert!(utils::covered_by(&app, creep, 15, 10, 0), "radius reached");
+    assert!(utils::covered_by(&app, creep, 15, 10, 0), "area reached");
     assert!(
         !utils::covered_by(&app, creep, 16, 10, 0),
-        "never beyond the radius"
+        "never beyond the area"
     );
+}
+
+#[test]
+fn source_area_read_from_stat_moves_with_its_modifiers() {
+    let mut app = field_app();
+    let Fields { power, .. } = fields(&app);
+    let (signal, _) = utils::create_owned(&mut app, "signal", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    // A reach of 2 from (10, 10): (12, 10) is covered, (13, 10) is not.
+    assert!(utils::covered_by(&app, power, 12, 10, 0));
+    assert!(!utils::covered_by(&app, power, 13, 10, 0));
+
+    let stronger = utils::entity_buff_id(&app, "stronger_signal");
+    utils::apply_buff(app.world_mut(), signal, stronger);
+    // The fields recompute before the stats fold the buff in: the tick after.
+    utils::run_ticks(&mut app, 2);
+
+    // 2 + 2 = 4: (14, 10) is covered, (15, 10) is not.
+    assert!(utils::covered_by(&app, power, 14, 10, 0));
+    assert!(!utils::covered_by(&app, power, 15, 10, 0));
+}
+
+#[test]
+fn lowered_area_cuts_grown_reach() {
+    let mut app = field_app();
+    let (mound, _) = utils::create_owned(&mut app, "mound", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    // From inside, a cell a tick up to its spread of 3: 0 + 3 = 3.
+    assert_eq!(emitted(&app, mound), Emitted::Reach(3));
+
+    let sunken = utils::entity_buff_id(&app, "sunken_mound");
+    utils::apply_buff(app.world_mut(), mound, sunken);
+    // The fields recompute before the stats fold the buff in: the tick after.
+    utils::run_ticks(&mut app, 2);
+
+    // 3 − 2 = 1: the grown reach is cut to the lowered area.
+    assert_eq!(emitted(&app, mound), Emitted::Reach(1));
+}
+
+#[test]
+fn held_area_read_from_stat_is_what_disabled_source_keeps() {
+    let mut app = field_app();
+    let Fields { power, .. } = fields(&app);
+    let (post, _) = utils::create_owned(&mut app, "glowpost", 10, 10, 0);
+    let brighter = utils::entity_buff_id(&app, "brighter_glow");
+    utils::apply_buff(app.world_mut(), post, brighter);
+    utils::run_ticks(&mut app, 2);
+    // Operating, its area of 4: 10 + 4 = 14 is covered.
+    assert!(utils::covered_by(&app, power, 14, 10, 0));
+
+    utils::disable_for(&mut app, post, 50);
+    utils::run_ticks(&mut app, 2);
+
+    // The glow stat holds 2 + 1 = 3: (13, 10) is covered, (14, 10) is not.
+    assert_eq!(emitted(&app, post), Emitted::Reach(3));
+    assert!(utils::covered_by(&app, power, 13, 10, 0));
+    assert!(!utils::covered_by(&app, power, 14, 10, 0));
+}
+
+#[test]
+fn held_patch_past_growth_carries_growth_out_to_it() {
+    let mut app = field_app();
+    let (cinder, _) = utils::create_owned(&mut app, "cinder", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, cinder), Emitted::Reach(1));
+
+    // Disabled at one cell out, it holds a patch two cells out.
+    utils::disable_for(&mut app, cinder, 3);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, cinder), Emitted::Reach(2));
+
+    // Enabled again, it grows on from the patch it held: 2 + 1 = 3.
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, cinder), Emitted::Reach(3));
+}
+
+#[test]
+fn held_area_never_reaches_past_source_area() {
+    let mut app = field_app();
+    let (post, _) = utils::create_owned(&mut app, "glowpost", 10, 10, 0);
+    let blinding = utils::entity_buff_id(&app, "blinding_glow");
+    utils::apply_buff(app.world_mut(), post, blinding);
+    utils::run_ticks(&mut app, 2);
+
+    utils::disable_for(&mut app, post, 50);
+    utils::run_ticks(&mut app, 2);
+
+    // The glow stat holds 2 + 3 = 5, past the post's area of 4: it holds 4.
+    assert_eq!(emitted(&app, post), Emitted::Reach(4));
+}
+
+#[test]
+fn reenabled_source_regrows_from_what_its_field_kept() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (warren, _) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+
+    // Disabled for five ticks, it holds up nothing and the creep recedes a
+    // ring every two ticks: 3 − 2 = 1 ring is left.
+    utils::disable_for(&mut app, warren, 4);
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(emitted(&app, warren), Emitted::Nothing);
+    assert!(utils::covered_by(&app, creep, 11, 10, 0));
+    assert!(!utils::covered_by(&app, creep, 12, 10, 0));
+
+    // Enabled again, it regrows a cell a tick from that ring: 1 + 1 = 2.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(2));
+}
+
+#[test]
+fn reenabled_source_regrows_from_footprint_when_its_field_went_at_once() {
+    let mut app = field_app();
+    let (seedling, _) = utils::create_owned(&mut app, "seedling", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, seedling), Emitted::Reach(3));
+
+    // Power goes the tick nothing holds it up, and the growth with it.
+    utils::disable_for(&mut app, seedling, 4);
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(emitted(&app, seedling), Emitted::Nothing);
+
+    // Enabled again, it regrows a cell a tick from its footprint: 0 + 1 = 1.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, seedling), Emitted::Reach(1));
+}
+
+#[test]
+fn cleared_patch_of_disabled_source_is_not_covered_again_at_once() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (warren, _) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+
+    // Disabled, its creep is cleared by a rival before a single ring recedes.
+    utils::disable_for(&mut app, warren, 4);
+    utils::run_ticks(&mut app, 2);
+    field_cover::apply_action(
+        app.world_mut(),
+        1,
+        creep,
+        CellPos::new(10, 10),
+        5,
+        FieldAction::Clear,
+    );
+    utils::run_ticks(&mut app, 4);
+
+    // Enabled again, nothing of its creep lies around it: 0 + 1 = 1.
+    assert_eq!(emitted(&app, warren), Emitted::Reach(1));
+}
+
+#[test]
+fn reenabled_source_keeps_reach_its_neighbor_held_up() {
+    let mut app = field_app();
+    utils::create_owned(&mut app, "bloom", 11, 10, 0);
+    let (warren, _) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 8);
+
+    // The bloom's creep, six cells out of (11, 10), covers all three of the
+    // warren's rings while it is disabled: it comes back at its whole 3.
+    utils::disable_for(&mut app, warren, 8);
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+}
+
+#[test]
+fn risen_source_starts_at_its_growth_start_past_patch_it_held() {
+    let mut app = field_app();
+    let (mound, _) = utils::create_unattended_rising(&mut app, "nesting_mound", 10, 20, 0);
+    utils::run_ticks(&mut app, 1);
+    // Rising, it holds a patch one cell out.
+    assert_eq!(emitted(&app, mound), Emitted::Reach(1));
+
+    // Risen, it starts three cells out and grows a cell a tick: 3 + 1 = 4.
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, mound), Emitted::Reach(4));
+}
+
+#[test]
+fn hidden_source_starts_over_as_fresh_arrival() {
+    let mut app = field_app();
+    let (warren, _) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+
+    spawn::hide_entity(app.world_mut(), warren, Inside::Nothing);
+    let state = app
+        .world()
+        .get::<FieldSourcesComponent>(warren)
+        .expect("a source carries its state")
+        .0[0];
+    assert_eq!(state.growth, Growth::Unread(FieldReach::Initial));
+    assert_eq!(state.last_emitted, Emitted::Nothing);
+}
+
+#[test]
+fn source_back_from_hiding_begins_fresh_growth_cycle() {
+    let mut app = field_app();
+    let (hive, _) = utils::create_owned(&mut app, "hive", 10, 10, 0);
+    // From one cell out, a cell every two ticks: 1, 2, then halfway to 3.
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(emitted(&app, hive), Emitted::Reach(2));
+
+    spawn::hide_entity(app.world_mut(), hive, Inside::Nothing);
+    spawn::place_back_beside(app.world_mut(), hive, Beside::WentIn, Lean::WentIn);
+    // Back where it went in, it starts one cell out and is a whole cycle from
+    // its next cell, not half of one.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, hive), Emitted::Reach(1));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, hive), Emitted::Reach(2));
+}
+
+#[test]
+fn source_out_for_one_tick_regrows_from_what_its_field_kept() {
+    let mut app = field_app();
+    let (seedling, _) = utils::create_owned(&mut app, "seedling", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, seedling), Emitted::Reach(3));
+
+    // Power goes the tick nothing holds it up, so even the shortest outage
+    // leaves nothing to come back to: 0 + 1 = 1.
+    utils::disable_for(&mut app, seedling, 1);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(emitted(&app, seedling), Emitted::Reach(1));
+}
+
+#[test]
+fn source_back_after_one_ring_receded_grows_from_ring_left() {
+    let mut app = field_app();
+    let (warren, _) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+
+    // Out long enough for one ring to recede: 3 − 1 = 2 rings left, then a
+    // cell a tick: 2 + 1 = 3.
+    utils::disable_for(&mut app, warren, 2);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+}
+
+#[test]
+fn reenabled_source_ignores_rival_cover_over_its_patch() {
+    let mut app = field_app();
+    utils::create_owned(&mut app, "bloom", 11, 10, 1);
+    let (warren, _) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 8);
+
+    // The rival's creep lies over the warren's rings but is not its own: its
+    // own recede to nothing while it is out, and it regrows: 0 + 1 = 1.
+    utils::disable_for(&mut app, warren, 8);
+    utils::run_ticks(&mut app, 10);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(1));
+}
+
+#[test]
+fn source_beyond_map_out_across_decay_reads_its_reach() {
+    let mut app = field_app();
+    let (warren, _) = utils::create_owned(&mut app, "vast_warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    let reach_read = |app: &App| {
+        app.world()
+            .get::<FieldSourcesComponent>(warren)
+            .expect("a source carries its state")
+            .0[0]
+            .growth
+            .reach()
+            .expect("the warren has read its reach")
+    };
+
+    // Its creep covers the whole 32×32 map. Disabled, the creep recedes a
+    // ring from the map's edge every two ticks, and the reach still lying
+    // is read each time without a step per cell down from u32::MAX: the
+    // nearest edge is 10 cells out, so the first recede leaves 10 − 1 = 9,
+    // and three more leave 9 − 3 = 6.
+    utils::disable_for(&mut app, warren, 6);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(reach_read(&app), 9);
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(reach_read(&app), 6);
+
+    // Back on, it spans its whole area at once.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(u32::MAX));
+}
+
+#[test]
+fn risen_source_grows_on_from_wider_patch_it_held() {
+    let mut app = field_app();
+    let (glimmer, _) = utils::create_unattended_rising(&mut app, "glimmer", 10, 20, 0);
+    utils::run_ticks(&mut app, 1);
+    // Rising, it holds a patch two cells out, past its start from inside.
+    assert_eq!(emitted(&app, glimmer), Emitted::Reach(2));
+
+    // Risen, it grows on from the patch: 2 + 1 = 3.
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, glimmer), Emitted::Reach(3));
+}
+
+#[test]
+fn source_back_from_hiding_holding_patch_begins_fresh_cycle() {
+    let mut app = field_app();
+    let (smolder, _) = utils::create_owned(&mut app, "smolder", 10, 10, 0);
+    // A cell every three ticks from inside: one cell out, a tick into the
+    // next cycle.
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, smolder), Emitted::Reach(1));
+
+    spawn::hide_entity(app.world_mut(), smolder, Inside::Nothing);
+    spawn::place_back_beside(app.world_mut(), smolder, Beside::WentIn, Lean::WentIn);
+    // Back and disabled, it holds two cells out; enabled again, its next cell
+    // is a whole cycle of three away: 2 at the second tick, 3 at the third.
+    utils::disable_for(&mut app, smolder, 2);
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(emitted(&app, smolder), Emitted::Reach(2));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, smolder), Emitted::Reach(3));
+}
+
+#[test]
+fn captured_source_hands_its_cover_to_new_owner() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (warren, warren_id) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert!(utils::covered_by(&app, creep, 13, 10, 0));
+
+    spawn::change_owner(app.world_mut(), warren, 1, warren_id, Lean::Nothing);
+    // Its three rings change hands at once, and it holds them up for its new
+    // owner from the next recompute.
+    assert!(utils::covered_by(&app, creep, 13, 10, 1));
+    assert!(!utils::covered_by(&app, creep, 13, 10, 0));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+    assert!(utils::covered_by(&app, creep, 13, 10, 1));
+}
+
+#[test]
+fn captured_source_leaves_old_owner_cover_its_other_sources_hold() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (warren, warren_id) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::create_owned(&mut app, "warren", 13, 10, 0);
+    utils::run_ticks(&mut app, 4);
+
+    // (12, 10) lies within both warrens' three rings: captured, the one at
+    // (10, 10) hands it over, and the other holds it up again for its owner.
+    spawn::change_owner(app.world_mut(), warren, 1, warren_id, Lean::Nothing);
+    utils::run_ticks(&mut app, 1);
+    assert!(utils::covered_by(&app, creep, 12, 10, 0));
+    assert!(utils::covered_by(&app, creep, 12, 10, 1));
+}
+
+#[test]
+fn field_marks_whose_cover_came_off_until_recompute_reads_it() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let lost_by = |app: &App| app.world().resource::<FieldGrid>().lost_by(creep);
+    utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(lost_by(&app), PlayerMask::EMPTY);
+
+    // A clear where nothing lies takes nothing off; one by player 1 over
+    // player 0's cover nobody holds up takes player 0's, until the next
+    // recompute has read it.
+    let act = |app: &mut App, player, action| {
+        field_cover::apply_action(
+            app.world_mut(),
+            player,
+            creep,
+            CellPos::new(25, 25),
+            1,
+            action,
+        );
+    };
+    act(&mut app, 1, FieldAction::Clear);
+    assert_eq!(lost_by(&app), PlayerMask::EMPTY);
+    act(&mut app, 0, FieldAction::Cover);
+    act(&mut app, 1, FieldAction::Clear);
+    assert_eq!(lost_by(&app), PlayerMask::of(0));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(lost_by(&app), PlayerMask::EMPTY);
+}
+
+#[test]
+fn captures_of_two_players_sources_mark_each_old_owner() {
+    let mut app = field_app_with(utils::human_slots(4));
+    let Fields { creep, .. } = fields(&app);
+    let (west, west_id) = utils::create_owned(&mut app, "warren", 5, 10, 0);
+    let (east, east_id) = utils::create_owned(&mut app, "warren", 25, 10, 3);
+    utils::run_ticks(&mut app, 4);
+
+    // In one tick player 1 takes player 0's warren and player 2 takes
+    // player 3's: both old owners lose cover, the new ones lose none.
+    spawn::change_owner(app.world_mut(), west, 1, west_id, Lean::Nothing);
+    spawn::change_owner(app.world_mut(), east, 2, east_id, Lean::Nothing);
+    assert_eq!(
+        app.world().resource::<FieldGrid>().lost_by(creep),
+        PlayerMask::of(0) | PlayerMask::of(3)
+    );
+}
+
+#[test]
+fn source_cleared_between_recomputes_regrows_from_what_lies() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (warren, _) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+
+    // Cleared after its last disabled recompute, it is read again before it
+    // grows: nothing lies around it, 0 + 1 = 1.
+    utils::disable_for(&mut app, warren, 2);
+    utils::run_ticks(&mut app, 3);
+    field_cover::apply_action(
+        app.world_mut(),
+        1,
+        creep,
+        CellPos::new(10, 10),
+        5,
+        FieldAction::Clear,
+    );
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(1));
+}
+
+#[test]
+fn area_lowered_for_one_tick_keeps_reach_its_field_still_holds() {
+    let mut app = field_app();
+    let (mound, _) = utils::create_owned(&mut app, "mound", 10, 10, 0);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(emitted(&app, mound), Emitted::Reach(3));
+
+    // One tick at 3 − 2 = 1: one ring recedes meanwhile, and restored it
+    // grows on from what is left: 2 + 1 = 3.
+    let dipped = utils::entity_buff_id(&app, "dipped_mound");
+    utils::apply_buff(app.world_mut(), mound, dipped);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, mound), Emitted::Reach(3));
+}
+
+#[test]
+fn relocated_source_starts_over_where_it_lands() {
+    let mut app = field_app();
+    let (warren, _) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+
+    spawn::relocate(app.world_mut(), &[(warren, CellPos::new(20, 20))]);
+    let state = app
+        .world()
+        .get::<FieldSourcesComponent>(warren)
+        .expect("a source carries its state")
+        .0[0];
+    assert_eq!(state.growth, Growth::Unread(FieldReach::Initial));
+    // From inside, a cell a tick: 0 + 1 = 1.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(1));
+}
+
+#[test]
+fn captured_source_with_nothing_lying_hands_over_no_cover() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (warren, warren_id) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+
+    // Disabled and cleared, nothing of its creep lies around it; captured
+    // then, its footprint is no one's cover.
+    utils::disable_for(&mut app, warren, 20);
+    utils::run_ticks(&mut app, 1);
+    field_cover::apply_action(
+        app.world_mut(),
+        1,
+        creep,
+        CellPos::new(10, 10),
+        5,
+        FieldAction::Clear,
+    );
+    utils::run_ticks(&mut app, 1);
+    spawn::change_owner(app.world_mut(), warren, 1, warren_id, Lean::Nothing);
+    for x in 10..=13 {
+        assert!(!utils::covered_by(&app, creep, x, 10, 0));
+        assert!(!utils::covered_by(&app, creep, x, 10, 1));
+    }
+}
+
+#[test]
+fn capture_shares_cells_old_owner_other_working_source_holds() {
+    let mut app = field_app();
+    let moss = app
+        .world()
+        .resource::<ContentRegistry>()
+        .field("moss")
+        .expect("moss is registered");
+    let (bed, _) = utils::create_owned(&mut app, "moss_bed", 10, 10, 0);
+    let (neighbor, neighbor_id) = utils::create_owned(&mut app, "moss_bed", 12, 10, 0);
+    utils::run_ticks(&mut app, 4);
+
+    // The bed holds 10 − 3 = 7 to 10 + 3 = 13 up; the neighbor reaches 9 to
+    // 15. Captured, the neighbor's cells the bed holds gain player 1 and stay
+    // player 0's; the rest pass to player 1 though moss never recedes.
+    spawn::change_owner(app.world_mut(), neighbor, 1, neighbor_id, Lean::Nothing);
+    for x in 9..=13 {
+        assert!(utils::covered_by(&app, moss, x, 10, 0));
+        assert!(utils::covered_by(&app, moss, x, 10, 1));
+    }
+    for x in 14..=15 {
+        assert!(!utils::covered_by(&app, moss, x, 10, 0));
+        assert!(utils::covered_by(&app, moss, x, 10, 1));
+    }
+    // The bed lost nothing and keeps its three rings.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, bed), Emitted::Reach(3));
+}
+
+#[test]
+fn walking_source_keeps_reach_when_its_owner_loses_cover_elsewhere() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (crawler, crawler_id) = utils::create_owned(&mut app, "crawler", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, crawler), Emitted::Reach(2));
+
+    utils::select(&mut app, crawler_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(20, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    // Every tick player 1 clears a patch of player 0's creep far off; the
+    // walker holds up its whole two rings around wherever it stands.
+    for _ in 0..12 {
+        for (player, action) in [(0, FieldAction::Cover), (1, FieldAction::Clear)] {
+            field_cover::apply_action(
+                app.world_mut(),
+                player,
+                creep,
+                CellPos::new(25, 25),
+                1,
+                action,
+            );
+        }
+        utils::run_ticks(&mut app, 1);
+        assert_eq!(emitted(&app, crawler), Emitted::Reach(2));
+    }
+    // Its middle walked from 10.5 at half a cell a tick for the thirteen
+    // ticks since the move applied: 10.5 + 6.5 = 17.
+    assert_eq!(utils::anchor_of(app.world(), crawler), CellPos::new(17, 10));
+}
+
+#[test]
+fn source_cleared_then_captured_rereads_its_reach_for_new_owner() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (warren, warren_id) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    utils::disable_for(&mut app, warren, 20);
+    utils::run_ticks(&mut app, 1);
+
+    // Its creep cleared and itself captured before the next recompute, it
+    // reads as its new owner what lies around it: nothing.
+    field_cover::apply_action(
+        app.world_mut(),
+        1,
+        creep,
+        CellPos::new(10, 10),
+        5,
+        FieldAction::Clear,
+    );
+    spawn::change_owner(app.world_mut(), warren, 1, warren_id, Lean::Nothing);
+    utils::run_ticks(&mut app, 1);
+    let state = app
+        .world()
+        .get::<FieldSourcesComponent>(warren)
+        .expect("a source carries its state")
+        .0[0];
+    assert_eq!(state.growth.reach(), Some(0));
+}
+
+#[test]
+fn full_start_disabled_at_first_recompute_grows_from_what_it_placed() {
+    let mut app = field_app();
+    let (bed, _) = spawn::create_entity(
+        app.world_mut(),
+        "moss_bed",
+        At::Cell(CellPos::new(10, 10)),
+        Some(0),
+        FieldReach::Full,
+        Arrival::Standing { starts: &[] },
+    )
+    .expect("the moss bed fits");
+    utils::disable_for(&mut app, bed, 3);
+
+    // Disabled, it places nothing at its first recompute and reads its start
+    // there: reach 0, a cell a tick once enabled.
+    utils::run_ticks(&mut app, 1);
+    let state = app
+        .world()
+        .get::<FieldSourcesComponent>(bed)
+        .expect("a source carries its state")
+        .0[0];
+    assert_eq!(
+        state.growth,
+        Growth::Growing {
+            reach: 0,
+            countdown: 1
+        }
+    );
+    // Disabled three more recomputes, then a cell a tick: 0 + 1 = 1.
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(emitted(&app, bed), Emitted::Nothing);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, bed), Emitted::Reach(1));
+}
+
+#[test]
+fn rising_source_captured_hands_over_its_patch() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (nest, nest_id) = utils::create_unattended_rising(&mut app, "nest", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, nest), Emitted::Reach(1));
+
+    // Unread while it rises, it hands over the one-cell patch it put down.
+    spawn::change_owner(app.world_mut(), nest, 1, nest_id, Lean::Nothing);
+    assert!(utils::covered_by(&app, creep, 11, 10, 1));
+    assert!(!utils::covered_by(&app, creep, 11, 10, 0));
+}
+
+#[test]
+fn shoved_source_keeps_its_reach() {
+    let mut app = field_app();
+    let (warren, _) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+
+    // Pushed a cell aside it keeps its three rings, as walking would.
+    spawn::shove(app.world_mut(), &[(warren, CellPos::new(11, 10))]);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, warren), Emitted::Reach(3));
+}
+
+#[test]
+fn held_patch_below_growth_regrows_from_what_still_lies() {
+    let mut app = field_app();
+    let (cinder, _) = utils::create_owned(&mut app, "cinder", 10, 10, 0);
+    utils::run_ticks(&mut app, 6);
+    assert_eq!(emitted(&app, cinder), Emitted::Reach(4));
+
+    // Disabled for three recomputes holding two rings: one outer ring
+    // recedes, 4 − 1 = 3, and its reach follows what lies, not the patch.
+    utils::disable_for(&mut app, cinder, 2);
+    utils::run_ticks(&mut app, 3);
+    let state = app
+        .world()
+        .get::<FieldSourcesComponent>(cinder)
+        .expect("a source carries its state")
+        .0[0];
+    assert_eq!(state.growth.reach(), Some(3));
+    // Enabled again, it grows on from there: 3 + 1 = 4.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, cinder), Emitted::Reach(4));
+}
+
+#[test]
+fn captured_instant_source_over_lowered_area_hands_over_what_still_lies() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (mound, mound_id) = utils::create_owned(&mut app, "instant_mound", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, mound), Emitted::Reach(3));
+
+    // Sunk to 3 − 2 = 1, it holds one ring up; the outer two recede one in
+    // two ticks, leaving creep out to 2 — which a capture then hands over.
+    let sunken = utils::entity_buff_id(&app, "sunken_mound");
+    utils::apply_buff(app.world_mut(), mound, sunken);
+    utils::run_ticks(&mut app, 2);
+    spawn::change_owner(app.world_mut(), mound, 1, mound_id, Lean::Nothing);
+    assert!(utils::covered_by(&app, creep, 12, 10, 1));
+    assert!(!utils::covered_by(&app, creep, 12, 10, 0));
+}
+
+#[test]
+fn capture_hands_over_cells_only_old_owner_sources_hold() {
+    let mut app = field_app_with(utils::human_slots(3));
+    let Fields { creep, .. } = fields(&app);
+    let (warren, warren_id) = utils::create_owned(&mut app, "warren", 10, 10, 0);
+    utils::create_owned(&mut app, "warren", 13, 10, 2);
+    utils::run_ticks(&mut app, 4);
+
+    // (12, 10) lies within player 2's warren too, but player 0 keeps only
+    // what its own sources reach: it passes to player 1 alone.
+    spawn::change_owner(app.world_mut(), warren, 1, warren_id, Lean::Nothing);
+    assert!(utils::covered_by(&app, creep, 12, 10, 1));
+    assert!(!utils::covered_by(&app, creep, 12, 10, 0));
+}
+
+#[test]
+fn capture_keeps_old_owner_cover_its_disabled_source_reaches() {
+    let mut app = field_app();
+    let moss = app
+        .world()
+        .resource::<ContentRegistry>()
+        .field("moss")
+        .expect("moss is registered");
+    let (captured, captured_id) = utils::create_owned(&mut app, "moss_bed", 10, 10, 0);
+    let (dormant, _) = utils::create_owned(&mut app, "moss_bed", 12, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    utils::disable_for(&mut app, dormant, 10);
+    utils::run_ticks(&mut app, 2);
+
+    // The dormant bed holds nothing up, but its moss out to 12 − 3 = 9 is
+    // still its owner's: shared there, and passed wholly from 8 down.
+    spawn::change_owner(app.world_mut(), captured, 1, captured_id, Lean::Nothing);
+    for x in 9..=13 {
+        assert!(utils::covered_by(&app, moss, x, 10, 0));
+        assert!(utils::covered_by(&app, moss, x, 10, 1));
+    }
+    for x in 7..=8 {
+        assert!(!utils::covered_by(&app, moss, x, 10, 0));
+        assert!(utils::covered_by(&app, moss, x, 10, 1));
+    }
+    // Its moss whole, the dormant bed keeps its three rings.
+    utils::run_ticks(&mut app, 1);
+    let state = app
+        .world()
+        .get::<FieldSourcesComponent>(dormant)
+        .expect("a source carries its state")
+        .0[0];
+    assert_eq!(state.growth.reach(), Some(3));
+}
+
+#[test]
+fn risen_source_silent_while_rising_starts_at_its_growth_start() {
+    let mut app = field_app();
+    let (hive, _) = utils::create_unattended_rising(&mut app, "hive", 10, 20, 0);
+    // Four ticks rising, projecting nothing.
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, hive), Emitted::Nothing);
+
+    // Risen, it starts one cell out and grows a cell every two ticks: 1,
+    // then 1 + 1 = 2.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, hive), Emitted::Reach(1));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, hive), Emitted::Reach(2));
+}
+
+#[test]
+fn source_finishing_its_rise_disabled_keeps_patch_it_laid() {
+    let mut app = field_app();
+    let (mound, _) = utils::create_unattended_rising(&mut app, "dormant_mound", 10, 10, 0);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(emitted(&app, mound), Emitted::Reach(2));
+    utils::disable_for(&mut app, mound, 3);
+
+    // Risen disabled, it places nothing, but the two rings it laid while
+    // rising still lie: its reach is 2, not 0.
+    utils::run_ticks(&mut app, 2);
+    let state = app
+        .world()
+        .get::<FieldSourcesComponent>(mound)
+        .expect("a source carries its state")
+        .0[0];
+    assert_eq!(state.last_emitted, Emitted::Nothing);
+    assert_eq!(
+        state.growth,
+        Growth::Growing {
+            reach: 2,
+            countdown: 1
+        }
+    );
+    // Enabled again, it grows on from there: 2 + 1 = 3.
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(emitted(&app, mound), Emitted::Reach(3));
+}
+
+#[test]
+fn source_changing_into_wider_form_keeps_its_reach() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (sprout, _) = utils::create_owned(&mut app, "sprout", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    utils::order_morph(&mut app, sprout, "thicket");
+
+    // Every tick player 1 clears a patch of player 0's creep far off. Become
+    // a 3×3 thicket, the source keeps its three rings around the wider
+    // footprint, and grows on a cell every four ticks from the landing: 3
+    // four times, then 4.
+    let mut seen = Vec::new();
+    for _ in 0..5 {
+        for (player, action) in [(0, FieldAction::Cover), (1, FieldAction::Clear)] {
+            field_cover::apply_action(
+                app.world_mut(),
+                player,
+                creep,
+                CellPos::new(25, 25),
+                1,
+                action,
+            );
+        }
+        utils::run_ticks(&mut app, 1);
+        seen.push(emitted(&app, sprout));
+    }
+    assert_eq!(entity_def::type_name(app.world(), sprout), "thicket");
+    assert_eq!(
+        seen,
+        [
+            Emitted::Reach(3),
+            Emitted::Reach(3),
+            Emitted::Reach(3),
+            Emitted::Reach(3),
+            Emitted::Reach(4)
+        ]
+    );
+}
+
+#[test]
+fn reenabled_instant_source_covers_its_whole_area_at_once() {
+    let mut app = field_app();
+    let Fields { power, .. } = fields(&app);
+    let (brazier, _) = utils::create_owned(&mut app, "brazier", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, brazier), Emitted::Reach(3));
+
+    utils::disable_for(&mut app, brazier, 4);
+    utils::run_ticks(&mut app, 5);
+    assert_eq!(emitted(&app, brazier), Emitted::Nothing);
+    assert!(!utils::covered_by(&app, power, 11, 10, 0));
+
+    // Enabled again, its whole area of 3 at once: (13, 10) is covered.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, brazier), Emitted::Reach(3));
+    assert!(utils::covered_by(&app, power, 13, 10, 0));
+}
+
+#[test]
+fn growth_over_lowered_area_comes_down_with_its_field() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (mound, _) = utils::create_owned(&mut app, "mound", 10, 10, 0);
+    utils::run_ticks(&mut app, 3);
+    assert_eq!(emitted(&app, mound), Emitted::Reach(3));
+
+    // Six ticks at 3 − 2 = 1: the creep past it recedes a ring every two
+    // ticks, down to the one ring the lowered area holds up.
+    let sunken = utils::entity_buff_id(&app, "briefly_sunken_mound");
+    utils::apply_buff(app.world_mut(), mound, sunken);
+    utils::run_ticks(&mut app, 8);
+    assert_eq!(emitted(&app, mound), Emitted::Reach(1));
+    assert!(!utils::covered_by(&app, creep, 12, 10, 0));
+
+    // The area back at 3, it regrows a cell a tick from that ring: 1 + 1 = 2.
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(emitted(&app, mound), Emitted::Reach(2));
+}
+
+#[test]
+fn fresh_instance_area_reads_type_base_under_its_owner_modifiers() {
+    let mut app = field_app();
+    let deep = app
+        .world()
+        .resource::<ContentRegistry>()
+        .player_buff("deep_mounds")
+        .expect("the buff is registered");
+    buffs::apply_player_buff(app.world_mut(), 0, deep);
+
+    let world = app.world();
+    let registry = world.resource::<ContentRegistry>();
+    let mound = registry.def(registry.type_id("mound").expect("the mound is registered"));
+    let area = |owner| {
+        let owned = entity_def::owner_entity_modifiers(world, owner);
+        entity_def::owned_area_reach(registry, mound, &owned, mound.field_sources[0].area())
+    };
+    // A mound's spread of 3 under player 0's +2 is 3 + 2 = 5; player 1 lays
+    // nothing over its units: 3.
+    assert_eq!(area(0), 5);
+    assert_eq!(area(1), 3);
+}
+
+#[test]
+fn source_area_at_integer_limit_covers_map_it_stands_on() {
+    let mut app = field_app();
+    let Fields { creep, .. } = fields(&app);
+    let (sprawl, _) = utils::create_owned(&mut app, "sprawl", 10, 10, 0);
+    utils::run_ticks(&mut app, 1);
+
+    // Its creep reaches every corner of the 32×32 map.
+    assert_eq!(emitted(&app, sprawl), Emitted::Reach(u32::MAX));
+    assert!(utils::covered_by(&app, creep, 0, 0, 0));
+    assert!(utils::covered_by(&app, creep, 31, 31, 0));
+}
+
+#[test]
+fn changed_form_grows_on_from_reach_its_old_form_had() {
+    let mut app = field_app();
+    let (bud, bud_id) = utils::create_owned(&mut app, "bud", 10, 10, 0);
+    utils::run_ticks(&mut app, 4);
+    assert_eq!(emitted(&app, bud), Emitted::Reach(3));
+
+    utils::select(&mut app, bud_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Morph {
+            type_name: "bloom".into(),
+            flush: true,
+        },
+    );
+    // The change lands with the command and the bloom's first growth step
+    // follows the tick after.
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(utils::count_of_type(app.world_mut(), "bloom"), 1);
+
+    // The bloom takes over the bud's 3 and grows on: 3 + 1 = 4, where a
+    // fresh one would stand at 0 + 1 = 1.
+    assert_eq!(emitted(&app, bud), Emitted::Reach(4));
+}
+
+#[test]
+fn fresh_instance_area_folds_each_stack_of_owner_buff() {
+    let mut app = field_app();
+    let deeper = app
+        .world()
+        .resource::<ContentRegistry>()
+        .player_buff("deeper_mounds")
+        .expect("the buff is registered");
+    buffs::apply_player_buff(app.world_mut(), 0, deeper);
+    buffs::apply_player_buff(app.world_mut(), 0, deeper);
+
+    let world = app.world();
+    let registry = world.resource::<ContentRegistry>();
+    let mound = registry.def(registry.type_id("mound").expect("the mound is registered"));
+    let owned = entity_def::owner_entity_modifiers(world, 0);
+    // Two stacks of +2 on a spread of 3: 3 + 2 · 2 = 7.
+    assert_eq!(
+        entity_def::owned_area_reach(registry, mound, &owned, mound.field_sources[0].area()),
+        7
+    );
+}
+
+#[test]
+fn changed_form_takes_over_each_field_whatever_order_it_lists_them() {
+    let mut app = field_app();
+    let (bud, bud_id) = utils::create_owned(&mut app, "twin_bud", 10, 10, 0);
+    // A cell a tick from inside: creep up to its 3, power up to its 2.
+    utils::run_ticks(&mut app, 4);
+
+    utils::select(&mut app, bud_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Morph {
+            type_name: "twin_bloom".into(),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert_eq!(utils::count_of_type(app.world_mut(), "twin_bloom"), 1);
+
+    // The bloom lists power first: each takes over its own field's reach and
+    // grows on — power 2 + 1 = 3, creep 3 + 1 = 4.
+    let states = &app
+        .world()
+        .get::<FieldSourcesComponent>(bud)
+        .expect("a source carries its state")
+        .0;
+    assert_eq!(states[0].last_emitted, Emitted::Reach(3));
+    assert_eq!(states[1].last_emitted, Emitted::Reach(4));
 }
 
 #[test]
@@ -298,7 +1280,7 @@ fn field_on_any_terrain_crosses_every_terrain() {
         registry.register(
             building("lamp", 1, 8).with_field_sources([FieldSourceDef::new(
                 beam,
-                3,
+                Area::Around(Quantity::from(3)),
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Nothing,
@@ -1723,7 +2705,7 @@ fn ground_cast_covers_cells_that_then_decay_unsustained() {
 
 #[test]
 fn field_cast_around_caster_covers_from_its_whole_footprint() {
-    // The pit covers (10..12, 10..12). Its ooze of radius 1 reaches out from
+    // The pit covers (10..12, 10..12). Its ooze, around 1 cell, reaches out from
     // that footprint, 1 past each edge: x 12 + 1 = 13 takes creep, 14 does
     // not, and 10 − 1 = 9 takes it, 8 does not.
     let mut app = field_app();
@@ -1791,7 +2773,7 @@ fn wide_caster_seeds_cell_anchored_on_it() {
 #[test]
 fn cast_cover_lies_only_on_terrain_field_names() {
     // A column of water at x 12. Creep, land only, spewed at the water cell
-    // (12, 8) with radius 1: the walk starts there, but the water itself
+    // (12, 8) around 1 cell: the walk starts there, but the water itself
     // takes none; the land beside it, (11, 8) and (13, 8), takes it.
     let mut app = field_app();
     let Fields { creep, .. } = fields(&app);
@@ -1990,6 +2972,16 @@ struct Fields {
     power: FieldId,
 }
 
+/// What the first field source of `entity` put on the grid at the last
+/// recompute.
+fn emitted(app: &App, entity: Entity) -> Emitted {
+    app.world()
+        .get::<FieldSourcesComponent>(entity)
+        .expect("a source carries its state")
+        .0[0]
+        .last_emitted
+}
+
 /// The fixture's field handles, read back from the registry.
 fn fields(app: &App) -> Fields {
     let registry = app.world().resource::<ContentRegistry>();
@@ -2057,6 +3049,18 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 Detection::Blind,
             ),
         );
+        // Moss lies where it grew until something clears it.
+        let moss = registry.register_field(
+            "moss",
+            FieldDef::new(
+                Terrains::Only(utils::LAND.into()),
+                utils::GROUND.into(),
+                FieldDecay::Never,
+                None,
+                None,
+                Detection::Blind,
+            ),
+        );
         // A lantern lights its patch for its lighter's side.
         let lantern = registry.register_field(
             "lantern",
@@ -2087,10 +3091,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             building("hive", 2, 4).with_field_sources([FieldSourceDef::new(
                 creep,
-                4,
+                Area::Around(Quantity::from(4)),
                 FieldGrowth::Gradual {
                     cycle: 2,
-                    initial_radius: 1,
+                    starts_at: Area::Around(Quantity::from(1)),
                 },
                 Emission::Nothing,
                 Emission::Full,
@@ -2099,15 +3103,334 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             building("nest", 1, 6).with_field_sources([FieldSourceDef::new(
                 creep,
-                3,
+                Area::Around(Quantity::from(3)),
                 FieldGrowth::Gradual {
                     cycle: 1,
-                    initial_radius: 1,
+                    starts_at: Area::Around(Quantity::from(1)),
                 },
-                Emission::Held(1),
+                Emission::Held(Area::Around(Quantity::from(1))),
                 Emission::Full,
             )]),
         );
+        // Sources whose areas read stats: a signal whose power reach a buff
+        // lengthens, a mound whose creep a buff shrinks, and a glowpost that
+        // holds a patch as wide as its glow while disabled.
+        let signal_reach = registry.register_entity_stat("signal_reach", FixedU64::ZERO);
+        let mound_spread = registry.register_entity_stat("mound_spread", FixedU64::ZERO);
+        let glow = registry.register_entity_stat("glow", FixedU64::ZERO);
+        registry.register(
+            building("signal", 1, 2)
+                .with_stat(signal_reach, FixedU64::from_num(2))
+                .with_field_sources([FieldSourceDef::new(
+                    power,
+                    Area::Around(Quantity::Stat(signal_reach)),
+                    FieldGrowth::Instant,
+                    Emission::Nothing,
+                    Emission::Full,
+                )]),
+        );
+        registry.register(
+            building("mound", 1, 2)
+                .with_stat(mound_spread, FixedU64::from_num(3))
+                .with_field_sources([FieldSourceDef::new(
+                    creep,
+                    Area::Around(Quantity::Stat(mound_spread)),
+                    FieldGrowth::Gradual {
+                        cycle: 1,
+                        starts_at: Area::Inside,
+                    },
+                    Emission::Nothing,
+                    Emission::Full,
+                )]),
+        );
+        registry.register(
+            building("glowpost", 1, 2)
+                .with_stat(glow, FixedU64::from_num(2))
+                .with_field_sources([FieldSourceDef::new(
+                    power,
+                    Area::Around(Quantity::from(4)),
+                    FieldGrowth::Instant,
+                    Emission::Nothing,
+                    Emission::Held(Area::Around(Quantity::Stat(glow))),
+                )]),
+        );
+        let flat = |stat, magnitude, lasting| EntityBuffDef {
+            effects: vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
+                modifier(stat, ModifierOp::FlatAdd, magnitude),
+            ]))],
+            lasting,
+            stack_rule: StackRule::Ignore,
+            interrupted_by: Vec::new(),
+        };
+        registry.register_entity_buff("stronger_signal", flat(signal_reach, "2", Lasting::Forever));
+        registry.register_entity_buff("sunken_mound", flat(mound_spread, "-2", Lasting::Forever));
+        registry.register_entity_buff("brighter_glow", flat(glow, "1", Lasting::Forever));
+        registry.register_entity_buff("blinding_glow", flat(glow, "3", Lasting::Forever));
+        registry.register_player_buff(
+            "deep_mounds",
+            PlayerBuffDef {
+                player_modifiers: Vec::new(),
+                entity_modifiers: vec![EntityModifiers::Stats(vec![modifier(
+                    mound_spread,
+                    ModifierOp::FlatAdd,
+                    "2",
+                )])],
+                duration: None,
+                stack_rule: StackRule::Ignore,
+            },
+        );
+        registry.register_player_buff(
+            "deeper_mounds",
+            PlayerBuffDef {
+                player_modifiers: Vec::new(),
+                entity_modifiers: vec![EntityModifiers::Stats(vec![modifier(
+                    mound_spread,
+                    ModifierOp::FlatAdd,
+                    "2",
+                )])],
+                duration: None,
+                stack_rule: StackRule::StackToCap(2),
+            },
+        );
+        registry.register_entity_buff("dipped_mound", flat(mound_spread, "-2", Lasting::For(1)));
+        registry.register_entity_buff(
+            "briefly_sunken_mound",
+            flat(mound_spread, "-2", Lasting::For(6)),
+        );
+        // Sources of three cells that hold up nothing while disabled: a
+        // warren of creep growing a cell a tick, which recedes ring by ring; a
+        // seedling of power growing a cell a tick, and a brazier of power lit
+        // whole, both going at once.
+        let dark = |field, growth| {
+            FieldSourceDef::new(
+                field,
+                Area::Around(Quantity::from(3)),
+                growth,
+                Emission::Nothing,
+                Emission::Nothing,
+            )
+        };
+        let gradual = FieldGrowth::Gradual {
+            cycle: 1,
+            starts_at: Area::Inside,
+        };
+        registry.register(building("warren", 1, 2).with_field_sources([dark(creep, gradual)]));
+        registry.register(building("seedling", 1, 2).with_field_sources([dark(power, gradual)]));
+        registry.register(
+            building("brazier", 1, 2).with_field_sources([dark(power, FieldGrowth::Instant)]),
+        );
+        // Sources growing a cell a tick from inside. A bud of creep changes
+        // into a wider bloom; a twin bud projecting creep then power changes
+        // into a twin bloom listing power then creep.
+        let growing = |field, cells: u32| {
+            FieldSourceDef::new(
+                field,
+                Area::Around(Quantity::from(cells)),
+                FieldGrowth::Gradual {
+                    cycle: 1,
+                    starts_at: Area::Inside,
+                },
+                Emission::Nothing,
+                Emission::Full,
+            )
+        };
+        registry.register(
+            building("bud", 1, 2)
+                .with_field_sources([growing(creep, 3)])
+                .with_morphs([MorphTransition::new(
+                    "bloom",
+                    MorphCourse::direct(MorphInterrupted::Reverts),
+                    Quantity::from(1),
+                    MorphPlacement::Revalidate,
+                    MorphCancel::Forfeit,
+                    MorphReason::Change,
+                    Vec::new(),
+                    Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                )]),
+        );
+        registry.register(building("bloom", 1, 2).with_field_sources([growing(creep, 6)]));
+        registry.register(
+            building("twin_bud", 1, 2)
+                .with_field_sources([growing(creep, 3), growing(power, 2)])
+                .with_morphs([MorphTransition::new(
+                    "twin_bloom",
+                    MorphCourse::direct(MorphInterrupted::Reverts),
+                    Quantity::from(1),
+                    MorphPlacement::Revalidate,
+                    MorphCancel::Forfeit,
+                    MorphReason::Change,
+                    Vec::new(),
+                    Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                )]),
+        );
+        registry.register(
+            building("twin_bloom", 1, 2).with_field_sources([growing(power, 5), growing(creep, 5)]),
+        );
+        // A mound of creep that shows a one-cell patch while it rises and
+        // starts three cells out once it stands.
+        registry.register(building("nesting_mound", 1, 4).with_field_sources([
+            FieldSourceDef::new(
+                creep,
+                Area::Around(Quantity::from(4)),
+                FieldGrowth::Gradual {
+                    cycle: 1,
+                    starts_at: Area::Around(Quantity::from(3)),
+                },
+                Emission::Held(Area::Around(Quantity::from(1))),
+                Emission::Nothing,
+            ),
+        ]));
+        // A cinder of creep growing a cell a tick from inside, that holds a
+        // patch two cells out while disabled.
+        registry.register(
+            building("cinder", 1, 2).with_field_sources([FieldSourceDef::new(
+                creep,
+                Area::Around(Quantity::from(4)),
+                FieldGrowth::Gradual {
+                    cycle: 1,
+                    starts_at: Area::Inside,
+                },
+                Emission::Nothing,
+                Emission::Held(Area::Around(Quantity::from(2))),
+            )]),
+        );
+        // A smolder of creep growing a cell every three ticks from inside,
+        // holding a patch two cells out while disabled; a glimmer of creep
+        // growing a cell a tick from inside, holding a patch two cells out
+        // while it rises; and a vast warren whose creep reaches as far as an
+        // area can say, holding up nothing while disabled.
+        registry.register(
+            building("smolder", 1, 2).with_field_sources([FieldSourceDef::new(
+                creep,
+                Area::Around(Quantity::from(4)),
+                FieldGrowth::Gradual {
+                    cycle: 3,
+                    starts_at: Area::Inside,
+                },
+                Emission::Nothing,
+                Emission::Held(Area::Around(Quantity::from(2))),
+            )]),
+        );
+        registry.register(
+            building("glimmer", 1, 4).with_field_sources([FieldSourceDef::new(
+                creep,
+                Area::Around(Quantity::from(4)),
+                FieldGrowth::Gradual {
+                    cycle: 1,
+                    starts_at: Area::Inside,
+                },
+                Emission::Held(Area::Around(Quantity::from(2))),
+                Emission::Nothing,
+            )]),
+        );
+        registry.register(
+            building("vast_warren", 1, 2).with_field_sources([FieldSourceDef::new(
+                creep,
+                Area::Around(Quantity::from(u32::MAX)),
+                FieldGrowth::Instant,
+                Emission::Nothing,
+                Emission::Nothing,
+            )]),
+        );
+        // A moss bed growing a cell a tick from inside up to three, holding
+        // up nothing while disabled.
+        registry.register(
+            building("moss_bed", 1, 2).with_field_sources([FieldSourceDef::new(
+                moss,
+                Area::Around(Quantity::from(3)),
+                FieldGrowth::Gradual {
+                    cycle: 1,
+                    starts_at: Area::Inside,
+                },
+                Emission::Nothing,
+                Emission::Nothing,
+            )]),
+        );
+        // A mound of creep growing a cell a tick from inside up to four,
+        // holding two rings while it rises and nothing while disabled, on
+        // moss that never recedes.
+        registry.register(building("dormant_mound", 1, 4).with_field_sources([
+            FieldSourceDef::new(
+                moss,
+                Area::Around(Quantity::from(4)),
+                FieldGrowth::Gradual {
+                    cycle: 1,
+                    starts_at: Area::Inside,
+                },
+                Emission::Held(Area::Around(Quantity::from(2))),
+                Emission::Nothing,
+            ),
+        ]));
+        // A sprout of creep three cells out from the start, growing a cell
+        // every four ticks, that changes into a 3×3 thicket growing on to six.
+        let slow_creep = |cells: u32, start: u32| {
+            FieldSourceDef::new(
+                creep,
+                Area::Around(Quantity::from(cells)),
+                FieldGrowth::Gradual {
+                    cycle: 4,
+                    starts_at: Area::Around(Quantity::from(start)),
+                },
+                Emission::Nothing,
+                Emission::Full,
+            )
+        };
+        registry.register(
+            building("sprout", 1, 2)
+                .with_field_sources([slow_creep(3, 3)])
+                .with_morphs([MorphTransition::new(
+                    "thicket",
+                    MorphCourse::direct(MorphInterrupted::Reverts),
+                    Quantity::from(1),
+                    MorphPlacement::Revalidate,
+                    MorphCancel::Forfeit,
+                    MorphReason::Change,
+                    Vec::new(),
+                    Vec::new(),
+                    [(PoolId::HEALTH, PoolCarry::Shift(PoolShift::Share))],
+                )]),
+        );
+        registry.register(building("thicket", 3, 2).with_field_sources([slow_creep(6, 0)]));
+        // An instant mound of creep whose area reads its mound spread.
+        registry.register(
+            building("instant_mound", 1, 2)
+                .with_stat(mound_spread, FixedU64::from_num(3))
+                .with_field_sources([FieldSourceDef::new(
+                    creep,
+                    Area::Around(Quantity::Stat(mound_spread)),
+                    FieldGrowth::Instant,
+                    Emission::Nothing,
+                    Emission::Full,
+                )]),
+        );
+        // A crawler walking with creep two cells out, grown from the start.
+        registry.register(
+            utils::walker("crawler", utils::GROUND_DOMAIN).with_field_sources([
+                FieldSourceDef::new(
+                    creep,
+                    Area::Around(Quantity::from(2)),
+                    FieldGrowth::Gradual {
+                        cycle: 6,
+                        starts_at: Area::Around(Quantity::from(2)),
+                    },
+                    Emission::Nothing,
+                    Emission::Full,
+                ),
+            ]),
+        );
+        // A sprawl whose creep reaches as far as an area can say.
+        registry.register(
+            building("sprawl", 1, 2).with_field_sources([FieldSourceDef::new(
+                creep,
+                Area::Around(Quantity::from(u32::MAX)),
+                FieldGrowth::Instant,
+                Emission::Nothing,
+                Emission::Full,
+            )]),
+        );
+
         // Creep readers: a spore that needs creep under its whole footprint, a
         // spire that needs it under a 2×2 one, a bunker that refuses it.
         // The spore may also grow into a tower through a pupa: a form change
@@ -2129,7 +3452,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                             RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                         )]),
                     ),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Refundable,
                     MorphReason::Change,
@@ -2163,7 +3486,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                             )]),
                         ),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Forfeit,
                         MorphReason::Change,
@@ -2184,7 +3507,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                                 RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                             )]),
                         ),
-                        Quantity::Constant(10),
+                        Quantity::from(10),
                         MorphPlacement::Reserve,
                         MorphCancel::Forfeit,
                         MorphReason::Change,
@@ -2319,7 +3642,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                             RevertCarry::Carry(PoolCarry::Shift(PoolShift::Share)),
                         )]),
                     ),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Reserve,
                     MorphCancel::Forfeit,
                     MorphReason::Change,
@@ -2378,7 +3701,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(building("lander", 1, 2).with_morphs([MorphTransition::new(
             "bunker",
             MorphCourse::direct(MorphInterrupted::Reverts),
-            Quantity::Constant(1),
+            Quantity::from(1),
             MorphPlacement::Revalidate,
             MorphCancel::Forfeit,
             MorphReason::Change,
@@ -2483,7 +3806,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             building("pylon", 1, 8).with_field_sources([FieldSourceDef::new(
                 power,
-                3,
+                Area::Around(Quantity::from(3)),
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Nothing,
@@ -2492,7 +3815,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(building("lantern_post", 1, 8).with_field_sources([
             FieldSourceDef::new(
                 lantern,
-                2,
+                Area::Around(Quantity::from(2)),
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Nothing,
@@ -2501,7 +3824,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             building("flare_post", 1, 8).with_field_sources([FieldSourceDef::new(
                 flare,
-                2,
+                Area::Around(Quantity::from(2)),
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Nothing,
@@ -2511,7 +3834,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             building("relay", 1, 8)
                 .with_field_sources([FieldSourceDef::new(
                     power,
-                    3,
+                    Area::Around(Quantity::from(3)),
                     FieldGrowth::Instant,
                     Emission::Nothing,
                     Emission::Nothing,
@@ -2529,10 +3852,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             building("lantern", 1, 8)
                 .with_field_sources([FieldSourceDef::new(
                     power,
-                    3,
+                    Area::Around(Quantity::from(3)),
                     FieldGrowth::Instant,
                     Emission::Nothing,
-                    Emission::Held(1),
+                    Emission::Held(Area::Around(Quantity::from(1))),
                 )])
                 .with_field_effects([FieldEffect::new(
                     creep,
@@ -2547,7 +3870,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             building("beacon", 1, 8)
                 .with_field_sources([FieldSourceDef::new(
                     creep,
-                    3,
+                    Area::Around(Quantity::from(3)),
                     FieldGrowth::Instant,
                     Emission::Nothing,
                     Emission::Full,
@@ -2632,7 +3955,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_morphs([MorphTransition::new(
                     "warpgate",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(10),
+                    Quantity::from(10),
                     MorphPlacement::Revalidate,
                     MorphCancel::Forfeit,
                     MorphReason::Change,
@@ -2798,7 +4121,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                             reach: Reach::Wherever,
                         },
                         field: creep,
-                        radius: Quantity::Constant(1),
+                        area: Area::Around(Quantity::from(1)),
                         action: FieldAction::Cover,
                     },
                 },
@@ -2817,7 +4140,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                             reach: Reach::Wherever,
                         },
                         field: creep,
-                        radius: Quantity::Constant(2),
+                        area: Area::Around(Quantity::from(2)),
                         action: FieldAction::Clear,
                     },
                 },
@@ -2836,10 +4159,10 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     casting: Casting::Instant,
                     effect: EntityCastEffect::Field {
                         at: Spot::Ground {
-                            reach: Reach::Within(Quantity::Constant(0)),
+                            reach: Reach::Within(Area::Around(Quantity::from(0))),
                         },
                         field: creep,
-                        radius: Quantity::Constant(0),
+                        area: Area::Around(Quantity::from(0)),
                         action: FieldAction::Cover,
                     },
                 },
@@ -2868,7 +4191,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     effect: EntityCastEffect::Field {
                         at: Spot::Caster,
                         field: creep,
-                        radius: Quantity::Constant(1),
+                        area: Area::Around(Quantity::from(1)),
                         action: FieldAction::Cover,
                     },
                 },

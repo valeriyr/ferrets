@@ -11,6 +11,7 @@ use ferrets_script::{content, engine::lua::LuaEngine};
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{
+        field_source::FieldReach,
         location::LocationComponent,
         rise::{RiseAttendance, RiseOrigin},
     },
@@ -25,11 +26,11 @@ use ferrets_simulation::{
         player_slot::PlayerSlot, player_type::PlayerType,
     },
     simulation_id::SimulationId,
-    spawn::{self, Arrival, At, FieldReach},
+    spawn::{self, Arrival, At},
 };
 
 /// Creates an entity of `type_name` anchored at `anchor` for `owner`, its
-/// field sources at their initial reach, announcing nothing.
+/// field sources at their growth start, announcing nothing.
 pub fn create_entity(
     world: &mut World,
     type_name: &str,

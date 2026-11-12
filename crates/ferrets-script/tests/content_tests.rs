@@ -8,6 +8,7 @@ mod utils;
 use ferrets_content::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
+    area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
     brood::{BroodlingDef, Lingering, OrphanFate},
     build::BuilderAttendance,
@@ -1341,7 +1342,7 @@ fn heal_on_fallen_errors() {
 
 #[test]
 fn watch_at_fallen_errors() {
-    let error = skill_error(r#"{ watch = { at = "fallen", radius = 6, duration = 40 } }"#);
+    let error = skill_error(r#"{ watch = { at = "fallen", area = 6, duration = 40 } }"#);
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("spot must be 'caster', 'ground', 'own', 'allied', 'enemy', or 'anyone', found 'fallen'")),
         "unexpected error: {error:?}"
@@ -1361,7 +1362,7 @@ fn caster_aim_with_range_errors() {
 #[test]
 fn ground_aim_with_filter_errors() {
     let error = skill_error(
-        r#"{ watch = { at = { kind = "ground", only = { tags = { "hall" } } }, radius = 6, duration = 40 } }"#,
+        r#"{ watch = { at = { kind = "ground", only = { tags = { "hall" } } }, area = 6, duration = 40 } }"#,
     );
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("a ground aim takes no filter")),
@@ -1516,7 +1517,8 @@ fn parses_projectile_and_splash() {
                 projectile = "shell",
                 splash = {
                     shape = "circular",
-                    bands = { {1, "0.5"}, {2, "0.25"} },
+                    core = { area = 1, fraction = "0.5" },
+                    rings = { { width = 1, fraction = "0.25" } },
                     layers = GROUND,
                     friendly_fire = true,
                 },
@@ -1539,10 +1541,11 @@ fn parses_projectile_and_splash() {
                 Delivery::Projectile(registry.projectile("shell").expect("shell is registered")),
                 Some(SplashDef::new(
                     SplashShape::Circular,
-                    vec![
-                        (1, FixedU64::from_str("0.5").unwrap()),
-                        (2, FixedU64::from_str("0.25").unwrap()),
-                    ],
+                    (
+                        Area::Around(Quantity::from(1)),
+                        FixedU64::from_str("0.5").unwrap(),
+                    ),
+                    vec![(Quantity::from(1), FixedU64::from_str("0.25").unwrap())],
                     utils::GROUND,
                     true,
                 )),
@@ -1565,19 +1568,23 @@ fn splash_rejects_missing_fields() {
     for (missing, block) in [
         (
             "shape",
-            r#"splash = { bands = { {1, "0.5"} }, layers = GROUND, friendly_fire = false },"#,
+            r#"splash = { core = { area = 1, fraction = "0.5" }, rings = {}, layers = GROUND, friendly_fire = false },"#,
         ),
         (
-            "bands",
-            r#"splash = { shape = "circular", layers = GROUND, friendly_fire = false },"#,
+            "core",
+            r#"splash = { shape = "circular", rings = {}, layers = GROUND, friendly_fire = false },"#,
+        ),
+        (
+            "rings",
+            r#"splash = { shape = "circular", core = { area = 1, fraction = "0.5" }, layers = GROUND, friendly_fire = false },"#,
         ),
         (
             "layers",
-            r#"splash = { shape = "circular", bands = { {1, "0.5"} }, friendly_fire = false },"#,
+            r#"splash = { shape = "circular", core = { area = 1, fraction = "0.5" }, rings = {}, friendly_fire = false },"#,
         ),
         (
             "friendly_fire",
-            r#"splash = { shape = "circular", bands = { {1, "0.5"} }, layers = GROUND },"#,
+            r#"splash = { shape = "circular", core = { area = 1, fraction = "0.5" }, rings = {}, layers = GROUND },"#,
         ),
     ] {
         let Err(error) = content::load(&engine(), &attacker_with(block)) else {
@@ -2995,7 +3002,7 @@ fn docks_and_annex_read_their_terms() {
 }
 
 #[test]
-fn watch_effect_reads_its_radius_and_duration() {
+fn watch_effect_reads_its_area_and_duration() {
     let source = r#"
         local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
@@ -3004,7 +3011,7 @@ fn watch_effect_reads_its_radius_and_duration() {
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
-            effect = { watch = { at = "ground", radius = 6, duration = 40 } },
+            effect = { watch = { at = "ground", area = 6, duration = 40 } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -3021,8 +3028,8 @@ fn watch_effect_reads_its_radius_and_duration() {
             at: Spot::Ground {
                 reach: Reach::Wherever,
             },
-            radius: Quantity::Constant(6),
-            duration: Quantity::Constant(40),
+            area: Area::Around(Quantity::from(6)),
+            duration: Quantity::from(40),
             detection: Detection::Blind,
         }
     );
@@ -3088,8 +3095,8 @@ fn skill_reads_time_it_is_worked_over() {
     assert_eq!(
         casting("raise_dead"),
         Casting::Delayed {
-            point: Quantity::Constant(30),
-            period: Quantity::Constant(45),
+            point: Quantity::from(30),
+            period: Quantity::from(45),
             pays: PaymentPoint::AtLanding,
         }
     );
@@ -3256,10 +3263,13 @@ fn skill_reads_reach_it_is_cast_from() {
         Reach::Wherever,
         "a skill that names no range is cast where the caster stands"
     );
-    assert_eq!(reach("raise_dead"), Reach::Within(Quantity::Constant(6)));
+    assert_eq!(
+        reach("raise_dead"),
+        Reach::Within(Area::Around(Quantity::from(6)))
+    );
     assert_eq!(
         reach("far_sight"),
-        Reach::Within(Quantity::Stat(raise_range))
+        Reach::Within(Area::Around(Quantity::Stat(raise_range)))
     );
 }
 
@@ -3319,7 +3329,7 @@ fn summon_effect_reads_its_type_and_count() {
                 reach: Reach::Wherever,
             },
             entity_type: skeleton,
-            count: Quantity::Constant(2),
+            count: Quantity::from(2),
             placement: SummonPlacement::Nearby,
             landing: Landing::Anywhere,
             within: Vec::new(),
@@ -3663,12 +3673,12 @@ fn skill_numbers_read_stats() {
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
-            effect = { watch = { at = "ground", radius = { stat = "scan_radius" }, duration = { stat = "scan_time" } } },
+            effect = { watch = { at = "ground", area = { stat = "scan_radius" }, duration = { stat = "scan_time" } } },
         })
         define_skill("spew", {
             cooldown = 10,
             caster = "entity",
-            effect = { field = { at = "caster", field = "creep", radius = { stat = "scan_radius" }, action = "cover" } },
+            effect = { field = { at = "caster", field = "creep", area = { stat = "scan_radius" }, action = "cover" } },
         })
         define_skill("raise_host", {
             cooldown = 10,
@@ -3681,7 +3691,7 @@ fn skill_numbers_read_stats() {
             effect = { relocate = {
                 journey = { from_aim = {
                     party = { around = {
-                        at = "ground", radius = 2, side = "own", kinds = "any",
+                        at = "ground", area = 2, side = "own", kinds = "any",
                         sight = "blind", count = { at_most = { stat = "host_size" } }, shortfall = "leave",
                     } },
                     to = "caster",
@@ -3692,17 +3702,17 @@ fn skill_numbers_read_stats() {
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
     let stat = |name: &str| Quantity::Stat(registry.entity_stat(name).expect("defined"));
-    let EntityCastEffect::Watch {
-        radius, duration, ..
-    } = entity_effect(&registry, "scan")
-    else {
+    let EntityCastEffect::Watch { area, duration, .. } = entity_effect(&registry, "scan") else {
         panic!("scan watches");
     };
-    assert_eq!((radius, duration), (stat("scan_radius"), stat("scan_time")));
-    let EntityCastEffect::Field { radius, .. } = entity_effect(&registry, "spew") else {
+    assert_eq!(
+        (area, duration),
+        (Area::Around(stat("scan_radius")), stat("scan_time"))
+    );
+    let EntityCastEffect::Field { area, .. } = entity_effect(&registry, "spew") else {
         panic!("spew acts on a field");
     };
-    assert_eq!(radius, stat("scan_radius"));
+    assert_eq!(area, Area::Around(stat("scan_radius")));
     let EntityCastEffect::Summon { count, .. } = entity_effect(&registry, "raise_host") else {
         panic!("raise_host summons");
     };
@@ -4444,12 +4454,12 @@ fn parses_fields_sources_placement_and_effects() {
         registry.entity("hive").unwrap().field_sources,
         vec![FieldSourceDef::new(
             creep,
-            10,
+            Area::Around(Quantity::from(10)),
             FieldGrowth::Gradual {
                 cycle: 9,
-                initial_radius: 1,
+                starts_at: Area::Around(Quantity::from(1)),
             },
-            Emission::Held(1),
+            Emission::Held(Area::Around(Quantity::from(1))),
             Emission::Full
         )]
     );
@@ -4458,7 +4468,7 @@ fn parses_fields_sources_placement_and_effects() {
         pylon.field_sources,
         vec![FieldSourceDef::new(
             power,
-            6,
+            Area::Around(Quantity::from(6)),
             FieldGrowth::Instant,
             Emission::Nothing,
             Emission::Nothing
@@ -4468,7 +4478,7 @@ fn parses_fields_sources_placement_and_effects() {
         pylon.on_stand,
         vec![StandingAct::Field {
             field: creep,
-            radius: 6,
+            area: Area::Around(Quantity::from(6)),
             action: FieldAction::Clear,
         }]
     );
@@ -4525,7 +4535,7 @@ fn parses_fields_sources_placement_and_effects() {
                         reach: Reach::Wherever,
                     },
                     field: creep,
-                    radius: Quantity::Constant(1),
+                    area: Area::Around(Quantity::from(1)),
                     action: FieldAction::Cover,
                 },
             },
@@ -4542,7 +4552,7 @@ fn unknown_field_name_errors() {
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("hive", {
             location = { domain = "ground", size = 1, solidity = "solid" },
-            field_sources = { { field = "creep", radius = 3, growth = "instant", while_rising = "nothing", while_disabled = "full" } },
+            field_sources = { { field = "creep", area = 3, growth = "instant", while_rising = "nothing", while_disabled = "full" } },
         })
     "#;
     let error = content::load(&engine(), source)
@@ -4749,7 +4759,7 @@ fn breeder_and_broodling_round_trip() {
 
     let pen = registry.entity("pen").expect("pen is registered");
     let brood = pen.breeder.as_ref().expect("the pen breeds");
-    assert_eq!(brood.period(), Quantity::Constant(30));
+    assert_eq!(brood.period(), Quantity::from(30));
     assert_eq!(brood.initial(), 0);
     assert_eq!(brood.orphans(), OrphanFate::Perish);
     let piglet = registry.entity("piglet").expect("piglet is registered");
@@ -5539,6 +5549,108 @@ fn unknown_field_terrains_keyword_errors() {
 }
 
 #[test]
+fn area_reads_inside_decimal_string_and_stat() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = "never" })
+        define_entity_stat("spread", 1)
+        define_entity("tumor", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            stats = { spread = 4 },
+            field_sources = {
+                { field = "creep", area = { stat = "spread" }, growth = { cycle = 2, starts_at = "inside" },
+                  while_rising = "nothing", while_disabled = { held = "1.5" } },
+            },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let creep = registry.field("creep").expect("creep defined");
+    let spread = registry.entity_stat("spread").expect("spread defined");
+
+    assert_eq!(
+        registry.entity("tumor").unwrap().field_sources,
+        vec![FieldSourceDef::new(
+            creep,
+            Area::Around(Quantity::Stat(spread)),
+            FieldGrowth::Gradual {
+                cycle: 2,
+                starts_at: Area::Inside,
+            },
+            Emission::Nothing,
+            Emission::Held(Area::Around(Quantity::Constant(utils::fixed("1.5")))),
+        )]
+    );
+}
+
+#[test]
+fn area_of_wrong_shape_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("power", { terrains = LAND, spreads_on = GROUND, decay = "instant" })
+        define_entity("pylon", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            field_sources = {
+                { field = "power", area = "far", growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            },
+        })
+    "#;
+    let error = content::load(&engine(), source).err().expect("bad area");
+    assert!(
+        matches!(&error, ScriptError::ContentError(m) if m.contains("field source area must be 'inside', a cell count, a decimal string, or a { stat = ... } table, found 'far'")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn splash_reads_inside_core_and_rings_by_any_width() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        local LAND = define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_entity_stat("blast", 1)
+        define_entity("mortar", {
+            location = { domain = "ground", size = 1, solidity = "solid" },
+            stats = { damage = 12, attack_range = 6, attack_period = 10, damage_point = 4, blast = 2 },
+            attack = { targets = GROUND, splash = {
+                shape = "circular",
+                core = { area = "inside", fraction = "1.0" },
+                rings = {
+                    { width = 0, fraction = "0.5" },
+                    { width = "1.5", fraction = "0.25" },
+                    { width = { stat = "blast" }, fraction = "0.1" },
+                },
+                layers = GROUND,
+                friendly_fire = true,
+            } },
+        })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let blast = registry.entity_stat("blast").expect("blast defined");
+    let splash = registry
+        .entity("mortar")
+        .and_then(|mortar| mortar.attack.as_ref())
+        .and_then(|attack| attack.weapon().splash())
+        .expect("the mortar splashes");
+
+    assert_eq!(splash.core(), (Area::Inside, FixedU64::ONE));
+    assert_eq!(
+        splash.rings().collect::<Vec<_>>(),
+        vec![
+            (Quantity::from(0), utils::fixed("0.5")),
+            (
+                Quantity::Constant(utils::fixed("1.5")),
+                utils::fixed("0.25")
+            ),
+            (Quantity::Stat(blast), utils::fixed("0.1")),
+        ]
+    );
+}
+
+#[test]
 fn unknown_while_disabled_errors() {
     let source = r#"
         local GROUND = define_layer("ground", { level = 1 })
@@ -5548,7 +5660,7 @@ fn unknown_while_disabled_errors() {
         define_entity("pylon", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             field_sources = {
-                { field = "power", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "dims" },
+                { field = "power", area = 6, growth = "instant", while_rising = "nothing", while_disabled = "dims" },
             },
         })
     "#;
@@ -5556,7 +5668,7 @@ fn unknown_while_disabled_errors() {
         .err()
         .expect("bad while_disabled");
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("while_disabled must be 'full', 'nothing', or a { held = cells } table, found 'dims'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("while_disabled must be 'full', 'nothing', or a { held = area } table, found 'dims'")),
         "{error:?}"
     );
 }
@@ -5793,7 +5905,7 @@ fn parses_field_detection_and_watch_detection() {
         define_skill("scan", {
             cooldown = 10,
             caster = "entity",
-            effect = { watch = { at = "ground", radius = 6, duration = 40, detection = AIR } },
+            effect = { watch = { at = "ground", area = 6, duration = 40, detection = AIR } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -5822,8 +5934,8 @@ fn parses_field_detection_and_watch_detection() {
             at: Spot::Ground {
                 reach: Reach::Wherever,
             },
-            radius: Quantity::Constant(6),
-            duration: Quantity::Constant(40),
+            area: Area::Around(Quantity::from(6)),
+            duration: Quantity::from(40),
             detection: Detection::Reveals(LayerMask::EMPTY | air),
         }
     );
@@ -5868,7 +5980,7 @@ fn relocate_effect_reads_journey_and_landing() {
             journey: Box::new(Journey::FromCaster {
                 party: CasterParty::Caster,
                 to: FromCasterTo::Aim(Away::Ground {
-                    reach: Reach::Within(Quantity::Constant(8)),
+                    reach: Reach::Within(Area::Around(Quantity::from(8))),
                 }),
             }),
             landing: Landing::Sighted,
@@ -5898,7 +6010,7 @@ fn relocate_effect_reads_journey_and_landing() {
                     side: Affiliation::Own,
                     kinds: Kinds::Any,
                 },
-                reach: Reach::Within(Quantity::Constant(10)),
+                reach: Reach::Within(Area::Around(Quantity::from(10))),
             }),
             landing: Landing::Anywhere,
         }
@@ -5906,7 +6018,7 @@ fn relocate_effect_reads_journey_and_landing() {
 }
 
 #[test]
-fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
+fn relocate_gathering_reads_area_filter_sight_count_and_shortfall() {
     let source = r#"
         local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
@@ -5921,7 +6033,7 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
             effect = { relocate = {
                 journey = { from_caster = {
                     party = { caster_and_around = {
-                        radius = 4, side = "own", kinds = { tags = { "undead" } },
+                        area = 4, side = "own", kinds = { tags = { "undead" } },
                         sight = "blind", count = { at_most = 24 }, shortfall = "refuse",
                     } },
                     to = { aim = { kind = "own", only = { types = { "crypt" } } } },
@@ -5935,7 +6047,7 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
             effect = { relocate = {
                 journey = { from_caster = {
                     party = { around = {
-                        radius = 3, side = "enemy", kinds = "any", sight = "seen", count = { at_most = 2 }, shortfall = "leave",
+                        area = 3, side = "enemy", kinds = "any", sight = "seen", count = { at_most = 2 }, shortfall = "leave",
                     } },
                     to = { aim = "ground" },
                 } },
@@ -5948,7 +6060,7 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
             effect = { relocate = {
                 journey = { from_aim = {
                     party = { around = {
-                        at = "ground", radius = 2, side = "allied", kinds = "any", sight = "blind", count = "all", shortfall = "leave",
+                        at = "ground", area = 2, side = "allied", kinds = "any", sight = "blind", count = "all", shortfall = "leave",
                     } },
                     to = "caster",
                 } },
@@ -5962,11 +6074,11 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
         EntityCastEffect::Relocate {
             journey: Box::new(Journey::FromCaster {
                 party: CasterParty::CasterAndAround(Gathering {
-                    radius: Quantity::Constant(4),
+                    area: Area::Around(Quantity::from(4)),
                     side: Affiliation::Own,
                     kinds: Kinds::only([Kind::Tag("undead".to_string())]),
                     sight: GatherSight::Blind,
-                    count: Count::AtMost(Quantity::Constant(24)),
+                    count: Count::AtMost(Quantity::from(24)),
                     shortfall: Shortfall::Refuse,
                 }),
                 to: FromCasterTo::Aim(Away::Standing {
@@ -5985,11 +6097,11 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
         EntityCastEffect::Relocate {
             journey: Box::new(Journey::FromCaster {
                 party: CasterParty::Around(Gathering {
-                    radius: Quantity::Constant(3),
+                    area: Area::Around(Quantity::from(3)),
                     side: Affiliation::Enemy,
                     kinds: Kinds::Any,
                     sight: GatherSight::Seen,
-                    count: Count::AtMost(Quantity::Constant(2)),
+                    count: Count::AtMost(Quantity::from(2)),
                     shortfall: Shortfall::Leave,
                 }),
                 to: FromCasterTo::Aim(Away::Ground {
@@ -6008,7 +6120,7 @@ fn relocate_gathering_reads_radius_filter_sight_count_and_shortfall() {
                         reach: Reach::Wherever,
                     },
                     gathering: Gathering {
-                        radius: Quantity::Constant(2),
+                        area: Area::Around(Quantity::from(2)),
                         side: Affiliation::Allied,
                         kinds: Kinds::Any,
                         sight: GatherSight::Blind,
@@ -6032,7 +6144,7 @@ fn relocate_gathering_without_sight_errors() {
             effect = { relocate = {
                 journey = { from_caster = {
                     party = { around = {
-                        radius = 3, side = "enemy", kinds = "any", count = "all", shortfall = "leave",
+                        area = 3, side = "enemy", kinds = "any", count = "all", shortfall = "leave",
                     } },
                     to = { aim = "ground" },
                 } },
@@ -6055,7 +6167,7 @@ fn relocate_gathering_with_unknown_sight_errors() {
             effect = { relocate = {
                 journey = { from_caster = {
                     party = { around = {
-                        radius = 3, side = "enemy", kinds = "any", sight = "keen",
+                        area = 3, side = "enemy", kinds = "any", sight = "keen",
                         count = "all", shortfall = "leave",
                     } },
                     to = { aim = "ground" },
@@ -6158,7 +6270,7 @@ fn relocate_party_at_caster_of_unknown_word_errors() {
 #[test]
 fn relocate_party_at_aim_naming_target_and_around_errors() {
     let error = relocation_error(
-        r#"{ from_aim = { party = { target = "own", around = { at = "ground", radius = 2, side = "own", kinds = "any", sight = "blind", count = "all", shortfall = "leave" } }, to = "caster" } }"#,
+        r#"{ from_aim = { party = { target = "own", around = { at = "ground", area = 2, side = "own", kinds = "any", sight = "blind", count = "all", shortfall = "leave" } }, to = "caster" } }"#,
     );
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("a party at the aim table must have exactly one of 'target' or 'around'")),
@@ -6208,7 +6320,7 @@ fn relocate_swap_aimed_at_ground_errors() {
 #[test]
 fn relocate_count_of_unknown_shape_errors() {
     let error = relocation_error(
-        r#"{ from_aim = { party = { around = { at = "ground", radius = 2, side = "own", kinds = "any", sight = "blind", count = 3, shortfall = "leave" } }, to = "caster" } }"#,
+        r#"{ from_aim = { party = { around = { at = "ground", area = 2, side = "own", kinds = "any", sight = "blind", count = 3, shortfall = "leave" } }, to = "caster" } }"#,
     );
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("relocation count must be 'all' or an { at_most = n } table, found integer")),
@@ -6352,7 +6464,7 @@ const FIELDS: &str = r#"
         pools = { health = { maximum = 100 } },
         rise = { time = 20, pools = { health = "initial" } },
         field_sources = {
-            { field = "creep", radius = 10, growth = { cycle = 9, initial_radius = 1 }, while_rising = { held = 1 }, while_disabled = "full" },
+            { field = "creep", area = 10, growth = { cycle = 9, starts_at = 1 }, while_rising = { held = 1 }, while_disabled = "full" },
         },
     })
 
@@ -6360,10 +6472,10 @@ const FIELDS: &str = r#"
         location = { domain = "ground", size = 1, solidity = "solid" },
         pools = { health = { maximum = 100 } },
         field_sources = {
-            { field = "power", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "power", area = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
         on_stand = {
-            { field = { field = "creep", radius = 6, action = "clear" } },
+            { field = { field = "creep", area = 6, action = "clear" } },
         },
     })
 
@@ -6393,7 +6505,7 @@ const FIELDS: &str = r#"
     define_skill("spew", {
         caster = "entity",
         cooldown = 20,
-        effect = { field = { at = "ground", field = "creep", radius = 1, action = "cover" } },
+        effect = { field = { at = "ground", field = "creep", area = 1, action = "cover" } },
     })
 "#;
 
@@ -6481,7 +6593,7 @@ fn morph_transitions_round_trip() {
     assert_eq!(first.requires(), [Requirement::Tag("winged".to_string())]);
 
     assert_eq!(second.into_type(), "statue");
-    assert_eq!(second.time(), Quantity::Constant(40));
+    assert_eq!(second.time(), Quantity::from(40));
     assert_eq!(second.placement(), MorphPlacement::Reserve);
     assert_eq!(second.cancel(), MorphCancel::Refundable);
     assert_eq!(
@@ -6570,7 +6682,7 @@ fn morph_time_of_wrong_shape_errors() {
         panic!("must reject a morph time that is neither ticks nor a stat table");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("morph time must be a tick count or a { stat = ... } table, found 'fast'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("morph time must be a tick count, a decimal string, or a { stat = ... } table, found 'fast'")),
         "unexpected error: {error:?}"
     );
 }

@@ -4,12 +4,12 @@ use bevy::prelude::*;
 use ferrets_content::{pool::PoolInitial, pool_def::PoolId, registry::ContentRegistry};
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
-    components::resource::ResourceSourceComponent,
+    components::{field_source::FieldReach, resource::ResourceSourceComponent},
     fields::FieldGrid,
     map::Map,
     map_data::MapData,
     session::GameSession,
-    spawn::{self, At, FieldReach},
+    spawn::{self, At},
     visibility::VisibilityGrid,
     watches::Watches,
 };

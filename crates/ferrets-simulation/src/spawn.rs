@@ -45,7 +45,7 @@ use crate::{
         entity_info::EntityInfoComponent,
         entity_skills::SkillsComponent,
         entity_stats::StatsComponent,
-        field_source::FieldSourcesComponent,
+        field_source::{FieldReach, FieldSourcesComponent},
         gateway::GatewayComponent,
         hidden::{self, HiddenComponent, Inside},
         lifetime::LifetimeComponent,
@@ -72,6 +72,7 @@ use crate::{
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause},
+    field_cover,
     game_loop::{
         board, buffs,
         orders::{self, Refusal},
@@ -118,15 +119,6 @@ pub enum StandingActs {
     /// Acts already performed stay performed; only a form that had none and
     /// gains some has them ahead.
     Keep,
-}
-
-/// How far an entity's field sources reach the moment it enters the world.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldReach {
-    /// Each source starts at its declared initial reach and grows from there.
-    Initial,
-    /// Each source already spans its whole radius.
-    Full,
 }
 
 /// How an entity enters the world.
@@ -484,7 +476,7 @@ pub fn spawn_sandbox(
 /// ceiling says, and holds its cost from then on like any other entity.
 ///
 /// What stands up here is as new as anything trained, so its field sources
-/// start at their initial reach and grow from there.
+/// start at their growth start and grow from there.
 ///
 /// The deceased has already freed its footprint, so the search starts on the
 /// ground it was standing on and works outward — for remains, no further than
@@ -845,10 +837,12 @@ fn take_off_map(world: &mut World, entity: Entity, inside: Inside) {
 
 /// Marks an entity that holds no cells and no berth as hidden inside
 /// `inside`, taking its location into the marker; every shot following it
-/// loses it and lands where it went in. Panics for one that is already
-/// hidden: there is nothing to take.
+/// loses it and lands where it went in, and its field sources start over as
+/// a fresh arrival's. Panics for one that is already hidden: there is
+/// nothing to take.
 pub(crate) fn mark_hidden(world: &mut World, entity: Entity, inside: Inside) {
     let id = entity_def::simulation_id(world, entity);
+    start_field_sources_over(world, entity);
     let mut entity_mut = world.entity_mut(entity);
     let went_in = entity_mut
         .take::<LocationComponent>()
@@ -1042,10 +1036,10 @@ pub(crate) fn place_back_near(
     let beside = Beside::Container(holder);
     let rect = entity_def::beside_rect(world, entity, beside);
     let range = entity_def::effective_stat_u32(world, holder_entity, EntityStatId::UNLOAD_RANGE);
-    let start = world
-        .resource::<Map>()
+    let map = world.resource::<Map>();
+    let start = map
         .projection()
-        .nearest_in_range_of_rect(rect, range, point);
+        .nearest_in_range_of_rect(rect, range, point, map.size());
     let lander = Lander {
         def,
         owner: entity_def::owner(world, entity),
@@ -1354,51 +1348,31 @@ fn place_back_at(world: &mut World, entity: Entity, cell: CellPos, location_def:
 }
 
 /// Moves entities standing on the grid to stand anchored at their cells, all
-/// at once: every footprint is lifted before any is set down, so one may land
-/// on cells another held. Each keeps its facing, workers seated on one follow
-/// it onto its berths' new points, and each move is announced.
+/// at once, as a jump: every field source of a moved body, and of each worker
+/// seated on it, starts over where it lands. Set down as [`shove`] sets down.
 ///
 /// Panics for an entity that does not stand on the grid lined up on its cells,
 /// is dying, is still rising, was raised over a resource source or is changing
 /// form: the caller judged every move, and every cell free with the moved
 /// bodies lifted.
 pub fn relocate(world: &mut World, moves: &[(Entity, CellPos)]) {
-    let mut from = Vec::with_capacity(moves.len());
-    for &(entity, _) in moves {
-        assert!(
-            entity_def::relocatable(world, entity),
-            "only a finished body standing on the grid, over no resource source and not dying or changing form, is relocated"
-        );
-        assert!(
-            match world.resource::<Map>().movement_model() {
-                MovementModel::Cell => !movement_model::is_mid_crossing(world, entity),
-                MovementModel::Continuous => true,
-            },
-            "a relocated body stands lined up on its cells, settled off any crossing"
-        );
-        from.push(entity_def::position(world, entity));
-    }
-    for &(entity, _) in moves {
-        lift_footprint(world, entity);
-    }
-    for (&(entity, cell), from) in moves.iter().zip(from) {
-        let def = entity_def::of(world, entity);
-        let class = OccupancyClass::of(def);
-        let location_def = def
-            .location
-            .expect("only entities with LocationDef stand on the grid");
-        stand_at(world, entity, cell, &location_def, class);
-        fit_concealment(world, entity);
-        for worker in berths::reseat(world, entity) {
-            fit_concealment(world, worker);
+    for (entity, workers) in set_down(world, moves) {
+        start_field_sources_over(world, entity);
+        for worker in workers {
+            start_field_sources_over(world, worker);
         }
-        let announced = SimulationEvent::EntityRelocated {
-            entity: entity_def::simulation_id(world, entity),
-            from,
-            to: entity_def::position(world, entity),
-        };
-        world.resource_mut::<EventRecord>().emit(announced);
     }
+}
+
+/// Pushes entities standing on the grid aside to stand anchored at their
+/// cells, all at once: every footprint is lifted before any is set down, so
+/// one may land on cells another held. Each keeps its facing and its field
+/// sources, workers seated on one follow it onto its berths' new points, and
+/// each move is announced.
+///
+/// Panics as [`relocate`] does.
+pub fn shove(world: &mut World, moves: &[(Entity, CellPos)]) {
+    set_down(world, moves);
 }
 
 /// Fits `entity` with concealment as its type, buffs and the fields where it
@@ -1640,6 +1614,8 @@ fn hand_over(world: &mut World, entity: Entity, to: PlayerId, by: SimulationId, 
     {
         rally.0 = None;
     }
+    // The field it holds around it is its new owner's.
+    field_cover::reassign_cover(world, entity, to);
     world.entity_mut(entity).insert(OwnerComponent::new(to));
     capture_consumed_crew(world, entity, to, by, lean);
 }
@@ -2370,8 +2346,8 @@ fn fit_standing_acts(entity: &mut EntityWorldMut, acts_on_standing: bool, acts: 
 }
 
 /// Fits the type's field sources, reaching as far as `reach` asks: left to
-/// grow, a source takes over the reach of the one it replaces at the same
-/// index.
+/// grow, a source takes over the growth of the old form's source of the same
+/// field (see [`FieldSourcesComponent::taking_over`]).
 fn fit_field_sources(
     entity: &mut EntityWorldMut,
     field_sources: &[FieldSourceDef],
@@ -2382,10 +2358,10 @@ fn fit_field_sources(
         return;
     }
     let sources = match reach {
-        FieldReach::Full => FieldSourcesComponent::full(field_sources),
+        FieldReach::Full => FieldSourcesComponent::new(field_sources, FieldReach::Full),
         FieldReach::Initial => match entity.get::<FieldSourcesComponent>() {
-            Some(previous) => FieldSourcesComponent::carried(field_sources, previous),
-            None => FieldSourcesComponent::seeded(field_sources),
+            Some(previous) => FieldSourcesComponent::taking_over(field_sources, previous),
+            None => FieldSourcesComponent::new(field_sources, FieldReach::Initial),
         },
     };
     entity.insert(sources);
@@ -2695,4 +2671,58 @@ fn lean_rect(world: &World, entity: Entity, around: CellRect, lean: Lean) -> Cel
         Lean::Toward(toward) => toward,
         Lean::Nothing => around,
     }
+}
+
+/// Starts every field source of `entity` over as a fresh arrival's; one
+/// projecting no field has none.
+fn start_field_sources_over(world: &mut World, entity: Entity) {
+    if let Some(mut sources) = world.get_mut::<FieldSourcesComponent>(entity) {
+        sources.start_over();
+    }
+}
+
+/// Lifts every body of `moves`, stands each at its cell, fits it and the
+/// workers it reseats with concealment, and announces each move; returns
+/// each body with the workers reseated on it.
+fn set_down(world: &mut World, moves: &[(Entity, CellPos)]) -> Vec<(Entity, Vec<Entity>)> {
+    let mut from = Vec::with_capacity(moves.len());
+    let mut moved = Vec::with_capacity(moves.len());
+    for &(entity, _) in moves {
+        assert!(
+            entity_def::relocatable(world, entity),
+            "only a finished body standing on the grid, over no resource source and not dying or changing form, is relocated"
+        );
+        assert!(
+            match world.resource::<Map>().movement_model() {
+                MovementModel::Cell => !movement_model::is_mid_crossing(world, entity),
+                MovementModel::Continuous => true,
+            },
+            "a relocated body stands lined up on its cells, settled off any crossing"
+        );
+        from.push(entity_def::position(world, entity));
+    }
+    for &(entity, _) in moves {
+        lift_footprint(world, entity);
+    }
+    for (&(entity, cell), from) in moves.iter().zip(from) {
+        let def = entity_def::of(world, entity);
+        let class = OccupancyClass::of(def);
+        let location_def = def
+            .location
+            .expect("only entities with LocationDef stand on the grid");
+        stand_at(world, entity, cell, &location_def, class);
+        fit_concealment(world, entity);
+        let workers = berths::reseat(world, entity);
+        for &worker in &workers {
+            fit_concealment(world, worker);
+        }
+        let announced = SimulationEvent::EntityRelocated {
+            entity: entity_def::simulation_id(world, entity),
+            from,
+            to: entity_def::position(world, entity),
+        };
+        world.resource_mut::<EventRecord>().emit(announced);
+        moved.push((entity, workers));
+    }
+    moved
 }

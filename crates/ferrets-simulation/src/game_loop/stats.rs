@@ -40,7 +40,7 @@ pub fn recompute_entity_stats(world: &mut World) {
     // so they are gathered once per player, not once per entity.
     let owner_modifiers: Vec<Vec<EntityModifiers>> =
         (0..world.resource::<GameSession>().slots().len())
-            .map(|player| owner_entity_modifiers(world, player as PlayerId))
+            .map(|player| entity_def::owner_entity_modifiers(world, player as PlayerId))
             .collect();
 
     let mut folds: Vec<(Entity, Vec<EntityModifiers>, &[EntityModifiers])> = Vec::new();
@@ -63,8 +63,9 @@ pub fn recompute_stats_of(world: &mut World, entity: Entity) {
         world.entity(entity).contains::<StatsComponent>(),
         "recompute_stats_of is given an entity with a stat store"
     );
-    let owned = entity_def::owner(world, entity)
-        .map_or_else(Vec::new, |owner| owner_entity_modifiers(world, owner));
+    let owned = entity_def::owner(world, entity).map_or_else(Vec::new, |owner| {
+        entity_def::owner_entity_modifiers(world, owner)
+    });
     let own = own_and_standing(world, entity);
     fold(world, vec![(entity, own, &owned)]);
 }
@@ -104,32 +105,13 @@ fn entity_buff_modifiers(
         for effect in &buff.effects {
             match effect {
                 EntityEffect::Modifiers(modifiers) => {
-                    entity_modifiers.push(repeated(modifiers, stacks));
+                    entity_modifiers.push(modifiers.repeated(stacks));
                 }
                 EntityEffect::Disable | EntityEffect::Conceal => {}
             }
         }
     }
     entity_modifiers
-}
-
-/// What a player's active buffs lay over every owned unit: each set of
-/// entity modifiers of each buff, its modifiers once for each stack.
-fn player_buff_entity_modifiers(
-    registry: &ContentRegistry,
-    buffs: &PlayerBuffs,
-    player: PlayerId,
-) -> Vec<EntityModifiers> {
-    buffs
-        .active(player)
-        .flat_map(|(id, stacks)| {
-            registry
-                .player_buff_def(id)
-                .entity_modifiers
-                .iter()
-                .map(move |modifiers| repeated(modifiers, stacks))
-        })
-        .collect()
 }
 
 /// The player modifiers a player's active buffs contribute to its own stats. A
@@ -147,21 +129,6 @@ fn player_buff_player_modifiers(
         }
     }
     modifiers
-}
-
-/// What `player`'s buffs and applied modifiers lay over every unit it owns.
-fn owner_entity_modifiers(world: &World, player: PlayerId) -> Vec<EntityModifiers> {
-    let registry = world.resource::<ContentRegistry>();
-    let mut entity_modifiers =
-        player_buff_entity_modifiers(registry, world.resource::<PlayerBuffs>(), player);
-    entity_modifiers.extend(
-        world
-            .resource::<PlayerStats>()
-            .entity_modifiers(player)
-            .iter()
-            .cloned(),
-    );
-    entity_modifiers
 }
 
 /// What reaches `entity` of its own: its buffs', then the fields' and the
@@ -262,24 +229,5 @@ fn follow_pools(
             .get_mut::<PoolShiftsComponent>()
             .expect("a simulation entity carries its pool shifts")
             .remember(pool, parts);
-    }
-}
-
-/// `modifiers` once for each of `stacks`.
-fn repeated(modifiers: &EntityModifiers, stacks: u32) -> EntityModifiers {
-    let repeated = |modifiers: &[EntityModifier]| {
-        (0..stacks)
-            .flat_map(|_| modifiers.iter().copied())
-            .collect()
-    };
-    match modifiers {
-        EntityModifiers::Stats(modifiers) => EntityModifiers::Stats(repeated(modifiers)),
-        EntityModifiers::PoolMaximums {
-            modifiers,
-            pool_shift,
-        } => EntityModifiers::PoolMaximums {
-            modifiers: repeated(modifiers),
-            pool_shift: *pool_shift,
-        },
     }
 }

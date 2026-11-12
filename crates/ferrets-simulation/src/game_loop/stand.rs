@@ -10,7 +10,7 @@ use crate::{
     },
     entity_def,
     entity_index::EntityIndex,
-    game_loop::fields,
+    field_cover,
 };
 use ferrets_content::stand::StandingAct;
 
@@ -45,9 +45,14 @@ pub fn perform_standing_acts(world: &mut World) {
             match act {
                 StandingAct::Field {
                     field,
-                    radius,
+                    area,
                     action,
-                } => fields::apply_action_around(world, player, field, footprint, radius, action),
+                } => {
+                    let reach = entity_def::area_reach(world, entity, area);
+                    field_cover::apply_action_around(
+                        world, player, field, footprint, reach, action,
+                    );
+                }
             }
         }
         world

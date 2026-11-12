@@ -6,6 +6,7 @@ use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 
 use crate::{entity_def, simulation_id::SimulationId};
 use ferrets_content::{
+    area::ResolvedArea,
     attack::{AttackDef, Weapon},
     entity_type_def::{EntityTypeDef, EntityTypeId},
     projectile::ProjectileId,
@@ -82,7 +83,7 @@ impl AimedAt {
 /// Holds ids and a content handle rather than [`Entity`] references, so a shot
 /// outlives the entity that fired it: the firing type's damage bonuses stay
 /// readable from the registry after the attacker is gone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingImpact {
     /// Who fired, recorded on the victim as the damage source.
     pub attacker: SimulationId,
@@ -104,6 +105,11 @@ pub struct PendingImpact {
     pub impact: FixedUVec2,
     /// The attacker's effective damage, frozen when the shot was released.
     pub damage: FixedU64,
+    /// The bands of the weapon's splash, read off the attacker when the shot
+    /// was released, innermost first: how far each reaches, and the fraction
+    /// of full strength its hits land at. `None` for a weapon that splashes
+    /// nothing.
+    pub blast: Option<Vec<(ResolvedArea, FixedU64)>>,
     /// The tick the shot was released on.
     pub emitted_on_tick: u32,
     /// The tick the shot lands on.
@@ -141,9 +147,8 @@ impl PendingImpacts {
 
     /// Removes and returns every shot due on or before `tick`, in release order.
     pub fn take_due(&mut self, tick: u32) -> Vec<PendingImpact> {
-        let (due, pending) = self
-            .in_flight
-            .iter()
+        let (due, pending) = std::mem::take(&mut self.in_flight)
+            .into_iter()
             .partition(|impact| impact.lands_on_tick <= tick);
         self.in_flight = pending;
         due

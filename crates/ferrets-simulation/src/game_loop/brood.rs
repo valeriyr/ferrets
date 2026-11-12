@@ -12,12 +12,13 @@ use crate::{
     components::{
         attached::Seating,
         brood::{BredComponent, BroodComponent},
+        field_source::FieldReach,
         hidden::HiddenComponent,
     },
     entity_def::{self, Operation},
     entity_index::EntityIndex,
     map::Map,
-    spawn::{self, FieldReach},
+    spawn,
 };
 
 //

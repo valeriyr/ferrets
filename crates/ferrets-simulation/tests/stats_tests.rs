@@ -1,16 +1,18 @@
-//! Tests for the stat store's modifier fold.
+//! Tests for the stat store's modifier fold and its whole-number readings.
 
 mod utils;
 
 use ferrets_content::{
+    area::Area,
     entity_stats::{EntityStatDef, EntityStatId},
+    entity_type_def::EntityTypeDef,
     player_stats::PlayerStatId,
     quantity::Quantity,
     registry::ContentRegistry,
     stats::{EntityModifier, ModifierOp},
 };
 use ferrets_math::{FixedI64, FixedU64};
-use ferrets_simulation::components::entity_stats::StatsComponent;
+use ferrets_simulation::{components::entity_stats::StatsComponent, entity_def};
 
 //
 // ─── Combine ──────────────────────────────────────────────────────────────────
@@ -273,7 +275,22 @@ fn ticks_round_up_and_cells_truncate() {
         store.quantity_cells(Quantity::Stat(EntityStatId::ATTACK_PERIOD)),
         Some(1)
     );
-    assert_eq!(store.quantity_ticks(Quantity::Constant(7)), Some(7));
+    assert_eq!(store.quantity_ticks(Quantity::from(7)), Some(7));
+}
+
+#[test]
+fn area_read_for_fresh_instance_truncates_to_whole_cells() {
+    // A base of 2.75 reaches 2 whole cells, 1.5 declared reaches 1, and the
+    // inside of the footprint 0.
+    let registry = ContentRegistry::default();
+    let def = EntityTypeDef::new("hall").with_stat(EntityStatId::ATTACK_RANGE, value("2.75"));
+    let read = |area| entity_def::owned_area_reach(&registry, &def, &[], area);
+    assert_eq!(
+        read(Area::Around(Quantity::Stat(EntityStatId::ATTACK_RANGE))),
+        2
+    );
+    assert_eq!(read(Area::Around(Quantity::Constant(value("1.5")))), 1);
+    assert_eq!(read(Area::Inside), 0);
 }
 
 //

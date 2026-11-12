@@ -148,9 +148,8 @@ pub fn recompute_visibility(world: &mut World) {
             .into_iter()
             .flat_map(|(player, standing, sight, eyes, blocked_by)| {
                 let shade = blockers.shade(session, player, eyes, standing, sight);
-                projection::circle_cells(standing, sight)
+                projection::circle_cells(standing, sight, map.size())
                     .into_iter()
-                    .filter(|&cell| map.contains(cell))
                     .filter(move |&cell| {
                         blocked_by.iter().all(|&relief| {
                             grid.level(relief, cell)
@@ -173,9 +172,8 @@ pub fn recompute_visibility(world: &mut World) {
             .iter()
             .flat_map(|watch| {
                 watch
-                    .cells()
+                    .cells(map.size())
                     .into_iter()
-                    .filter(|&cell| map.contains(cell))
                     .map(move |cell| (watch.player, cell))
             })
             .collect()

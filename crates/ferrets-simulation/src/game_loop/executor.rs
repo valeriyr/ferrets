@@ -17,6 +17,7 @@ use crate::{
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
     components::{
         entity_info::EntityInfoComponent,
+        field_source::FieldReach,
         order_queue::{CancelPolicy, OrderQueueComponent},
         owner,
         rally::{RallyPointComponent, RallyTarget},
@@ -38,7 +39,7 @@ use crate::{
     selection::Selection,
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
-    spawn::{self, At, FieldReach},
+    spawn::{self, At},
     supply, tunnels, visibility,
 };
 use ferrets_content::{

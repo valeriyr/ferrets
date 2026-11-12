@@ -70,10 +70,10 @@ pub const CONTENT: &str = r#"
     define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 10 }, watches = { of = "own" } })
     define_field("power", { terrains = LAND, spreads_on = GROUND | AIR, decay = "instant" })
     -- Blight is the ground the undead build on: it spreads from every
-    -- structure they raise, heals what stands on it, and recedes slowly once
-    -- nothing sustains it. Unlike creep it watches nothing — the dead see by
-    -- their own eyes.
-    define_field("blight", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 40 } })
+    -- structure they raise, heals what stands on it, and stays once nothing
+    -- sustains it, outliving the structure that spread it. Unlike creep it
+    -- watches nothing — the dead see by their own eyes.
+    define_field("blight", { terrains = LAND, spreads_on = GROUND, decay = "never" })
     -- True sight is what a detector projects. It grants no sight of its own —
     -- a turret sees by its own eyes — but whatever hides on the ground or in
     -- the air under it is seen by whoever covers it. Lying on every terrain,
@@ -526,7 +526,7 @@ pub const CONTENT: &str = r#"
         -- The garrison keeps watch for what hides, a little short of how far
         -- it sees.
         field_sources = {
-            { field = "true_sight", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", area = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -683,7 +683,8 @@ pub const CONTENT: &str = r#"
             slain = "nothing",
             splash = {
                 shape = "circular",
-                bands = { {1, "0.5"}, {2, "0.25"} },
+                core = { area = 1, fraction = "0.5" },
+                rings = { { width = 1, fraction = "0.25" } },
                 layers = GROUND,
                 friendly_fire = true,
             },
@@ -899,7 +900,7 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         berths = { rim = { points = rim(2, 2) } },
         field_sources = {
-            { field = "true_sight", radius = 8, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", area = 8, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
         -- The demo's building upgrade: a paid, refundable change in place. The
         -- money is committed up front and comes back in full if the upgrade is
@@ -1064,7 +1065,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 400,
         cost = { energy = "40" },
-        effect = { field = { at = "ground", field = "fog_cloud", radius = 4, action = "cover" } },
+        effect = { field = { at = "ground", field = "fog_cloud", area = 4, action = "cover" } },
     })
     -- Orc support: a shaman that mends one allied unit at a time from its energy
     -- pool. The heal takes a target, so casting is button-then-click.
@@ -1156,9 +1157,23 @@ pub const CONTENT: &str = r#"
         { "0.5", "3.5" }, { "1.0", "3.5" }, { "1.5", "3.5" }, { "2.0", "3.5" }, { "2.5", "3.5" },
     }, slots = 4 } }
     local RESEATS_NEARBY = { linger = { reseat = { distance = 4 } } }
-    local CREEP_RADIUS = 10
-    local CREEP_GROWTH = { cycle = 6, initial_radius = 3 }
-    local CREEP_SPREAD = { { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_rising = "nothing", while_disabled = "full" } }
+    -- A hall's creep reaches as far as its creep spread, ten cells, and
+    -- fertile creep, researched at a hall, carries every hall's four further.
+    define_entity_stat("creep_spread", 0)
+    local CREEP_AREA = { stat = "creep_spread" }
+    local CREEP_GROWTH = { cycle = 6, starts_at = 3 }
+    local CREEP_SPREAD = { { field = "creep", area = CREEP_AREA, growth = CREEP_GROWTH, while_rising = "nothing", while_disabled = "full" } }
+    define_player_buff("fertile_creep", {
+        stack = "ignore",
+        entity_modifiers = { {
+            stats = { { entity_stat = "creep_spread", op = "flat", value = "4" } },
+        } },
+    })
+    define_research("fertile_creep", {
+        price = { gold = 100, wood = 50 },
+        time = 150,
+        buff = "fertile_creep",
+    })
 
     -- Burrowing, researched at the hall: a swarmling digs in where it stands
     -- and lies unseen until a detector passes over it.
@@ -1170,7 +1185,7 @@ pub const CONTENT: &str = r#"
     define_entity("hatchery", {
         race = "swarm",
         location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
-        stats = { sight_range = 9, supply_provided = 10 },
+        stats = { sight_range = 9, supply_provided = 10, creep_spread = 10 },
         pools = { health = { maximum = 800 } },
         dying = { time = 2, leaves = BURSTS },
         price = { gold = 400 },
@@ -1179,9 +1194,9 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         berths = BROOD_BERTHS,
         breeder = { breeds = "larva", period = 220, limit = 3, initial = 1, orphans = RESEATS_NEARBY },
-        researcher = { "burrow" },
+        researcher = { "burrow", "fertile_creep" },
         field_sources = {
-            { field = "creep", radius = CREEP_RADIUS, growth = CREEP_GROWTH, while_rising = { held = 1 }, while_disabled = "full" },
+            { field = "creep", area = CREEP_AREA, growth = CREEP_GROWTH, while_rising = { held = 1 }, while_disabled = "full" },
         },
         morphs = {
             { into = "hive", land_pool_carry = { health = "full" },
@@ -1196,7 +1211,7 @@ pub const CONTENT: &str = r#"
     define_entity("hive_cocoon", {
         race = "swarm",
         location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
-        stats = { sight_range = 9, supply_provided = 10 },
+        stats = { sight_range = 9, supply_provided = 10, creep_spread = 10 },
         pools = { health = { maximum = 800 } },
         dying = { time = 2, leaves = BURSTS },
         resource_storage = { "gold", "wood" },
@@ -1210,7 +1225,7 @@ pub const CONTENT: &str = r#"
     define_entity("hive", {
         race = "swarm",
         location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
-        stats = { sight_range = 10, supply_provided = 10 },
+        stats = { sight_range = 10, supply_provided = 10, creep_spread = 10 },
         pools = { health = { maximum = 1000 } },
         dying = { time = 2, leaves = BURSTS },
         -- Nothing builds a hive: it carries the hatchery's price and the
@@ -1221,7 +1236,7 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         berths = BROOD_BERTHS,
         breeder = { breeds = "larva", period = 180, limit = 3, initial = 2, orphans = RESEATS_NEARBY },
-        researcher = { "burrow" },
+        researcher = { "burrow", "fertile_creep" },
         field_sources = CREEP_SPREAD,
     })
 
@@ -1268,7 +1283,7 @@ pub const CONTENT: &str = r#"
         dying = { time = 2 },
         tags = { "biological" },
         field_sources = {
-            { field = "true_sight", radius = 8, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", area = 8, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -1290,7 +1305,7 @@ pub const CONTENT: &str = r#"
     define_skill("spew_creep", {
         caster = "entity",
         cooldown = 200,
-        effect = { field = { at = "ground", field = "creep", radius = 2, action = "cover" } },
+        effect = { field = { at = "ground", field = "creep", area = 2, action = "cover" } },
     })
     define_entity("drone", {
         race = "swarm",
@@ -1326,7 +1341,7 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         field_placement = { ON_CREEP },
         field_sources = {
-            { field = "creep", radius = 6, growth = { cycle = 8, initial_radius = 1 }, while_rising = "nothing", while_disabled = "full" },
+            { field = "creep", area = 6, growth = { cycle = 8, starts_at = 1 }, while_rising = "nothing", while_disabled = "full" },
         },
     })
 
@@ -1365,7 +1380,7 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         gateway = { network = "warren", doors = "both" },
         field_sources = {
-            { field = "creep", radius = 3, growth = "instant", while_rising = "nothing", while_disabled = "full" },
+            { field = "creep", area = 3, growth = "instant", while_rising = "nothing", while_disabled = "full" },
         },
         -- Uprooting takes two seconds and cannot be called off; the burrow
         -- stops being a way out of the warren, and if it was the last one,
@@ -1592,7 +1607,7 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
         field_sources = {
-            { field = "power", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "power", area = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -1601,7 +1616,7 @@ pub const CONTENT: &str = r#"
     define_skill("purge_creep", {
         caster = "entity",
         cooldown = 200,
-        effect = { field = { at = "ground", field = "creep", radius = 3, action = "clear" } },
+        effect = { field = { at = "ground", field = "creep", area = 3, action = "clear" } },
     })
     define_entity("probe", {
         race = "conclave",
@@ -1637,10 +1652,10 @@ pub const CONTENT: &str = r#"
         tags = { "building" },
         field_placement = { NOT_ON_CREEP },
         field_sources = {
-            { field = "power", radius = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "power", area = 6, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
         on_stand = {
-            { field = { field = "creep", radius = 6, action = "clear" } },
+            { field = { field = "creep", area = 6, action = "clear" } },
         },
     })
 
@@ -1723,7 +1738,7 @@ pub const CONTENT: &str = r#"
         -- The cannon is the conclave's standing detector: a shorter reach
         -- than its eyes, as a turret's is.
         field_sources = {
-            { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", area = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -1865,7 +1880,7 @@ pub const CONTENT: &str = r#"
         train_time = 50,
         selection = { priority = 5 },
         field_sources = {
-            { field = "true_sight", radius = 9, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", area = 9, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
         field_effects = { VEILED },
     })
@@ -1881,7 +1896,7 @@ pub const CONTENT: &str = r#"
         effect = { relocate = {
             journey = { from_aim = {
                 party = { around = {
-                    at = "ground", radius = 2, side = "own",
+                    at = "ground", area = 2, side = "own",
                     kinds = { tags = { "biological", "mechanical" } },
                     sight = "seen", count = "all", shortfall = "leave",
                 } },
@@ -1901,7 +1916,7 @@ pub const CONTENT: &str = r#"
         effect = { relocate = {
             journey = { from_aim = {
                 party = { around = {
-                    at = { kind = "ground", range = 9 }, radius = 2, side = "enemy",
+                    at = { kind = "ground", range = 9 }, area = 2, side = "enemy",
                     kinds = { tags = { "biological", "mechanical" } },
                     sight = "seen", count = { at_most = 4 }, shortfall = "leave",
                 } },
@@ -1929,7 +1944,7 @@ pub const CONTENT: &str = r#"
         selection = { priority = 5 },
         skills = { "recall", "drag_in" },
         field_sources = {
-            { field = "veil", radius = 4, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "veil", area = 4, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -2094,7 +2109,7 @@ pub const CONTENT: &str = r#"
         rise = { time = 80, pools = { health = "initial" } },
         attack = { targets = GROUND | AIR, projectile = "arrow" },
         field_sources = {
-            { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", area = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     }, {
         stats = {
@@ -2255,7 +2270,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 200,
         cost = { energy = "50" },
-        effect = { watch = { at = "ground", radius = 6, duration = 180, detection = GROUND | AIR } },
+        effect = { watch = { at = "ground", area = 6, duration = 180, detection = GROUND | AIR } },
     })
 
     -- The wraith's cloak: a buff that conceals and nothing else, switched on
@@ -2512,7 +2527,8 @@ pub const CONTENT: &str = r#"
         projectile = "arrow",
         splash = {
             shape = "circular",
-            bands = { {1, "0.5"} },
+            core = { area = 1, fraction = "0.5" },
+            rings = {},
             layers = AIR,
             friendly_fire = false,
         },
@@ -2538,7 +2554,7 @@ pub const CONTENT: &str = r#"
             { turret = "missile_rack" },
         },
         field_sources = {
-            { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
+            { field = "true_sight", area = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     })
 
@@ -2625,7 +2641,7 @@ pub const CONTENT: &str = r#"
     define_skill("smoke_grenade", {
         caster = "entity",
         cooldown = 400,
-        effect = { field = { at = "ground", field = "smoke", radius = 3, action = "cover" } },
+        effect = { field = { at = "ground", field = "smoke", area = 3, action = "cover" } },
     })
     define_entity("marine", {
         race = "terran",
@@ -2715,7 +2731,8 @@ pub const CONTENT: &str = r#"
             -- quarter two, and it does not spare its own.
             splash = {
                 shape = "circular",
-                bands = { {1, "0.5"}, {2, "0.25"} },
+                core = { area = 1, fraction = "0.5" },
+                rings = { { width = 1, fraction = "0.25" } },
                 layers = GROUND,
                 friendly_fire = true,
             },
@@ -2746,8 +2763,8 @@ pub const CONTENT: &str = r#"
     -- grows its ground outward as it is built. The hall and the mine are the
     -- exceptions: they make blight where there is none.
     local ON_BLIGHT = { requires = "blight", of = "anyone", coverage = "every" }
-    local function blights(radius)
-        return { { field = "blight", radius = radius, growth = "instant", while_rising = "nothing", while_disabled = "full" } }
+    local function blights(area)
+        return { { field = "blight", area = area, growth = "instant", while_rising = "nothing", while_disabled = "full" } }
     end
     -- The dead mend only on their own ground: off blight nothing knits.
     local MENDS = { stats = { { entity_stat = "health_regen", op = "flat", value = "0.1" } } }
@@ -2879,7 +2896,7 @@ pub const CONTENT: &str = r#"
         effect = { relocate = {
             journey = { from_caster = {
                 party = { caster_and_around = {
-                    radius = 4, side = "own",
+                    area = 4, side = "own",
                     kinds = { types = { "acolyte", "ghoul", "skeleton" } },
                     sight = "seen", count = { at_most = 24 }, shortfall = "refuse",
                 } },
@@ -3062,8 +3079,8 @@ pub const CONTENT: &str = r#"
           damage = 14, attack_range = 7, acquire_range = 8, attack_period = 18, damage_point = 7 },
         { targets = GROUND | AIR, projectile = "arrow" },
         { gold = 180, wood = 30 }, 170,
-        { { field = "blight", radius = 4, growth = "instant", while_rising = "nothing", while_disabled = "full" },
-          { field = "true_sight", radius = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" } })
+        { { field = "blight", area = 4, growth = "instant", while_rising = "nothing", while_disabled = "full" },
+          { field = "true_sight", area = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" } })
     tower("nerubian_tower", 500,
         { sight_range = 8, supply_provided = 10,
           damage = 22, attack_range = 6, acquire_range = 7, attack_period = 24, damage_point = 10 },

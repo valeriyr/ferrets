@@ -41,6 +41,7 @@ use ferrets_simulation::{
     command::{PlayerCommand, SelectMode, SkillTarget},
     components::{
         entity_skills::SkillsComponent,
+        field_source::FieldReach,
         hidden::Inside,
         last_hit,
         order_queue::OrderQueueComponent,
@@ -57,8 +58,7 @@ use ferrets_simulation::{
     selection::Selection,
     session::{GameSession, local_role::LocalRole},
     simulation_id::SimulationId,
-    spawn::{self, FieldReach},
-    supply,
+    spawn, supply,
     visibility::Sighting,
 };
 
@@ -1593,7 +1593,7 @@ fn register_totem(app: &mut App) {
             .with_morphs([MorphTransition::new(
                 "watch_tower",
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(10),
+                Quantity::from(10),
                 MorphPlacement::Reserve,
                 MorphCancel::Refundable,
                 MorphReason::Change,
@@ -1659,7 +1659,7 @@ fn register_diver(app: &mut App) {
             .with_morphs([MorphTransition::new(
                 "watch_tower",
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(10),
+                Quantity::from(10),
                 MorphPlacement::Reserve,
                 MorphCancel::Refundable,
                 MorphReason::Change,

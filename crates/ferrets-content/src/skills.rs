@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     affiliation::Affiliation,
+    area::Area,
     cost::Cost,
     detection::Detection,
     entity_buffs::EntityBuffId,
@@ -50,10 +51,9 @@ pub enum Reach {
     /// From wherever the caster stands, without walking, however far off the
     /// aim is.
     Wherever,
-    /// Within the cells this comes to, which the caster walks into first, or,
-    /// for a transient cast, stands within already. Zero is satisfied only by
-    /// standing inside the aim's own footprint.
-    Within(Quantity),
+    /// Within this area of the aim, which the caster walks into first, or,
+    /// for a transient cast, stands within already; read on each check.
+    Within(Area),
 }
 
 /// How a cast takes its caster's time.
@@ -356,8 +356,9 @@ pub enum EntityCastEffect {
         /// The spot the sight reaches out from, taken when the cast lands:
         /// around an entity, where it stood then.
         at: Spot,
-        /// How far from the spot the sight reaches, in cells.
-        radius: Quantity,
+        /// The area around the spot the sight reaches, read when the cast
+        /// lands and held for the watch's life.
+        area: Area,
         /// Ticks it lasts.
         duration: Quantity,
         /// What it does for the casting player against the concealed
@@ -389,8 +390,9 @@ pub enum EntityCastEffect {
         at: Spot,
         /// The field acted on.
         field: FieldId,
-        /// How far from the spot the action reaches, in cells.
-        radius: Quantity,
+        /// The area around the spot the action reaches, read when the cast
+        /// lands.
+        area: Area,
         /// Whether the cells are covered or cleared.
         action: FieldAction,
     },
@@ -580,8 +582,9 @@ pub enum FromAimTo {
 /// The bodies a relocation gathers around a spot, nearest first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gathering {
-    /// How far from the spot they may stand, in cells.
-    pub radius: Quantity,
+    /// The area around the spot they may stand in, read when the cast
+    /// lands.
+    pub area: Area,
     /// Whose they must be, judged from the caster's owner.
     pub side: Affiliation,
     /// What they must be.

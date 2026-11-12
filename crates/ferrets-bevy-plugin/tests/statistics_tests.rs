@@ -11,6 +11,7 @@ use bevy::prelude::*;
 
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     attack::Slain,
     detection::Detection,
     entity_stats::EntityStatId,
@@ -29,7 +30,7 @@ use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_simulation::{
     beside::Lean,
     command::{PlayerCommand, SkillCasterRef, SkillTarget},
-    components::resource::ResourceSourceComponent,
+    components::{field_source::FieldReach, resource::ResourceSourceComponent},
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, EventRecord, SimulationEvent, SpawnCause, SpendCause},
@@ -38,7 +39,7 @@ use ferrets_simulation::{
     resources::PlayerResources,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
     simulation_id::SimulationId,
-    spawn::{self, FieldReach},
+    spawn,
     statistics::Statistics,
 };
 
@@ -1186,8 +1187,8 @@ fn ground_skill_app() -> (App, ferrets_content::skills::SkillId) {
                         at: Spot::Ground {
                             reach: Reach::Wherever,
                         },
-                        radius: Quantity::Constant(2),
-                        duration: Quantity::Constant(5),
+                        area: Area::Around(Quantity::from(2)),
+                        duration: Quantity::from(5),
                         detection: Detection::Blind,
                     },
                 },

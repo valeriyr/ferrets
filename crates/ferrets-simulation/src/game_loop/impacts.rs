@@ -23,6 +23,7 @@ use crate::{
     simulation_id::SimulationId,
 };
 use ferrets_content::{
+    area::ResolvedArea,
     attack::{Delivery, Slain, Weapon},
     entity_buffs::Interruption,
     entity_type_def::EntityTypeDef,
@@ -82,6 +83,8 @@ pub(super) fn deliver(
         .map(Weapon::delivery)
         .expect("a delivering entity has the weapon it fired");
 
+    let blast = blast_bands(world, attacker, fired_from);
+
     buffs::interrupt_entity_buffs(world, attacker, Interruption::Attack);
 
     match delivery {
@@ -96,6 +99,7 @@ pub(super) fn deliver(
                 impact,
                 origin,
                 damage,
+                blast.as_deref(),
             );
         }
         Delivery::Projectile(projectile) => {
@@ -126,6 +130,7 @@ pub(super) fn deliver(
                 origin,
                 impact,
                 damage,
+                blast,
                 emitted_on_tick: tick,
                 lands_on_tick: tick + flight_ticks(distance, speed),
             };
@@ -173,6 +178,7 @@ pub fn process_impacts(world: &mut World) {
             impact,
             shot.origin,
             shot.damage,
+            shot.blast.as_deref(),
         );
     }
 }
@@ -192,6 +198,7 @@ fn land(
     impact: FixedUVec2,
     origin: FixedUVec2,
     damage: FixedU64,
+    blast: Option<&[(ResolvedArea, FixedU64)]>,
 ) {
     // Who takes the hit at full strength: the entity the shot followed, wherever it
     // moved to, and nobody once it is gone or lost; a shot sent to a cell hits
@@ -234,23 +241,28 @@ fn land(
         damage::apply(world, attacker_id, victim, dealt, slain);
     }
 
-    let Some(splash) = weapon.as_ref().and_then(Weapon::splash) else {
+    let Some(bands) = blast else {
         return;
     };
-    let victims = blast_victims(world, splash, attacker_id, &direct, impact, origin);
+    let splash = weapon
+        .as_ref()
+        .and_then(Weapon::splash)
+        .expect("a shot frozen with bands was fired by a weapon that splashes");
+    let victims = blast_victims(world, splash, bands, attacker_id, &direct, impact, origin);
     for (victim, fraction) in victims {
         let dealt = damage::resolve_scaled(world, attacker_def, victim, damage, fraction);
         damage::apply(world, attacker_id, victim, dealt, slain);
     }
 }
 
-/// The entities a blast catches, each with the fraction of the hit's damage its
-/// band deals, in [`SimulationId`] order.
+/// The entities a blast catches, each with the fraction of full strength its
+/// band's hit lands at, in [`SimulationId`] order.
 ///
 /// The order is fixed so two peers kill the same victims in the same sequence.
 fn blast_victims(
     world: &mut World,
     splash: &SplashDef,
+    blast: &[(ResolvedArea, FixedU64)],
     attacker_id: SimulationId,
     direct: &[Entity],
     impact: FixedUVec2,
@@ -305,7 +317,8 @@ fn blast_victims(
             continue;
         }
         let Some(fraction) = band_fraction(
-            splash,
+            splash.shape(),
+            blast,
             projection,
             origin,
             impact,
@@ -323,36 +336,65 @@ fn blast_victims(
         .collect()
 }
 
-/// The fraction the innermost band containing `victim`, a footprint, deals,
-/// or `None` when the blast does not reach it: the whole footprint is the
-/// victim, so a blast overlapping any of its cells catches it, in the band
-/// that cell falls in.
+/// The fraction of full strength of the innermost band of `blast` containing
+/// `victim`, a footprint, or `None` when the blast does not reach it: the
+/// whole footprint is the victim, so a blast overlapping any of its cells
+/// catches it, in the band that cell falls in.
 fn band_fraction(
-    splash: &SplashDef,
+    shape: SplashShape,
+    blast: &[(ResolvedArea, FixedU64)],
     projection: Projection,
     origin: FixedUVec2,
     impact: FixedUVec2,
     victim: CellRect,
 ) -> Option<FixedU64> {
-    splash
-        .bands()
-        .find(|&(radius, _)| match splash.shape() {
-            SplashShape::Circular => {
-                projection.in_range_of_rect(CellPos::from(impact), victim, radius)
+    blast
+        .iter()
+        .find(|&&(area, _)| {
+            let reach = area.reach();
+            match shape {
+                SplashShape::Circular => {
+                    projection.in_range_of_rect(CellPos::from(impact), victim, reach)
+                }
+                SplashShape::Line => near_path(projection, origin, impact, victim, reach),
             }
-            SplashShape::Line => near_path(projection, origin, impact, victim, radius),
         })
-        .map(|(_, fraction)| fraction)
+        .map(|&(_, fraction)| fraction)
 }
 
-/// Whether `victim` lies within `radius` of the shot's path, sampled at one-cell
+/// The bands of the splash of `attacker`'s `fired_from` weapon, as the
+/// attacker's stats read now, innermost first: how far each reaches, and the
+/// fraction of full strength its hits land at. `None` for a weapon that
+/// splashes nothing.
+fn blast_bands(
+    world: &World,
+    attacker: Entity,
+    fired_from: FiredFrom,
+) -> Option<Vec<(ResolvedArea, FixedU64)>> {
+    let splash = fired_from
+        .weapon(
+            world.resource::<ContentRegistry>(),
+            entity_def::of(world, attacker),
+        )
+        .and_then(Weapon::splash)?;
+    let (core, fraction) = splash.core();
+    let mut reach = entity_def::resolve_area(world, attacker, core);
+    let mut bands = vec![(reach, fraction)];
+    for (width, fraction) in splash.rings() {
+        reach = reach.widened(entity_def::quantity(world, attacker, width));
+        bands.push((reach, fraction));
+    }
+    Some(bands)
+}
+
+/// Whether `victim` lies within `reach` of the shot's path, sampled at one-cell
 /// steps from `origin` to `impact`.
 fn near_path(
     projection: Projection,
     origin: FixedUVec2,
     impact: FixedUVec2,
     victim: CellRect,
-    radius: u32,
+    reach: u32,
 ) -> bool {
     let from = CellPos::from(origin);
     let to = CellPos::from(impact);
@@ -362,7 +404,7 @@ fn near_path(
     let steps = projection::chebyshev(from, to);
     for step in 0..=steps {
         let sample = lerp_cell(from, to, step, steps);
-        if projection.in_range_of_rect(sample, victim, radius) {
+        if projection.in_range_of_rect(sample, victim, reach) {
             return true;
         }
     }

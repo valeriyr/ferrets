@@ -3,6 +3,7 @@
 
 pub mod affiliation;
 pub mod annex;
+pub mod area;
 pub mod attack;
 pub mod base_stats;
 pub mod berths;

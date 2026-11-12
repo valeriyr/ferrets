@@ -1169,7 +1169,7 @@ fn worker_seated_inside_its_job_steps_out_of_whole_footprint_to_change() {
         let mut shifter = sylph.with_morphs([MorphTransition::new(
             "sylph",
             MorphCourse::direct(MorphInterrupted::Reverts),
-            Quantity::Constant(10),
+            Quantity::from(10),
             MorphPlacement::Revalidate,
             MorphCancel::Refundable,
             MorphReason::Change,
@@ -1231,7 +1231,7 @@ fn canceled_change_of_berthed_worker_leaves_it_on_land_it_takes() {
             utils::in_domain(sylph.clone(), dry).with_morphs([MorphTransition::new(
                 "wet_sylph",
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(10),
+                Quantity::from(10),
                 MorphPlacement::Revalidate,
                 MorphCancel::Refundable,
                 MorphReason::Change,
@@ -1661,7 +1661,7 @@ fn change(into: &str, placement: MorphPlacement, costs: Vec<Cost>) -> MorphTrans
     MorphTransition::new(
         into,
         MorphCourse::direct(MorphInterrupted::Reverts),
-        Quantity::Constant(2),
+        Quantity::from(2),
         placement,
         MorphCancel::Refundable,
         MorphReason::Change,
@@ -1686,7 +1686,7 @@ fn titan_app() -> App {
             .with_morphs([MorphTransition::new(
                 "titan",
                 MorphCourse::direct(MorphInterrupted::Reverts),
-                Quantity::Constant(10),
+                Quantity::from(10),
                 MorphPlacement::Reserve,
                 MorphCancel::Refundable,
                 MorphReason::Change,

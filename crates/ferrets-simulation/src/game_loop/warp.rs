@@ -9,6 +9,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use super::orders::{self, Refusal};
 use crate::{
     components::{
+        field_source::FieldReach,
         rise::{RiseAttendance, RiseOrigin, RisingComponent},
         warp::WarpComponent,
     },
@@ -21,7 +22,7 @@ use crate::{
     requirements,
     resources::{self, PlayerResources},
     session::{GameSession, player_id::PlayerId},
-    spawn::{self, At, FieldReach},
+    spawn::{self, At},
     supply, tunnels,
 };
 

@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::{ai::game_view, map};
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
     berths::BerthGroup,
     brood::OrphanFate,
@@ -1790,8 +1791,8 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 at: Spot::Ground {
                     reach: Reach::Wherever,
                 },
-                radius: Quantity::Constant(3),
-                duration: Quantity::Constant(6),
+                area: Area::Around(Quantity::from(3)),
+                duration: Quantity::from(6),
                 detection: Detection::Reveals(LayerMask::EMPTY | utils::GROUND | air),
             }),
         );
@@ -1801,8 +1802,8 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 at: Spot::Ground {
                     reach: Reach::Wherever,
                 },
-                radius: Quantity::Constant(3),
-                duration: Quantity::Constant(6),
+                area: Area::Around(Quantity::from(3)),
+                duration: Quantity::from(6),
                 detection: Detection::Reveals(utils::GROUND.into()),
             }),
         );
@@ -1941,7 +1942,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_sight_range(2)
                 .with_field_sources([FieldSourceDef::new(
                     true_sight,
-                    6,
+                    Area::Around(Quantity::from(6)),
                     FieldGrowth::Instant,
                     Emission::Nothing,
                     Emission::Nothing,
@@ -1968,7 +1969,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_sight_range(8)
                 .with_field_sources([FieldSourceDef::new(
                     ground_sight,
-                    6,
+                    Area::Around(Quantity::from(6)),
                     FieldGrowth::Instant,
                     Emission::Nothing,
                     Emission::Nothing,
@@ -1987,7 +1988,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_sight_range(8)
                 .with_field_sources([FieldSourceDef::new(
                     air_sight,
-                    6,
+                    Area::Around(Quantity::from(6)),
                     FieldGrowth::Instant,
                     Emission::Nothing,
                     Emission::Nothing,
@@ -2009,7 +2010,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             walker("arbiter", utils::AIR_DOMAIN, 100, 6).with_field_sources([FieldSourceDef::new(
                 veil,
-                3,
+                Area::Around(Quantity::from(3)),
                 FieldGrowth::Instant,
                 Emission::Nothing,
                 Emission::Nothing,
@@ -2036,13 +2037,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_pool(Pool::health(50))
                 .with_dying(1, [])
                 .with_berths([("brood", BerthGroup::new([utils::berth("0.5", "1.5")], 1))])
-                .with_breeder(
-                    "nestling",
-                    Quantity::Constant(1000),
-                    1,
-                    1,
-                    OrphanFate::Perish,
-                ),
+                .with_breeder("nestling", Quantity::from(1000), 1, 1, OrphanFate::Perish),
         );
         registry.register(
             EntityTypeDef::new("nestling")
@@ -2063,7 +2058,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_morphs([MorphTransition::new(
                     "sentinel",
                     MorphCourse::direct(MorphInterrupted::Reverts),
-                    Quantity::Constant(2),
+                    Quantity::from(2),
                     MorphPlacement::Reserve,
                     MorphCancel::Refundable,
                     MorphReason::Change,
@@ -2144,7 +2139,8 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 Delivery::Projectile(shell),
                 Some(SplashDef::new(
                     SplashShape::Circular,
-                    vec![(1, utils::fixed("0.5"))],
+                    (Area::Around(Quantity::from(1)), utils::fixed("0.5")),
+                    Vec::new(),
                     utils::GROUND,
                     false,
                 )),

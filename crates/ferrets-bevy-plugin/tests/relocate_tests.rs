@@ -5,6 +5,7 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_content::{
     affiliation::Affiliation,
+    area::Area,
     cost::Cost,
     detection::Detection,
     entity_stats::EntityStatId,
@@ -35,13 +36,16 @@ use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::{FixedU64, facing::Facing};
 use ferrets_simulation::{
     command::{PlayerCommand, SkillTarget},
-    components::{hidden::Inside, location::LocationComponent, rise::RiseAttendance},
+    components::{
+        field_source::{Emitted, FieldReach, FieldSourcesComponent, Growth},
+        hidden::Inside,
+        location::LocationComponent,
+        rise::RiseAttendance,
+    },
     entity_def,
     events::{EventRecord, SimulationEvent},
-    game_loop::{
-        cast::{self, AimRefusal},
-        fields,
-    },
+    field_cover,
+    game_loop::cast::{self, AimRefusal},
     map::Map,
     movement_model::MovementModel,
     session::{
@@ -252,7 +256,7 @@ fn recalled_unit_lands_only_where_its_placement_rules_admit_it() {
         .resource::<ContentRegistry>()
         .field("creep")
         .expect("creep is registered");
-    fields::apply_action(
+    field_cover::apply_action(
         app.world_mut(),
         1,
         creep,
@@ -343,7 +347,7 @@ fn anyones_gathering_takes_resource_source_with_harvester_inside() {
 }
 
 #[test]
-fn gathering_takes_body_standing_part_way_into_its_radius() {
+fn gathering_takes_body_standing_part_way_into_its_area() {
     let mut app = app();
     let projection = app.world().resource::<Map>().projection();
     utils::install_map(&mut app, projection, MovementModel::Continuous);
@@ -1049,6 +1053,52 @@ fn relocated_job_carries_its_seated_workers_onto_its_new_berths() {
 }
 
 #[test]
+fn relocated_job_starts_its_seated_workers_fields_over() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    let hatch = utils::place(&mut app, "glow_hatch", 10, 10, 0);
+    utils::run_ticks(&mut app, 13);
+    let grub = utils::single_owned_of_type(app.world_mut(), "glow_grub", 0);
+    let growth = |app: &App| {
+        app.world()
+            .get::<FieldSourcesComponent>(grub)
+            .expect("a glow grub carries its source")
+            .0[0]
+            .growth
+    };
+    // Bred on the tenth tick, it has grown its glow out to two since.
+    assert_eq!(growth(&app).reach(), Some(2));
+
+    spawn::relocate(app.world_mut(), &[(hatch, CellPos::new(20, 20))]);
+    assert_eq!(growth(&app), Growth::Unread(FieldReach::Initial));
+}
+
+#[test]
+fn recalled_job_starts_its_seated_workers_fields_over() {
+    let mut app = utils::brood_app(MovementModel::Cell);
+    register_recaller(&mut app);
+    utils::place(&mut app, "glow_hatch", 10, 10, 0);
+    let (_, recaller_id) = utils::create_owned(&mut app, "recaller", 25, 25, 0);
+    utils::run_ticks(&mut app, 13);
+    let grub = utils::single_owned_of_type(app.world_mut(), "glow_grub", 0);
+
+    let glow = |app: &App| {
+        app.world()
+            .get::<FieldSourcesComponent>(grub)
+            .expect("a glow grub carries its source")
+            .0[0]
+    };
+    assert_eq!(glow(&app).last_emitted, Emitted::Reach(2));
+
+    // The recall lands the hatch, its grub on its berth, as a jump: the
+    // grub's glow starts over, and grows from inside a cell a tick, 0 + 1.
+    utils::cast_at(&mut app, recaller_id, "recall", 11, 11);
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert_eq!(glow(&app).growth, Growth::Unread(FieldReach::Initial));
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(glow(&app).last_emitted, Emitted::Reach(1));
+}
+
+#[test]
 fn relocated_job_carries_dying_seated_worker_along() {
     let mut app = utils::brood_app(MovementModel::Cell);
     let hatch = utils::place(&mut app, "hatch", 10, 10, 0);
@@ -1161,7 +1211,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                         "footman" => vec![MorphTransition::new(
                             "veteran",
                             MorphCourse::direct(MorphInterrupted::Reverts),
-                            Quantity::Constant(CHANGE_TIME),
+                            Quantity::from(CHANGE_TIME),
                             MorphPlacement::Reserve,
                             MorphCancel::Refundable,
                             MorphReason::Change,
@@ -1241,7 +1291,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
             kinds: Kinds::Any,
         };
         let gathering_of = |side, sight, count, shortfall| Gathering {
-            radius: Quantity::Constant(2),
+            area: Area::Around(Quantity::from(2)),
             side,
             kinds: Kinds::Any,
             sight,
@@ -1309,10 +1359,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                 Journey::FromAim {
                     party: AimParty::Around {
                         at: cell(),
-                        gathering: gathering(
-                            Count::AtMost(Quantity::Constant(2)),
-                            Shortfall::Leave,
-                        ),
+                        gathering: gathering(Count::AtMost(Quantity::from(2)), Shortfall::Leave),
                     },
                     to: FromAimTo::Caster,
                 },
@@ -1434,8 +1481,8 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                 caster: SkillCaster::Entity {
                     costs: vec![Cost::Energy(FixedU64::from_num(50))],
                     casting: Casting::Delayed {
-                        point: Quantity::Constant(3),
-                        period: Quantity::Constant(3),
+                        point: Quantity::from(3),
+                        period: Quantity::from(3),
                         pays: PaymentPoint::AtLanding,
                     },
                     effect: EntityCastEffect::Relocate {
@@ -1480,7 +1527,7 @@ fn register_recaller(app: &mut App) {
                                 reach: Reach::Wherever,
                             },
                             gathering: Gathering {
-                                radius: Quantity::Constant(2),
+                                area: Area::Around(Quantity::from(2)),
                                 side: Affiliation::Own,
                                 kinds: Kinds::Any,
                                 sight: GatherSight::Blind,

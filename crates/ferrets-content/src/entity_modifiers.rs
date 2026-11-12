@@ -25,4 +25,23 @@ impl EntityModifiers {
             }
         }
     }
+
+    /// The same modifiers laid over `stacks` times, moving what they move.
+    pub fn repeated(&self, stacks: u32) -> EntityModifiers {
+        let repeated = |modifiers: &[EntityModifier]| {
+            (0..stacks)
+                .flat_map(|_| modifiers.iter().copied())
+                .collect()
+        };
+        match self {
+            EntityModifiers::Stats(modifiers) => EntityModifiers::Stats(repeated(modifiers)),
+            EntityModifiers::PoolMaximums {
+                modifiers,
+                pool_shift,
+            } => EntityModifiers::PoolMaximums {
+                modifiers: repeated(modifiers),
+                pool_shift: *pool_shift,
+            },
+        }
+    }
 }

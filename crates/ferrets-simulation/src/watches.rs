@@ -7,7 +7,7 @@
 
 use bevy_ecs::prelude::*;
 use ferrets_content::detection::Detection;
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, projection};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection};
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
@@ -28,7 +28,7 @@ pub struct Watch {
     /// what it was aimed at.
     pub patch: CellRect,
     /// How far from the patch it reaches, in cells.
-    pub radius: u32,
+    pub reach: u32,
     /// Ticks it still holds for.
     pub remaining: u32,
     /// What it does for the player against the concealed entities standing
@@ -37,14 +37,14 @@ pub struct Watch {
 }
 
 impl Watch {
-    /// Every cell the watch reaches, row-major, unclipped to any map.
-    pub fn cells(&self) -> Vec<CellPos> {
-        projection::circle_cells(self.patch, self.radius)
+    /// Every cell the watch reaches on a map of `bounds`, row-major.
+    pub fn cells(&self, bounds: CellSize) -> Vec<CellPos> {
+        projection::circle_cells(self.patch, self.reach, bounds)
     }
 
     /// Whether the watch reaches `cell`.
     fn holds(&self, cell: CellPos) -> bool {
-        projection::in_circle(cell, self.patch, self.radius)
+        projection::in_circle(cell, self.patch, self.reach)
     }
 }
 
@@ -86,7 +86,7 @@ pub fn detects(world: &World, player: PlayerId, cell: CellPos, layers: LayerMask
     })
 }
 
-/// Puts a watch in force for `player`, `radius` cells around `patch`,
+/// Puts a watch in force for `player`, `reach` cells around `patch`,
 /// holding for `duration` ticks and detecting as `detection` says, cast by
 /// `caster`.
 pub fn open(
@@ -94,7 +94,7 @@ pub fn open(
     player: PlayerId,
     caster: SimulationId,
     patch: CellRect,
-    radius: u32,
+    reach: u32,
     duration: u32,
     detection: Detection,
 ) {
@@ -105,7 +105,7 @@ pub fn open(
         player,
         caster,
         patch,
-        radius,
+        reach,
         remaining: duration + 1,
         detection,
     });

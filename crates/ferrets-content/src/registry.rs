@@ -13,6 +13,7 @@ use ferrets_nav_grid::{
 use crate::{
     affiliation::Affiliation,
     annex::{AloneConduct, AnnexLife},
+    area::Area,
     attack::{AttackDef, Delivery, Weapon},
     brood::BroodlingDef,
     build::BuilderAttendance,
@@ -859,11 +860,13 @@ impl ContentRegistry {
                 // The least a number ever folds to: one content spells out is
                 // that number, and a stat is the floor it was registered with.
                 let least = |quantity: &Quantity| match quantity {
-                    Quantity::Constant(value) => FixedU64::from_num(*value),
+                    Quantity::Constant(value) => *value,
                     Quantity::Stat(stat) => self.entity_stat_def(*stat).floor(),
                 };
                 // A cast that lands on no tick at all never lands.
                 if let Casting::Delayed { point, period, .. } = casting {
+                    assert_whole(*point, &format!("skill '{name}' cast point"));
+                    assert_whole(*period, &format!("skill '{name}' cast period"));
                     assert!(
                         least(point) > FixedU64::ZERO,
                         "skill '{name}' is cast over no time at all: an instant cast declares no `cast`, and a point read from a stat is held to that stat's floor"
@@ -909,6 +912,7 @@ impl ContentRegistry {
                         detection,
                         ..
                     } => {
+                        assert_whole(*duration, &format!("skill '{name}' watch duration"));
                         assert!(
                             least(duration) > FixedU64::ZERO,
                             "skill '{name}' watches for no time at all"
@@ -937,6 +941,7 @@ impl ContentRegistry {
                             "skill '{name}' summons '{}', which is remains: a cast raises something from a body, it does not lay one",
                             summoned.name
                         );
+                        assert_whole(*count, &format!("skill '{name}' summon count"));
                         // A count read from a stat is truncated: a floor under
                         // one may summon nobody.
                         assert!(
@@ -949,7 +954,7 @@ impl ContentRegistry {
                         match placement {
                             SummonPlacement::Exact => {
                                 assert!(
-                                    *count == Quantity::Constant(1),
+                                    *count == Quantity::Constant(FixedU64::ONE),
                                     "skill '{name}' summons '{}' exactly in a count other than one",
                                     summoned.name
                                 );
@@ -971,7 +976,7 @@ impl ContentRegistry {
                         // would leave all but one unbound.
                         match summoned.gateway().map(GatewayDef::joins) {
                             Some(Joins::Tunnel(_)) => assert!(
-                                *count == Quantity::Constant(1),
+                                *count == Quantity::Constant(FixedU64::ONE),
                                 "skill '{name}' summons tunnel end '{}' in a count other than one",
                                 summoned.name
                             ),
@@ -1032,10 +1037,13 @@ impl ContentRegistry {
                     }
                     EntityCastEffect::Relocate { journey, .. } => {
                         match journey.gathering().map(|gathering| gathering.count) {
-                            Some(Count::AtMost(count)) => assert!(
-                                least(&count) >= FixedU64::ONE,
-                                "skill '{name}' relocates nobody at all"
-                            ),
+                            Some(Count::AtMost(count)) => {
+                                assert_whole(count, &format!("skill '{name}' gathering count"));
+                                assert!(
+                                    least(&count) >= FixedU64::ONE,
+                                    "skill '{name}' relocates nobody at all"
+                                );
+                            }
                             Some(Count::All) | None => {}
                         }
                     }
@@ -1573,6 +1581,7 @@ impl ContentRegistry {
                 MorphPlacement::Reserve | MorphPlacement::Revalidate => {}
             }
             self.validate_requires(&owner, morph.requires());
+            assert_whole(morph.time(), &format!("{owner} time"));
             // A time read from a stat the type never declares would silently
             // mean an instant change — the same validates-but-lies class as a
             // cost without its pool.
@@ -1699,6 +1708,22 @@ impl ContentRegistry {
                     "entity type '{}' splashes onto unregistered layers {unregistered}",
                     def.name
                 );
+                // The bands are read off the shooter when the shot is released.
+                let core = match splash.core().0 {
+                    Area::Around(quantity) => Some(quantity),
+                    Area::Inside => None,
+                };
+                for quantity in core
+                    .into_iter()
+                    .chain(splash.rings().map(|(width, _)| width))
+                {
+                    require_stat_carried(def, quantity, || {
+                        format!(
+                            "entity type '{}' reads a splash band from a stat it does not carry",
+                            def.name
+                        )
+                    });
+                }
             }
         }
 
@@ -1739,37 +1764,37 @@ impl ContentRegistry {
                 casting, effect, ..
             } = &skill_def.caster
             {
-                let require = |quantity: Quantity, what: &str| {
-                    if let Quantity::Stat(stat) = quantity {
-                        assert!(
-                            def.base_stat(stat).is_some(),
-                            "entity type '{}' has skill '{}' reading its {what} from a stat it does not carry",
-                            def.name,
-                            self.skill_name(skill).unwrap_or("<unregistered>"),
-                        );
-                    }
+                let message = |what: &str| {
+                    format!(
+                        "entity type '{}' has skill '{}' reading its {what} from a stat it does not carry",
+                        def.name,
+                        self.skill_name(skill).unwrap_or("<unregistered>"),
+                    )
                 };
+                let require = |quantity: Quantity, what: &str| {
+                    require_stat_carried(def, quantity, || message(what))
+                };
+                let require_area =
+                    |area: Area, what: &str| require_area_stat_carried(def, area, || message(what));
                 match effect.target() {
                     EntityCastTarget::Ground { reach }
                     | EntityCastTarget::Standing { reach, .. }
                     | EntityCastTarget::Fallen { reach, .. } => match reach {
-                        Reach::Within(cells) => require(cells, "reach"),
+                        Reach::Within(area) => require_area(area, "reach"),
                         Reach::Wherever => {}
                     },
                     EntityCastTarget::Caster => {}
                 }
                 match effect {
-                    EntityCastEffect::Watch {
-                        radius, duration, ..
-                    } => {
-                        require(*radius, "watch radius");
+                    EntityCastEffect::Watch { area, duration, .. } => {
+                        require_area(*area, "watch area");
                         require(*duration, "watch duration");
                     }
-                    EntityCastEffect::Field { radius, .. } => require(*radius, "field radius"),
+                    EntityCastEffect::Field { area, .. } => require_area(*area, "field area"),
                     EntityCastEffect::Summon { count, .. } => require(*count, "summon count"),
                     EntityCastEffect::Relocate { journey, .. } => {
                         if let Some(gathering) = journey.gathering() {
-                            require(gathering.radius, "gathering radius");
+                            require_area(gathering.area, "gathering area");
                             match gathering.count {
                                 Count::AtMost(count) => require(count, "gathering count"),
                                 Count::All => {}
@@ -1790,7 +1815,7 @@ impl ContentRegistry {
                         // are known, so the relation is held to what it would
                         // actually cast at.
                         let authored = |quantity: Quantity| match quantity {
-                            Quantity::Constant(value) => Some(FixedU64::from_num(value)),
+                            Quantity::Constant(value) => Some(value),
                             Quantity::Stat(stat) => def.base_stat(stat),
                         };
                         if let (Some(point), Some(period)) = (authored(*point), authored(*period)) {
@@ -1868,12 +1893,24 @@ impl ContentRegistry {
                 "entity type '{}' projects an unregistered field",
                 def.name
             );
+            let require = |area: Area, what: &str| {
+                require_area_stat_carried(def, area, || {
+                    format!(
+                        "entity type '{}' reads its field {what} from a stat it does not carry",
+                        def.name
+                    )
+                })
+            };
+            require(source.area(), "area");
             match source.growth() {
-                FieldGrowth::Gradual { initial_radius, .. } => assert!(
-                    initial_radius <= source.radius(),
-                    "entity type '{}' starts a field beyond its radius",
-                    def.name
-                ),
+                FieldGrowth::Gradual { starts_at, .. } => {
+                    require(starts_at, "growth start");
+                    assert!(
+                        !starts_at.known_beyond(source.area()),
+                        "entity type '{}' starts a field beyond its area",
+                        def.name
+                    );
+                }
                 FieldGrowth::Instant => {}
             }
             match source.while_rising() {
@@ -1889,11 +1926,14 @@ impl ContentRegistry {
                 (source.while_disabled(), "disabled"),
             ] {
                 match emission {
-                    Emission::Held(reach) => assert!(
-                        reach <= source.radius(),
-                        "entity type '{}' projects a field beyond its radius while {when}",
-                        def.name
-                    ),
+                    Emission::Held(held) => {
+                        require(held, "held area");
+                        assert!(
+                            !held.known_beyond(source.area()),
+                            "entity type '{}' projects a field beyond its area while {when}",
+                            def.name
+                        );
+                    }
                     Emission::Full | Emission::Nothing => {}
                 }
             }
@@ -1938,11 +1978,19 @@ impl ContentRegistry {
         }
         for act in &def.on_stand {
             match act {
-                StandingAct::Field { field, .. } => assert!(
-                    known(*field),
-                    "entity type '{}' acts on an unregistered field when it stands",
-                    def.name
-                ),
+                StandingAct::Field { field, area, .. } => {
+                    assert!(
+                        known(*field),
+                        "entity type '{}' acts on an unregistered field when it stands",
+                        def.name
+                    );
+                    require_area_stat_carried(def, *area, || {
+                        format!(
+                            "entity type '{}' reads the area of its act on standing from a stat it does not carry",
+                            def.name
+                        )
+                    });
+                }
             }
         }
         for field_effect in &def.field_effects {
@@ -3782,6 +3830,7 @@ impl ContentRegistry {
                 }
             }
         }
+        assert_whole(brood.period(), &format!("{owner} period"));
         if let Quantity::Stat(stat) = brood.period() {
             assert!(
                 def.base_stat(stat).is_some(),
@@ -4514,4 +4563,34 @@ fn contradicted_field(
             .then_some(field),
         FieldPlacement::Forbids { .. } => None,
     })
+}
+
+/// Panics unless `quantity`, a whole count or a duration in ticks, declares a
+/// whole number when it is a constant; a stat passes.
+fn assert_whole(quantity: Quantity, what: &str) {
+    match quantity {
+        Quantity::Constant(value) => assert!(
+            value.frac() == FixedU64::ZERO,
+            "{what} {value} is not a whole number"
+        ),
+        Quantity::Stat(_) => {}
+    }
+}
+
+/// Panics with `message` unless `def` carries the stat `quantity` names; a
+/// constant passes.
+fn require_stat_carried(def: &EntityTypeDef, quantity: Quantity, message: impl FnOnce() -> String) {
+    match quantity {
+        Quantity::Stat(stat) => assert!(def.base_stat(stat).is_some(), "{}", message()),
+        Quantity::Constant(_) => {}
+    }
+}
+
+/// Panics with `message` unless `def` carries the stat the gap of `area`
+/// names; `Inside` and a constant gap pass.
+fn require_area_stat_carried(def: &EntityTypeDef, area: Area, message: impl FnOnce() -> String) {
+    match area {
+        Area::Around(quantity) => require_stat_carried(def, quantity, message),
+        Area::Inside => {}
+    }
 }
