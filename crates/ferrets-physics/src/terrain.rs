@@ -1,27 +1,23 @@
-//! Bodies against standing terrain: what a circle may overlap, and how a
-//! displacement commits without entering what it may not.
+//! Bodies against standing terrain: what a body's shape may overlap, and how
+//! a displacement commits without entering what it may not.
 
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, location::Location};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, location::Location, shape::Shape};
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::{mover_shape::MoverShape, nav_grid::NavGrid};
 
-use crate::body;
-
-/// Whether a body of `shape` at `position` lies wholly on the map and
-/// overlaps only cells statically clear for it and joined, for its cliff
-/// crossing, to the cell under its position — the cell whose level is the
-/// body's.
-pub fn body_fits(
-    grid: &NavGrid,
-    shape: MoverShape,
-    position: FixedUVec2,
-    radius: FixedU64,
-) -> bool {
+/// Whether `body`, moving as `mover`, lies wholly on the map and overlaps
+/// only cells statically clear for it and joined, for its cliff crossing, to
+/// the cell its middle floors into — the start of the cliff-crossing test,
+/// not the body's level; for an even-sized body the +x+y one of its middle
+/// cells.
+pub fn body_fits(grid: &NavGrid, mover: MoverShape, body: Shape) -> bool {
+    let position = body.middle();
     let under = CellPos::from(position);
-    on_map(grid, shape, position)
-        && body::overlapped_cells(position, radius)
+    on_map(grid, mover, position)
+        && body
+            .cells()
             .into_iter()
-            .all(|cell| stands_on(grid, shape, under, cell))
+            .all(|cell| stands_on(grid, mover, under, cell))
 }
 
 /// Commits a desired position against the map's edges, the static plane and the
@@ -43,23 +39,26 @@ pub fn body_fits(
 /// it already clips it moves freely, which is accepted over freezing.
 pub fn slide_toward(
     grid: &NavGrid,
-    shape: MoverShape,
-    position: FixedUVec2,
+    mover: MoverShape,
+    body: Shape,
     desired: FixedUVec2,
-    radius: FixedU64,
 ) -> FixedUVec2 {
+    let position = body.middle();
     let from = CellPos::from(position);
-    let clipped: Vec<CellPos> = body::overlapped_cells(position, radius)
+    let clipped: Vec<CellPos> = body
+        .cells()
         .into_iter()
-        .filter(|&cell| !stands_on(grid, shape, from, cell))
+        .filter(|&cell| !stands_on(grid, mover, from, cell))
         .collect();
     let fits = |candidate: FixedUVec2| {
         let under = CellPos::from(candidate);
-        on_map(grid, shape, candidate)
-            && grid.joins(from, under, shape)
-            && body::overlapped_cells(candidate, radius)
+        on_map(grid, mover, candidate)
+            && grid.joins(from, under, mover)
+            && body
+                .moved_to(candidate)
+                .cells()
                 .into_iter()
-                .all(|cell| stands_on(grid, shape, under, cell) || clipped.contains(&cell))
+                .all(|cell| stands_on(grid, mover, under, cell) || clipped.contains(&cell))
     };
 
     let along_x = FixedUVec2::new(desired.x, position.y);
@@ -99,14 +98,14 @@ pub fn displaced(
     .middle()
 }
 
-/// Whether a body of `shape` with its middle at `position` lies wholly on the
-/// map `grid` covers.
-fn on_map(grid: &NavGrid, shape: MoverShape, position: FixedUVec2) -> bool {
-    Location::checked(position, shape.size, grid.size()).is_some()
+/// Whether a body moving as `mover` with its middle at `position` lies wholly
+/// on the map `grid` covers.
+fn on_map(grid: &NavGrid, mover: MoverShape, position: FixedUVec2) -> bool {
+    Location::checked(position, mover.size, grid.size()).is_some()
 }
 
-/// Whether a body of `shape` over `under` may overlap `cell`: the cell is
-/// statically clear for it and joined to `under` for its cliff crossing.
-fn stands_on(grid: &NavGrid, shape: MoverShape, under: CellPos, cell: CellPos) -> bool {
-    grid.cell_fits_statically(cell, shape) && grid.joins(under, cell, shape)
+/// Whether a body moving as `mover` over `under` may overlap `cell`: the cell
+/// is statically clear for it and joined to `under` for its cliff crossing.
+fn stands_on(grid: &NavGrid, mover: MoverShape, under: CellPos, cell: CellPos) -> bool {
+    grid.cell_fits_statically(cell, mover) && grid.joins(under, cell, mover)
 }

@@ -2,7 +2,7 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, location::Location};
-use ferrets_math::fixed_uvec2::FixedUVec2;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use serde::{Deserialize, Serialize};
 
 use crate::{components::movement::MoveComponent, entity_def, map::Map, occupancy::GridMark};
@@ -38,13 +38,17 @@ pub(crate) enum Settling {
 /// Moves a continuous-model body standing on the grid to `to`, its claim
 /// following it onto the footprint it is anchored at there.
 ///
-/// Panics under the cell model, for a body that claims cells but stands off
-/// the grid, and as [`entity_def::set_location`] does.
+/// Panics under the cell model, for a body that stands off the grid, and as
+/// [`entity_def::set_location`] does.
 pub fn move_body(world: &mut World, entity: Entity, to: Location) {
     match world.resource::<Map>().movement_model() {
         MovementModel::Cell => panic!("a cell-model body moves crossing by crossing"),
         MovementModel::Continuous => {}
     }
+    assert!(
+        entity_def::stands_on_grid(world, entity),
+        "a body moved with its claim stands on the grid"
+    );
     let held = entity_def::grid_mark(world, entity);
     entity_def::set_location(world, entity, to);
     let Some(from) = held else {
@@ -58,7 +62,7 @@ pub fn move_body(world: &mut World, entity: Entity, to: Location) {
 /// footprint anchored at `to` as its crossing there starts, before its
 /// position changes. A body that claims no cells has nothing to move.
 ///
-/// Panics for a body that claims cells but stands off the grid.
+/// Panics for a body that stands off the grid.
 pub fn step_claim(world: &mut World, entity: Entity, to: CellPos) {
     let Some(from) = entity_def::grid_mark(world, entity) else {
         return;
@@ -124,6 +128,20 @@ pub fn at_point(world: &World, walker: Entity, target: FixedUVec2) -> bool {
         MovementModel::Cell => !standing.is_mid_crossing() && standing.anchor() == spot.anchor(),
         MovementModel::Continuous => standing.middle() == spot.middle(),
     }
+}
+
+/// Whether `position` lies on a cell-model crossing from the anchored
+/// position `from` to the anchored position `to`: on the straight segment
+/// between them, both axes advancing in step on a diagonal.
+pub(crate) fn lies_on_crossing(position: FixedUVec2, from: FixedUVec2, to: FixedUVec2) -> bool {
+    let between =
+        |value: FixedU64, a: FixedU64, b: FixedU64| a.min(b) <= value && value <= a.max(b);
+    let progress = |value: FixedU64, origin: FixedU64| value.abs_diff(origin);
+    between(position.x, from.x, to.x)
+        && between(position.y, from.y, to.y)
+        && (from.x == to.x
+            || from.y == to.y
+            || progress(position.x, from.x) == progress(position.y, from.y))
 }
 
 /// Settles a cell-model walker caught mid-crossing onto the cell it is

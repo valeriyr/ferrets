@@ -29,6 +29,7 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSi
 use ferrets_math::{
     FixedU64,
     facing::{self, Facing},
+    fixed_urect::FixedURect,
     fixed_uvec2::FixedUVec2,
 };
 use ferrets_nav_grid::{
@@ -474,6 +475,14 @@ pub(crate) fn world_point(position: FixedUVec2) -> Vec3 {
         position.x.to_num::<f32>() * CELL_PX,
         -position.y.to_num::<f32>() * CELL_PX,
         1.0,
+    )
+}
+
+/// Where a simulation rectangle is drawn, in pixels.
+pub(crate) fn world_rect(bounds: FixedURect) -> Rect {
+    Rect::from_corners(
+        world_point(bounds.min()).truncate(),
+        world_point(bounds.max()).truncate(),
     )
 }
 

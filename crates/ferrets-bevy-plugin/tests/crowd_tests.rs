@@ -8,11 +8,15 @@
 mod utils;
 
 use bevy::prelude::App;
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_content::{
+    domain::DomainDef, layer::LayerLevel, location::Solidity, terrains::Terrains,
+};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
 use ferrets_math::FixedU64;
 use ferrets_simulation::{
     command::{PlayerCommand, SelectMode},
     components::{order_queue::OrderQueueComponent, stance::Stance},
+    entity_def,
     map::Map,
     movement_model::MovementModel,
     order::AttackTarget,
@@ -93,6 +97,118 @@ fn head_on_movers_of_different_domains_swap_in_corridor() {
     assert_eq!(utils::anchor_of(world, right), CellPos::new(2, 5));
     assert!(utils::order_queue_is_empty(world, left));
     assert!(utils::order_queue_is_empty(world, right));
+}
+
+#[test]
+fn head_on_movers_swap_beneath_fliers() {
+    // The sealed corridor of the swap, with an idle flier hovering over each
+    // cell between the two, every one of a lower id: a claim on the air
+    // layer is no claim on the ground the soldiers step into.
+    let mut app = utils::dry_orders_app(MovementModel::Cell, &[], |registry, _| {
+        assert_eq!(
+            registry.register_layer("air", LayerLevel::At(2), &[]),
+            utils::AIR
+        );
+        let air = registry.register_domain("air", DomainDef::new(utils::AIR, Terrains::Any, None));
+        let mut drone = registry
+            .entity("soldier")
+            .expect("the orders content declares a soldier")
+            .clone()
+            .with_location(air, CellSize::ONE, Solidity::Solid, utils::AIR);
+        drone.name = "drone".to_string();
+        registry.register(drone);
+    });
+    corridor(&mut app);
+    let drones: Vec<_> = (3..=5)
+        .map(|x| utils::create_owned(&mut app, "drone", x, 5, 0).0)
+        .collect();
+    let (left, left_id) = utils::create_owned(&mut app, "soldier", 2, 5, 0);
+    let (right, right_id) = utils::create_owned(&mut app, "soldier", 6, 5, 0);
+
+    utils::select(&mut app, left_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(7, 5),
+            flush: true,
+        },
+    );
+    utils::select(&mut app, right_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(2, 5),
+            flush: true,
+        },
+    );
+
+    utils::run_ticks(&mut app, 120);
+
+    let world = app.world_mut();
+    assert_eq!(utils::anchor_of(world, left), CellPos::new(7, 5));
+    assert_eq!(utils::anchor_of(world, right), CellPos::new(2, 5));
+    // No soldier took a drone for its blocker: none was asked aside.
+    for (drone, x) in drones.into_iter().zip(3..=5) {
+        assert_eq!(utils::anchor_of(world, drone), CellPos::new(x, 5));
+    }
+}
+
+#[test]
+fn head_on_movers_swap_over_seated_bodies() {
+    // The sealed corridor of the swap, a sow north of it at (4, 2) with its
+    // two hogs, of lower ids than either walker, seated on berths 3.5 cells
+    // south of it, over the cells where the walkers meet: a seated body
+    // stands off the grid, so its seat claims nothing the walkers step into.
+    let mut app = utils::brood_app(MovementModel::Cell);
+    corridor(&mut app);
+    utils::create_owned(&mut app, "sow", 4, 2, 0);
+    // A hog is bred every tenth tick, up to two, seated at x 4 + 0.5 and
+    // 4 + 1.
+    utils::run_ticks(&mut app, 20);
+    let hogs = utils::owned_of_type(app.world_mut(), "hog", 0);
+    let hog_middles = |app: &App| {
+        let mut middles = hogs
+            .iter()
+            .map(|&hog| utils::position_of(app.world(), hog))
+            .collect::<Vec<_>>();
+        middles.sort_by_key(|middle| middle.x);
+        middles
+    };
+    assert_eq!(
+        hog_middles(&app),
+        vec![utils::point("4.5", "5.5"), utils::point("5", "5.5")]
+    );
+    let (left, left_id) = utils::create_owned(&mut app, "flit", 2, 5, 0);
+    let (right, right_id) = utils::create_owned(&mut app, "flit", 6, 5, 0);
+    for &hog in &hogs {
+        assert!(entity_def::simulation_id(app.world(), hog) < left_id);
+    }
+
+    utils::select(&mut app, left_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(7, 5),
+            flush: true,
+        },
+    );
+    utils::select(&mut app, right_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(2, 5),
+            flush: true,
+        },
+    );
+
+    utils::run_ticks(&mut app, 120);
+
+    assert_eq!(utils::anchor_of(app.world_mut(), left), CellPos::new(7, 5));
+    assert_eq!(utils::anchor_of(app.world_mut(), right), CellPos::new(2, 5));
+    assert_eq!(
+        hog_middles(&app),
+        vec![utils::point("4.5", "5.5"), utils::point("5", "5.5")]
+    );
 }
 
 #[test]

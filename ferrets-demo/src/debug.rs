@@ -4,24 +4,27 @@ use bevy::{prelude::*, window::PrimaryWindow};
 use ferrets_bevy_plugin::{PendingInput, TickPacing};
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+    shape::Shape,
 };
 use ferrets_math::fixed_uvec2::FixedUVec2;
 
-use ferrets_content::{entity_stats::EntityStatId, registry::ContentRegistry};
+use ferrets_content::registry::ContentRegistry;
 use ferrets_nav_grid::slope::Slope;
 use ferrets_simulation::{
     command::{PlayerCommand, SkillTarget},
     components::{
-        dying::RemainsComponent, entity_info::EntityInfoComponent, entity_stats::StatsComponent,
-        location::LocationComponent, movement::MoveComponent, order_queue::OrderQueueComponent,
-        patrol::PatrolComponent,
+        dying::RemainsComponent, entity_info::EntityInfoComponent, location::LocationComponent,
+        movement::MoveComponent, order_queue::OrderQueueComponent, patrol::PatrolComponent,
     },
+    entity_def,
+    entity_index::EntityIndex,
     map::Map,
     movement_model::MovementModel,
+    occupancy::OccupancyClass,
     order::{AttackTarget, BuildTask, MoveGoal, Order},
     selection::Selection,
     session::GameSession,
-    visibility::{Sighting, VisibilityGrid},
+    visibility::VisibilityGrid,
 };
 
 use crate::{
@@ -230,138 +233,169 @@ pub fn debug_readout(
     }
 }
 
-/// Draws a faint grid over the playable area, tinting occupied ground cells
-/// (run in `Update`), when enabled.
-pub fn draw_grid(
-    mut gizmos: Gizmos,
-    map: Res<Map>,
-    registry: Res<ContentRegistry>,
-    debug: Res<DebugState>,
-    session: Res<GameSession>,
-    fog: Res<VisibilityGrid>,
-    watch: Res<render::ObserverPerspective>,
-    reveal: Res<FogReveal>,
-    shimmering: Query<(&EntityInfoComponent, &LocationComponent, &render::Sighted)>,
-) {
-    if !debug.grid {
+/// Who marks a cell of the shown layer, as the occupancy fill weighs it.
+#[derive(Clone, Copy)]
+enum Marked {
+    /// No body standing on the grid.
+    Nobody,
+    /// Only bodies the perspective does not make out.
+    UnmadeOnly,
+    /// At least one body the perspective makes out.
+    MadeOut,
+}
+
+/// Draws a faint grid over the playable area, tinting the occupied cells of
+/// the chosen layer that the perspective sees (run in `Update`), when
+/// enabled. A cell only a body the perspective does not make out marks stays
+/// untinted, as if that body were not there.
+pub fn draw_grid(world: &World, mut draw: Gizmos) {
+    if !world.resource::<DebugState>().grid {
         return;
     }
-    let (w, h) = (map.width() as f32, map.height() as f32);
+    let map = world.resource::<Map>();
+    let (width, height) = (map.width(), map.height());
     let line = Color::srgba(0.0, 0.0, 0.0, 0.15);
 
-    // The footprints of what the perspective only glimpses: a filled cell
-    // there would pin the shimmer, so those cells are left unfilled.
-    let hidden_footprints: Vec<CellRect> = shimmering
-        .iter()
-        .filter(|(.., sighted)| match sighted.0 {
-            Sighting::Glimpsed => true,
-            Sighting::Seen | Sighting::Unseen => false,
-        })
-        .map(|(info, location, _)| {
-            map.location(
-                location.position,
-                registry.def(info.type_id()).location.unwrap().size(),
-            )
-            .footprint()
-        })
-        .collect();
-
-    // Fill occupied cells so the nav grid's occupancy is visible at a glance —
-    // but only where this node can see, so fogged entities' footprints don't
-    // leak their positions through the overlay.
-    let nav_grid = map.nav_grid();
-    if let Some(layer) = registry.layer(&debug.layer) {
-        for y in 0..map.height() {
-            for x in 0..map.width() {
-                let cell = CellPos::new(x, y);
-                if nav_grid.is_occupied(layer, cell)
-                    && (reveal.reveals() || render::sees(&session, &watch, &fog, x, y))
-                    && !hidden_footprints
-                        .iter()
-                        .any(|footprint| footprint.contains(cell))
-                {
-                    fill_cell(&mut gizmos, x, y);
+    let filled: Vec<CellPos> = match world
+        .resource::<ContentRegistry>()
+        .layer(&world.resource::<DebugState>().layer)
+    {
+        Some(layer) => {
+            // Who marks each cell, row-major: a cell only bodies the perspective
+            // does not make out mark would pin a shimmer, or show a body in the
+            // fog stepping into sight.
+            let index = |cell: CellPos| (cell.y * width + cell.x) as usize;
+            let mut marked = vec![Marked::Nobody; (width * height) as usize];
+            for (_, entity) in world.resource::<EntityIndex>().all_entries() {
+                let Some(mark) = entity_def::claim_on(world, entity, layer.into()) else {
+                    continue;
+                };
+                let made = made_out(world, entity);
+                for cell in mark.cells() {
+                    let by = &mut marked[index(cell)];
+                    *by = if made {
+                        Marked::MadeOut
+                    } else {
+                        match *by {
+                            Marked::Nobody | Marked::UnmadeOnly => Marked::UnmadeOnly,
+                            Marked::MadeOut => Marked::MadeOut,
+                        }
+                    };
                 }
             }
+            let seen = perspective_sees(world);
+            CellRect::new(CellPos::new(0, 0), CellSize::new(width, height))
+                .cells()
+                .filter(|&cell| {
+                    map.nav_grid().is_occupied(layer, cell)
+                        && seen(&cell)
+                        && match marked[index(cell)] {
+                            Marked::Nobody | Marked::MadeOut => true,
+                            Marked::UnmadeOnly => false,
+                        }
+                })
+                .collect()
         }
-    }
+        None => Vec::new(),
+    };
 
-    for x in 0..=map.width() {
-        let xp = x as f32 * CELL_PX;
-        gizmos.line_2d(Vec2::new(xp, 0.0), Vec2::new(xp, -h * CELL_PX), line);
+    for cell in filled {
+        fill_cell(&mut draw, cell.x, cell.y);
     }
-    for y in 0..=map.height() {
-        let yp = -(y as f32) * CELL_PX;
-        gizmos.line_2d(Vec2::new(0.0, yp), Vec2::new(w * CELL_PX, yp), line);
+    let (width_px, height_px) = (width as f32 * CELL_PX, height as f32 * CELL_PX);
+    for x in 0..=width {
+        let x_px = x as f32 * CELL_PX;
+        draw.line_2d(Vec2::new(x_px, 0.0), Vec2::new(x_px, -height_px), line);
+    }
+    for y in 0..=height {
+        let y_px = -(y as f32) * CELL_PX;
+        draw.line_2d(Vec2::new(0.0, y_px), Vec2::new(width_px, y_px), line);
     }
 }
 
-/// Draws each mover's collision circle and a line from its center to the
-/// one cell it claims while the debug overlay is on and the game runs the
-/// continuous model (run in `Update`). The circle is the contact truth, the
-/// line points at the claim derived from it — together they make occupancy
-/// checkable at a glance: bodies may touch and even share a claimed cell,
-/// but circles must never interpenetrate. Fogged movers stay undrawn, like
-/// the grid's occupancy fill.
-pub fn draw_bodies(
-    mut gizmos: Gizmos,
-    debug: Res<DebugState>,
-    map: Res<Map>,
-    session: Res<GameSession>,
-    fog: Res<VisibilityGrid>,
-    watch: Res<render::ObserverPerspective>,
-    reveal: Res<FogReveal>,
-    registry: Res<ContentRegistry>,
-    movers: Query<(
-        &EntityInfoComponent,
-        &LocationComponent,
-        &StatsComponent,
-        &Visibility,
-        Option<&render::Sighted>,
-    )>,
-) {
-    const BODY: Color = Color::srgb(0.35, 0.9, 1.0);
-    const CLAIM: Color = Color::srgba(0.35, 0.9, 1.0, 0.5);
+/// What the debug overlay outlines of one body standing on the grid.
+struct BodyOutline {
+    /// Its exact shape.
+    shape: Shape,
+    /// The cells it stands on for the grid that the perspective sees.
+    cells: Vec<CellPos>,
+    /// The cells it claims on the claim plane that the perspective sees.
+    claim: Vec<CellPos>,
+}
 
-    if !debug.grid {
+/// Draws, while the debug overlay is on, each body's exact shape, the cells it
+/// stands on for the grid and the cells it claims, under either movement
+/// model, as the engine's own readers give them (run in `Update`). Bodies the
+/// perspective does not make out stay undrawn, and a drawn body's cells are
+/// drawn only where it sees, like the grid's occupancy fill.
+pub fn draw_bodies(world: &World, mut draw: Gizmos) {
+    const SHAPE: Color = Color::srgb(0.35, 0.9, 1.0);
+    const CELLS: Color = Color::srgba(0.35, 0.9, 1.0, 0.35);
+    const CLAIM: Color = Color::srgba(1.0, 0.8, 0.2, 0.6);
+
+    if !world.resource::<DebugState>().grid {
         return;
     }
-    match map.movement_model() {
-        MovementModel::Cell => return,
-        MovementModel::Continuous => {}
-    }
+    let outlines: Vec<BodyOutline> = {
+        let seen = perspective_sees(world);
+        world
+            .resource::<EntityIndex>()
+            .alive_entries()
+            .into_iter()
+            // A body the perspective does not make out is not outlined: an
+            // outline at its exact place would pin a shimmer or show it in the
+            // fog.
+            .filter(|&(_, entity)| made_out(world, entity))
+            .filter_map(|(_, entity)| {
+                entity_def::body_cells(world, entity).map(|cells| BodyOutline {
+                    shape: entity_def::shape(world, entity),
+                    cells: cells.into_iter().filter(|cell| seen(cell)).collect(),
+                    claim: match entity_def::grid_mark(world, entity) {
+                        Some(mark) => match mark.class {
+                            OccupancyClass::Claim => {
+                                mark.footprint.cells().filter(|cell| seen(cell)).collect()
+                            }
+                            OccupancyClass::Static => Vec::new(),
+                        },
+                        None => Vec::new(),
+                    },
+                })
+            })
+            .collect()
+    };
 
-    for (info, location, stats, visibility, sighted) in &movers {
-        let def = registry.def(info.type_id());
-        let claims = def
-            .location
-            .is_some_and(|location| location.solidity().claims_cells());
-        if !def.can_move() || !claims {
-            continue;
+    for outline in outlines {
+        match outline.shape {
+            Shape::Box(bounds) => {
+                let rect = render::world_rect(bounds);
+                draw.rect_2d(
+                    Isometry2d::from_translation(rect.center()),
+                    rect.size(),
+                    SHAPE,
+                );
+            }
+            Shape::Circle { middle, radius } => {
+                draw.circle_2d(
+                    render::world_point(middle).truncate(),
+                    radius.to_num::<f32>() * CELL_PX,
+                    SHAPE,
+                );
+            }
         }
-        // A body the perspective only glimpses is not outlined: the shimmer
-        // is all it shows, and a circle at its exact position would pin it.
-        if !render::made_out(visibility, sighted) {
-            continue;
+        for cell in outline.cells {
+            draw.rect_2d(
+                Isometry2d::from_translation(render::cell_point(cell).truncate()),
+                Vec2::splat(CELL_PX * 0.8),
+                CELLS,
+            );
         }
-        let size = def.location.expect("a mover stands somewhere").size();
-        let cell = map.location(location.position, size).anchor();
-        if !(reveal.reveals() || render::sees(&session, &watch, &fog, cell.x, cell.y)) {
-            continue;
+        for cell in outline.claim {
+            draw.rect_2d(
+                Isometry2d::from_translation(render::cell_point(cell).truncate()),
+                Vec2::splat(CELL_PX),
+                CLAIM,
+            );
         }
-        let Some(radius) = stats.effective(EntityStatId::RADIUS) else {
-            continue;
-        };
-
-        let center = render::world_point(location.position).truncate();
-        gizmos.circle_2d(center, radius.to_num::<f32>() * CELL_PX, BODY);
-
-        let claimed = Vec2::new(
-            (cell.x as f32 + 0.5) * CELL_PX,
-            -(cell.y as f32 + 0.5) * CELL_PX,
-        );
-        gizmos.line_2d(center, claimed, CLAIM);
-        gizmos.circle_2d(claimed, 2.0, CLAIM);
     }
 }
 
@@ -726,4 +760,24 @@ fn cursor_world(
     let (window, (camera, camera_transform)) = (windows.single().ok()?, cameras.single().ok()?);
     let cursor = window.cursor_position()?;
     camera.viewport_to_world_2d(camera_transform, cursor).ok()
+}
+
+/// Whether the perspective makes `entity` out, as its sprite is shown: never
+/// one off the map, whose sprite is hidden.
+fn made_out(world: &World, entity: Entity) -> bool {
+    world.get::<Visibility>(entity).is_some_and(|visibility| {
+        render::made_out(visibility, world.get::<render::Sighted>(entity))
+    })
+}
+
+/// The perspective's test of whether it sees a cell: everywhere under the fog
+/// reveal, else where its fog shows the cell.
+fn perspective_sees(world: &World) -> impl Fn(&CellPos) -> bool + '_ {
+    let reveals = world.resource::<FogReveal>().reveals();
+    let (session, watch, fog) = (
+        world.resource::<GameSession>(),
+        world.resource::<render::ObserverPerspective>(),
+        world.resource::<VisibilityGrid>(),
+    );
+    move |cell| reveals || render::sees(session, watch, fog, cell.x, cell.y)
 }

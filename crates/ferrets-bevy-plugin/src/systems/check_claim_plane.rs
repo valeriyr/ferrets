@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use ferrets_simulation::game_loop;
 
-/// Checks, in debug builds, that the claim plane matches the bodies on it.
+/// Checks, in debug builds, that the claim plane matches the bodies on it and
+/// that those bodies stand where the grid can read them.
 pub fn check_claim_plane(world: &mut World) {
     game_loop::claim_plane::check(world);
 }

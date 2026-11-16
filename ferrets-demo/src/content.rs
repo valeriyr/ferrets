@@ -1525,7 +1525,7 @@ pub const CONTENT: &str = r#"
         -- raised on top of it.
         location = { domain = "ground", size = 1, solidity = "underfoot" },
         stats = {
-            radius = "0.5", weight = 2,
+            weight = 2,
             sight_range = 6,
             supply_cost = 1,
         },

@@ -948,7 +948,11 @@ pub(crate) fn seat_body(world: &mut World, entity: Entity, point: FixedUVec2) {
 
 /// Takes an entity out of the berth it sits in, if any, giving the berth back
 /// to the job. The entity is otherwise untouched, standing where its berth
-/// was with nothing under it.
+/// was with nothing under it: on the grid by [`entity_def::stands_on_grid`]
+/// yet at the seat point, until it is seated again, set down or hidden. No
+/// grid reader runs on it meanwhile; under the cell model
+/// [`entity_def::grid_mark`] panics for it when its seat point lies off the
+/// lattice.
 pub(crate) fn unseat(world: &mut World, entity: Entity) -> Option<AttachedComponent> {
     let attached = world.entity_mut(entity).take::<AttachedComponent>()?;
     berths::vacate(world, &attached);

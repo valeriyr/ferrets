@@ -7,3 +7,4 @@ pub mod cell_size;
 pub mod grid_line;
 pub mod location;
 pub mod projection;
+pub mod shape;

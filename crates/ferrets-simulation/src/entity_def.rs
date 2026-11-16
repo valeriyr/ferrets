@@ -2,7 +2,7 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{
-    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, location::Location,
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, location::Location, shape::Shape,
 };
 use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_physics::body;
@@ -180,9 +180,7 @@ pub fn died(world: &World, entity: Entity) -> bool {
 
 /// Whether `entity` stands on the map, alive: on the grid, with a place.
 pub fn stands(world: &World, entity: Entity) -> bool {
-    world.entity(entity).contains::<LocationComponent>()
-        && stands_on_grid(world, entity)
-        && !dying(world, entity)
+    stands_on_grid(world, entity) && !dying(world, entity)
 }
 
 /// Whether a relocation may move `entity`: standing on the map, finished,
@@ -284,7 +282,7 @@ pub fn pending_reveal(world: &World, entity: Entity) -> bool {
 }
 
 /// Whether `entity` holds its footprint's cells on the navigation grid: it is
-/// neither hidden nor attached to a job.
+/// neither hidden — so it has a location — nor attached to a job.
 pub fn stands_on_grid(world: &World, entity: Entity) -> bool {
     let entity_ref = world.entity(entity);
     !entity_ref.contains::<HiddenComponent>() && !entity_ref.contains::<AttachedComponent>()
@@ -617,27 +615,17 @@ pub fn quantity_count(world: &World, entity: Entity, quantity: Quantity) -> u32 
 /// on the cell model, a body mid-crossing marks the anchor its crossing
 /// claimed.
 ///
-/// Panics for an entity with no location.
+/// Panics for a body off the grid — hidden, or seated in a berth — and for a
+/// cell-model body off its cells with no walk stepping it on.
 pub fn grid_mark(world: &World, entity: Entity) -> Option<GridMark> {
+    assert!(
+        stands_on_grid(world, entity),
+        "a body read for its grid mark stands on the grid"
+    );
     let def = of(world, entity);
-    let standing = location(world, entity);
-    let mut anchor = standing.anchor();
-    match world.resource::<Map>().movement_model() {
-        MovementModel::Cell => {
-            if standing.is_mid_crossing()
-                && let Some(claimed) = world
-                    .entity(entity)
-                    .get::<MoveComponent>()
-                    .and_then(|movement| movement.path.last().copied())
-            {
-                anchor = claimed;
-            }
-        }
-        MovementModel::Continuous => {}
-    }
     grid_mark_of(
         simulation_id(world, entity),
-        anchor,
+        grid_anchor(world, entity),
         def.location
             .expect("a body standing on the grid has a location"),
         OccupancyClass::of(def),
@@ -658,6 +646,20 @@ pub fn grid_mark_of(
         layers: def.occupies(),
         class,
     })
+}
+
+/// The cells `entity` marks on the grid on any of `layers` — its claim, or a
+/// static body's stamp (see [`grid_mark`]): `None` for a body off the grid,
+/// for one that marks no cells, and for one on none of `layers`.
+///
+/// Panics as [`grid_mark`] does for a cell-model body off its cells.
+pub fn claim_on(world: &World, entity: Entity, layers: LayerMask) -> Option<CellRect> {
+    if !stands_on_grid(world, entity) {
+        return None;
+    }
+    grid_mark(world, entity)
+        .filter(|mark| mark.layers & layers != LayerMask::EMPTY)
+        .map(|mark| mark.footprint)
 }
 
 /// The shape a body of `location_def` stands and routes with.
@@ -1041,31 +1043,64 @@ pub fn standing_rect(world: &World, entity: Entity) -> CellRect {
     body::standing_rect(location(world, entity))
 }
 
-/// The cells `entity`'s body lies over where it stands, by its true shape:
-/// under the cell model the cells its bounds cover (see
-/// [`body::covered_rect`]), under the continuous model the cells its circle's
-/// bounding box spans (see [`body::circle_rect`]).
+/// `entity`'s exact shape where it stands: a continuous mover's circle of
+/// its radius around its position; on the cell model, or for a body that
+/// never walks, the box of its bounds.
 ///
-/// Panics if `entity` is not a simulation entity, or its type declares no
-/// location, or under the continuous model carries no radius stat.
-pub fn covered_rect(world: &World, entity: Entity) -> CellRect {
-    match world.resource::<Map>().movement_model() {
-        MovementModel::Cell => body::covered_rect(location(world, entity)),
-        MovementModel::Continuous => {
-            body::circle_rect(position(world, entity), radius(world, entity))
-        }
+/// Panics if `entity` is not a simulation entity, is off the map (a hidden
+/// one stands nowhere), its type declares no location, or a continuous mover
+/// carries no radius stat.
+pub fn shape(world: &World, entity: Entity) -> Shape {
+    shape_of(world, entity, location(world, entity))
+}
+
+/// The shape `entity` would have standing anchored at `anchor`, as
+/// [`shape`] gives it where it stands.
+///
+/// Panics as [`shape`] does, and if a body of `entity`'s size anchored at
+/// `anchor` does not lie wholly on the map.
+pub fn shape_at(world: &World, entity: Entity, anchor: CellPos) -> Shape {
+    let at = world
+        .resource::<Map>()
+        .location_at(anchor, size(world, entity));
+    shape_of(world, entity, at)
+}
+
+/// The cells `entity`'s body stands on for questions about the grid, in
+/// row-major order: for a mover on the continuous model the cells its
+/// [`shape`] overlaps where it stands; for any other body the cells its
+/// shape overlaps at the anchor it holds the grid at — the cells it marks
+/// there (its claim, or a static body's stamp), or for one that marks none
+/// those at the anchor it steps to. `None` for a body off the grid:
+/// seated in a berth or hidden.
+///
+/// Panics as [`shape`] does, and as [`grid_mark`] does for a cell-model body
+/// off its cells.
+pub fn body_cells(world: &World, entity: Entity) -> Option<Vec<CellPos>> {
+    if !stands_on_grid(world, entity) {
+        return None;
     }
+    let shape = match (
+        world.resource::<Map>().movement_model(),
+        of(world, entity).can_move(),
+    ) {
+        (MovementModel::Continuous, true) => shape(world, entity),
+        (MovementModel::Cell, true) | (MovementModel::Cell | MovementModel::Continuous, false) => {
+            shape_at(world, entity, grid_anchor(world, entity))
+        }
+    };
+    Some(shape.cells())
 }
 
 /// The cells a placement on the plane `occupancy` selects measures `entity`
-/// by: for a footprint on the static plane its true shape (see
-/// [`covered_rect`]); for one on the claim plane its claim, or the cells it
-/// stands across when it claims none.
+/// by: for a footprint on the static plane the whole cells its [`shape`]'s
+/// bounds lie over ([`Shape::cell_bounds`]); for one on the claim plane its
+/// claim, or the cells it stands across when it claims none.
 ///
-/// Panics as [`covered_rect`] and [`grid_mark`] do.
+/// Panics as [`shape`] and [`grid_mark`] do.
 pub fn measured_rect(world: &World, entity: Entity, occupancy: OccupancyClass) -> CellRect {
     match occupancy {
-        OccupancyClass::Static => covered_rect(world, entity),
+        OccupancyClass::Static => shape(world, entity).cell_bounds(),
         OccupancyClass::Claim => match grid_mark(world, entity) {
             Some(mark) => mark.footprint,
             None => standing_rect(world, entity),
@@ -1237,5 +1272,39 @@ fn own_rect(world: &World, entity: Entity) -> CellRect {
         went_in_rect(world, entity)
     } else {
         location(world, entity).footprint()
+    }
+}
+
+/// The shape `entity` has standing at `at` (see [`shape`]).
+fn shape_of(world: &World, entity: Entity, at: Location) -> Shape {
+    match (
+        world.resource::<Map>().movement_model(),
+        of(world, entity).can_move(),
+    ) {
+        (MovementModel::Continuous, true) => Shape::Circle {
+            middle: at.middle(),
+            radius: radius(world, entity),
+        },
+        (MovementModel::Cell, true) | (MovementModel::Cell | MovementModel::Continuous, false) => {
+            Shape::Box(at.bounds())
+        }
+    }
+}
+
+/// The anchor `entity` holds the grid at: on the cell model a body
+/// mid-crossing holds the anchor its crossing steps to, else the anchor it
+/// stands at.
+///
+/// Panics for a cell-model body off its cells with no walk stepping it on:
+/// a body standing on the grid keeps to the cell lattice but for a crossing.
+fn grid_anchor(world: &World, entity: Entity) -> CellPos {
+    let standing = location(world, entity);
+    match world.resource::<Map>().movement_model() {
+        MovementModel::Cell if standing.is_mid_crossing() => world
+            .entity(entity)
+            .get::<MoveComponent>()
+            .and_then(|movement| movement.path.last().copied())
+            .expect("a cell-model body off its cells is crossing toward the anchor it steps to"),
+        MovementModel::Cell | MovementModel::Continuous => standing.anchor(),
     }
 }

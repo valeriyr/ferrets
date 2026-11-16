@@ -261,7 +261,9 @@ pub fn run() {
                 hud::leave_button,
                 debug::toggle_debug,
                 debug::debug_readout.in_set(render::ReadsSightings),
-                debug::draw_grid.in_set(render::ReadsSightings),
+                debug::draw_grid
+                    .in_set(render::ReadsSightings)
+                    .after(render::interpolate_sprites),
                 // Reads the fog Visibility that interpolate_sprites writes, so it
                 // must run after it — otherwise a fogged unit's orders can flash.
                 debug::draw_orders.after(render::interpolate_sprites),
@@ -311,7 +313,9 @@ pub fn run() {
             Update,
             (
                 debug::draw_hierarchy,
-                debug::draw_bodies.in_set(render::ReadsSightings),
+                debug::draw_bodies
+                    .in_set(render::ReadsSightings)
+                    .after(render::interpolate_sprites),
             )
                 .run_if(in_state(GameState::InGame)),
         )

@@ -10,13 +10,14 @@ use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
 pub struct LocationComponent {
     /// The body's middle, in simulation coordinates with sub-cell precision.
     ///
-    /// Under the cell movement model a body keeps to the cell lattice: lined up
-    /// on its cells, its middle is its anchored position, and mid-crossing it
-    /// lies on the straight segment between the anchored positions of its
-    /// crossing's two anchors — every write outside the movement step must
-    /// preserve this. Under the continuous model a mover's position is any
-    /// point that keeps its body on the map; entities that cannot move keep to
-    /// anchored positions in both models.
+    /// Under the cell movement model a body standing on the grid keeps to the
+    /// cell lattice: lined up on its cells, its middle is its anchored
+    /// position, and mid-crossing it lies on the straight segment between the
+    /// anchored positions of its crossing's two anchors — every write outside
+    /// the movement step must preserve this. Under the continuous model a
+    /// mover's position is any point that keeps its body on the map; entities
+    /// that cannot move and stand on the grid keep to anchored positions in
+    /// both models. A body seated in a berth stands at its seat point.
     pub position: FixedUVec2,
     /// Which way the body itself points. A weapon that bears independently of the
     /// body keeps its own.

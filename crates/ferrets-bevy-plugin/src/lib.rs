@@ -123,7 +123,8 @@
 //!                      standing, or a scripted scenario's verdict)
 //! check_claim_plane  — exclusive system; in debug builds, assert the claim plane
 //!                      holds exactly the claims of the bodies on the grid and
-//!                      the reservations of changes under way
+//!                      the reservations of changes under way, and that the
+//!                      bodies stand where the grid can read them
 //! tick_counter       — advance the simulation tick
 //! ```
 //!

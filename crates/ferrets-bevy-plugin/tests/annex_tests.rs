@@ -7,13 +7,10 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::registry::ContentRegistry;
-use ferrets_geometry::cell_pos::CellPos;
 use ferrets_simulation::{
-    annex,
     command::PlayerCommand,
     components::{
         annex::{AnnexComponent, Docking, DocksComponent},
-        location::LocationComponent,
         research::ResearchComponent,
         rise::{RiseAttendance, RisingComponent},
     },
@@ -209,40 +206,6 @@ fn training_waits_behind_raising_annex() {
     // Two ticks of training once the queue reaches it.
     utils::run_ticks(&mut app, 2);
     assert_eq!(utils::count_of_type(app.world_mut(), "runner"), 1);
-}
-
-#[test]
-fn primary_between_cells_raises_its_annex_on_whole_cell() {
-    let mut app = utils::annex_app();
-    let (keep, keep_id) = utils::create_owned(&mut app, "keep", 10, 10, 0);
-    // Standing past the middle of its cell, as a form set down there by hand
-    // would: its low corner (10.6, 10) floors to ten and rounds to eleven, so
-    // the dock can only land where the rounding rule puts it.
-    app.world_mut()
-        .get_mut::<LocationComponent>(keep)
-        .unwrap()
-        .position = utils::point("11.6", "11");
-    utils::grant_gold(&mut app, 10);
-
-    // Its dock is read from the cell its footprint anchors to, not from the
-    // fraction it stands on, so it still names a whole cell.
-    let lookout = app
-        .world()
-        .resource::<ContentRegistry>()
-        .entity("lookout")
-        .expect("lookout is registered");
-    let dock = annex::dock_anchor_for(app.world(), keep, lookout).expect("the keep offers one");
-    assert_eq!(dock, CellPos::new(13, 10));
-
-    utils::build_entity(&mut app, keep_id, "lookout", dock.x, dock.y);
-    utils::run_ticks(&mut app, utils::APPLY + 6);
-    let lookout = utils::single_owned_of_type(app.world_mut(), "lookout", 0);
-    assert_eq!(
-        entity_def::position(app.world(), lookout),
-        dock.middle(),
-        "the annex stands on the cell, whatever its primary is standing on"
-    );
-    assert_eq!(primary_of(&app, lookout), Docking::Primary(keep_id));
 }
 
 //

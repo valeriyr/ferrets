@@ -2,8 +2,8 @@
 
 mod utils;
 
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
-use ferrets_math::FixedI64;
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, shape::Shape};
+use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     mover_shape::MoverShape,
@@ -25,8 +25,7 @@ fn body_fits_open_ground() {
     assert!(terrain::body_fits(
         &grid,
         utils::ground_shape(),
-        utils::point("3.5", "3.5"),
-        utils::cells("0.5"),
+        circle(utils::point("3.5", "3.5"), utils::cells("0.5"))
     ));
 }
 
@@ -37,8 +36,7 @@ fn body_reaching_into_wall_does_not_fit() {
     assert!(!terrain::body_fits(
         &grid,
         utils::ground_shape(),
-        utils::point("5.2", "5.5"),
-        utils::cells("0.5"),
+        circle(utils::point("5.2", "5.5"), utils::cells("0.5"))
     ));
 }
 
@@ -50,8 +48,25 @@ fn body_touching_wall_boundary_fits() {
     assert!(terrain::body_fits(
         &grid,
         utils::ground_shape(),
-        utils::point("4.5", "5.5"),
-        utils::cells("0.5"),
+        circle(utils::point("4.5", "5.5"), utils::cells("0.5"))
+    ));
+}
+
+/// A body of no radius stands on the cell its middle lies in, and fits only
+/// where that cell is clear.
+#[test]
+fn body_of_no_radius_fits_only_on_clear_cell() {
+    let grid = walled_grid(&[(5, 5)]);
+
+    assert!(!terrain::body_fits(
+        &grid,
+        utils::ground_shape(),
+        circle(utils::point("5.5", "5.5"), utils::cells("0"))
+    ));
+    assert!(terrain::body_fits(
+        &grid,
+        utils::ground_shape(),
+        circle(utils::point("4.5", "5.5"), utils::cells("0"))
     ));
 }
 
@@ -63,8 +78,28 @@ fn body_reaching_into_terrain_off_its_shape_does_not_fit() {
     assert!(!terrain::body_fits(
         &grid,
         utils::ground_shape(),
-        utils::point("5.2", "5.5"),
-        utils::cells("0.5"),
+        circle(utils::point("5.2", "5.5"), utils::cells("0.5"))
+    ));
+}
+
+/// A box body is judged by its corners: one whose corner reaches into a
+/// diagonal wall does not fit where a circle of the same middle does.
+#[test]
+fn box_body_reaching_into_wall_by_its_corner_does_not_fit() {
+    let grid = walled_grid(&[(5, 4)]);
+
+    // Middle (4.6, 5.4): a circle of 0.5 lies √(0.4² + 0.4²) ≈ 0.57 from
+    // the wall's corner (5, 5), clear of it; the 1×1 box spans 4.1–5.1 by
+    // 4.9–5.9, into (5, 4).
+    assert!(terrain::body_fits(
+        &grid,
+        utils::ground_shape(),
+        circle(utils::point("4.6", "5.4"), utils::cells("0.5")),
+    ));
+    assert!(!terrain::body_fits(
+        &grid,
+        utils::ground_shape(),
+        boxed(utils::point("4.6", "5.4")),
     ));
 }
 
@@ -84,9 +119,8 @@ fn blocked_axis_drops_and_slide_keeps_other() {
     let committed = terrain::slide_toward(
         &grid,
         utils::ground_shape(),
-        utils::point("4.4", "5.4"),
+        circle(utils::point("4.4", "5.4"), utils::cells("0.5")),
         utils::point("4.7", "5.7"),
-        utils::cells("0.5"),
     );
 
     assert_eq!(committed, utils::point("4.4", "5.7"));
@@ -102,9 +136,8 @@ fn step_into_wall_stays_put() {
     let committed = terrain::slide_toward(
         &grid,
         utils::ground_shape(),
-        position,
+        circle(position, utils::cells("0.5")),
         utils::point("4.8", "5.5"),
-        utils::cells("0.5"),
     );
 
     assert_eq!(committed, position);
@@ -119,9 +152,8 @@ fn blocked_axis_drops_against_terrain_off_its_shape() {
     let committed = terrain::slide_toward(
         &grid,
         utils::ground_shape(),
-        utils::point("4.4", "5.4"),
+        circle(utils::point("4.4", "5.4"), utils::cells("0.5")),
         utils::point("4.7", "5.7"),
-        utils::cells("0.5"),
     );
 
     assert_eq!(committed, utils::point("4.4", "5.7"));
@@ -140,9 +172,8 @@ fn shape_over_water_slides_onto_it() {
     let committed = terrain::slide_toward(
         &grid,
         wading,
-        utils::point("4.4", "5.4"),
+        circle(utils::point("4.4", "5.4"), utils::cells("0.5")),
         utils::point("4.7", "5.7"),
-        utils::cells("0.5"),
     );
 
     assert_eq!(committed, utils::point("4.7", "5.7"));
@@ -221,15 +252,13 @@ fn body_reaching_before_origin_does_not_fit() {
     assert!(!terrain::body_fits(
         &grid,
         shape,
-        utils::point("0.5", "4"),
-        utils::cells("0.4"),
+        circle(utils::point("0.5", "4"), utils::cells("0.4"))
     ));
     // At x 1 it spans 0–2, its edge on the origin's.
     assert!(terrain::body_fits(
         &grid,
         shape,
-        utils::point("1", "4"),
-        utils::cells("0.4"),
+        circle(utils::point("1", "4"), utils::cells("0.4"))
     ));
 }
 
@@ -244,9 +273,8 @@ fn step_past_either_edge_slides_along_it() {
         terrain::slide_toward(
             &grid,
             utils::ground_shape(),
-            utils::point("0.6", "3.5"),
-            utils::point("0.3", "3.8"),
-            utils::cells("0.5"),
+            circle(utils::point("0.6", "3.5"), utils::cells("0.5")),
+            utils::point("0.3", "3.8")
         ),
         utils::point("0.6", "3.8")
     );
@@ -254,11 +282,30 @@ fn step_past_either_edge_slides_along_it() {
         terrain::slide_toward(
             &grid,
             utils::ground_shape(),
-            utils::point("7.4", "3.5"),
-            utils::point("7.7", "3.8"),
-            utils::cells("0.5"),
+            circle(utils::point("7.4", "3.5"), utils::cells("0.5")),
+            utils::point("7.7", "3.8")
         ),
         utils::point("7.4", "3.8")
+    );
+}
+
+/// A box body slides as a box: the step its corner would take into a
+/// diagonal wall drops the axis that carries the corner there.
+#[test]
+fn box_body_slides_by_its_corner() {
+    let grid = walled_grid(&[(5, 4)]);
+
+    // From (4.5, 5.5) to (4.75, 5.25) the box would span 4.25–5.25 by
+    // 4.75–5.75, into (5, 4); the axes tie at 0.25 and x is kept: at
+    // (4.75, 5.5) it spans 5–6 in y, clear of row 4.
+    assert_eq!(
+        terrain::slide_toward(
+            &grid,
+            utils::ground_shape(),
+            boxed(utils::point("4.5", "5.5")),
+            utils::point("4.75", "5.25"),
+        ),
+        utils::point("4.75", "5.5")
     );
 }
 
@@ -279,9 +326,8 @@ fn clipped_body_walks_out_of_wall() {
         terrain::slide_toward(
             &grid,
             utils::ground_shape(),
-            utils::point("5.2", "5.5"),
-            desired,
-            utils::cells("0.5"),
+            circle(utils::point("5.2", "5.5"), utils::cells("0.5")),
+            desired
         ),
         desired
     );
@@ -298,9 +344,8 @@ fn clipped_body_cannot_clip_deeper() {
         terrain::slide_toward(
             &grid,
             utils::ground_shape(),
-            utils::point("5.2", "5.5"),
-            utils::point("5.4", "5.8"),
-            utils::cells("0.5"),
+            circle(utils::point("5.2", "5.5"), utils::cells("0.5")),
+            utils::point("5.4", "5.8")
         ),
         utils::point("5.4", "5.5")
     );
@@ -329,9 +374,8 @@ fn body_climbs_only_where_ramp_rises_unless_it_walks_cliffs() {
         terrain::slide_toward(
             &grid,
             shape,
-            utils::point(from.0, from.1),
+            circle(utils::point(from.0, from.1), utils::cells("0.5")),
             utils::point(to.0, to.1),
-            utils::cells("0.5"),
         )
     };
 
@@ -367,9 +411,8 @@ fn small_body_never_steps_its_middle_across_cliff() {
     let committed = terrain::slide_toward(
         &grid,
         walker,
-        utils::point("3.9", "0.5"),
+        circle(utils::point("3.9", "0.5"), utils::cells("0.1")),
         utils::point("4.4", "0.5"),
-        utils::cells("0.1"),
     );
 
     assert_eq!(committed, utils::point("3.9", "0.5"));
@@ -393,8 +436,7 @@ fn body_overlapping_cell_beyond_cliff_fits_only_if_it_crosses() {
         terrain::body_fits(
             &grid,
             shape(crossing),
-            utils::point("3.8", "0.5"),
-            utils::cells("0.5"),
+            circle(utils::point("3.8", "0.5"), utils::cells("0.5")),
         )
     };
 
@@ -441,4 +483,23 @@ fn hill_grid() -> NavGrid {
         },
     });
     grid
+}
+
+/// The circle of `radius` around `middle`.
+fn circle(middle: FixedUVec2, radius: FixedU64) -> Shape {
+    Shape::Circle { middle, radius }
+}
+
+/// The 1×1 box around `middle`.
+fn boxed(middle: FixedUVec2) -> Shape {
+    Shape::Box(FixedURect::new(
+        FixedUVec2::new(
+            middle.x - utils::cells("0.5"),
+            middle.y - utils::cells("0.5"),
+        ),
+        FixedUVec2::new(
+            middle.x + utils::cells("0.5"),
+            middle.y + utils::cells("0.5"),
+        ),
+    ))
 }

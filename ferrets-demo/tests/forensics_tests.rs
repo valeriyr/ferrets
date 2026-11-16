@@ -107,7 +107,10 @@ fn replay_forensics() {
     let mut rebuilt = playback::rebuild(replay).expect("the replay's game rebuilds");
     let last = rebuilt.last_tick.expect("the recording holds ticks");
     let app = &mut rebuilt.app;
-    println!("replay {path}: {last} ticks");
+    println!(
+        "replay {path}: {last} ticks, {:?} movement",
+        app.world().resource::<Map>().movement_model()
+    );
 
     // FOCUS=<simulation id> dumps that entity's full movement state per tick;
     // FOCUS_FROM/FOCUS_TO bound the dump's tick range.
@@ -242,18 +245,18 @@ fn replay_forensics() {
                 ) else {
                     continue;
                 };
-                if entity_ref.contains::<HiddenComponent>() {
-                    continue;
-                }
                 let footprint = entity_def::location(world, entity).footprint();
-                let covered = if entity_def::of(world, entity).can_move() {
-                    entity_def::covered_rect(world, entity)
+                let bounds = if entity_def::of(world, entity).can_move() {
+                    entity_def::shape(world, entity).cell_bounds()
                 } else {
                     footprint
                 };
-                let mark = entity_def::grid_mark(world, entity);
+                // A seated body stands off the grid and marks nothing there.
+                let mark = entity_def::stands_on_grid(world, entity)
+                    .then(|| entity_def::grid_mark(world, entity))
+                    .flatten();
                 if !footprint.intersects(area)
-                    && !covered.intersects(area)
+                    && !bounds.intersects(area)
                     && !mark.is_some_and(|mark| mark.footprint.intersects(area))
                 {
                     continue;
@@ -262,7 +265,7 @@ fn replay_forensics() {
                     .get::<OrderQueueComponent>()
                     .and_then(|queue| queue.0.front().map(|entry| format!("{:?}", entry.order)));
                 println!(
-                    "t{tick} AREA {id:?} {} pos ({}, {}) footprint {footprint:?} covered {covered:?} mark {mark:?} front {front:?}",
+                    "t{tick} AREA {id:?} {} pos ({}, {}) footprint {footprint:?} bounds {bounds:?} mark {mark:?} front {front:?}",
                     info.type_name(),
                     location.position.x,
                     location.position.y,

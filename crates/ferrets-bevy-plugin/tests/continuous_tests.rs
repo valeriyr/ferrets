@@ -8,7 +8,7 @@
 
 mod utils;
 
-use bevy::prelude::App;
+use bevy::prelude::{App, Entity};
 use ferrets_content::{
     entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity, pool::Pool,
     registry::ContentRegistry, stats::ModifierOp,
@@ -739,6 +739,60 @@ fn attacker_takes_free_cell_beside_body_holding_its_goal() {
     );
 }
 
+/// A point walk stalled two cells short of its spot, behind a column of
+/// idle allies pinned against a wall and already within its widened
+/// acceptance of the spot, takes the spot as taken: it ends on the tick its
+/// stall clock escalates.
+#[test]
+fn walk_stalled_behind_resting_allies_ends_on_its_stall() {
+    let (mut app, soldier) = oxen_in_corridor(0);
+
+    // Crumbs of progress against the squeezed oxen hold the stall clock off;
+    // it escalates on the eighty-eighth tick after the command lands, with the
+    // soldier anchored at (7, 10), two cells short of (9, 10), and the ox at
+    // (8, 10) one cell from it.
+    utils::run_ticks(&mut app, utils::APPLY + 87);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), soldier));
+    utils::run_ticks(&mut app, 1);
+    let world = app.world_mut();
+    assert!(utils::order_queue_is_empty(world, soldier));
+    assert_eq!(utils::anchor_of(world, soldier), CellPos::new(7, 10));
+}
+
+/// The same stall behind enemies: resting enemies are no proof the spot is
+/// taken, so the walk presses on past its stall.
+#[test]
+fn walk_stalled_behind_resting_enemies_presses_on() {
+    let (mut app, soldier) = oxen_in_corridor(1);
+
+    utils::run_ticks(&mut app, utils::APPLY + 88);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), soldier));
+    // Still anchored at (7, 10), two cells short of (9, 10), on the tick its
+    // allied sibling ends.
+    assert_eq!(
+        utils::anchor_of(app.world_mut(), soldier),
+        CellPos::new(7, 10)
+    );
+}
+
+/// The same stall behind enemies with an ally resting just past the widened
+/// acceptance: an ally out of range of the spot is no proof it is taken.
+#[test]
+fn walk_stalled_with_ally_resting_past_acceptance_presses_on() {
+    let (mut app, soldier) = oxen_in_corridor(1);
+    // An idle ally at (9, 12), behind the corridor's wall, lies 2 cells from
+    // (9, 10), past the acceptance of 1 the stall widens to.
+    let (ally, _) = utils::create_owned(&mut app, "ox", 9, 12, 0);
+
+    utils::run_ticks(&mut app, utils::APPLY + 88);
+    let world = app.world_mut();
+    assert!(!utils::order_queue_is_empty(world, soldier));
+    // Still two cells short of (9, 10), on the tick a nearer ally would end it,
+    // the ally resting where it was set down.
+    assert_eq!(utils::anchor_of(world, soldier), CellPos::new(7, 10));
+    assert_eq!(utils::anchor_of(world, ally), CellPos::new(9, 12));
+}
+
 //
 // ─── Body radius ──────────────────────────────────────────────────────────────
 //
@@ -770,7 +824,7 @@ fn buffed_radius_is_held_to_half_its_footprint() {
         utils::fixed("0.5")
     );
     assert_eq!(
-        entity_def::covered_rect(app.world(), soldier),
+        entity_def::shape(app.world(), soldier).cell_bounds(),
         CellRect::cell(CellPos::new(5, 5))
     );
 }
@@ -796,7 +850,7 @@ fn body_shrunk_to_no_radius_covers_cell_its_middle_lies_in() {
 
     assert_eq!(entity_def::radius(app.world(), soldier), FixedU64::ZERO);
     assert_eq!(
-        entity_def::covered_rect(app.world(), soldier),
+        entity_def::shape(app.world(), soldier).cell_bounds(),
         CellRect::cell(CellPos::new(6, 6))
     );
 }
@@ -834,4 +888,32 @@ fn slim_wagon_app() -> App {
     utils::start_game(&mut app);
     utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
     app
+}
+
+/// A continuous app whose row 10 is a corridor from x 2 to 9, walled at
+/// (10, 10), with oxen of `owner` idle at (7, 10), (8, 10) and (9, 10), and a
+/// soldier of player 0 at (3, 10) ordered to the middle of (9, 10).
+fn oxen_in_corridor(owner: u8) -> (App, Entity) {
+    let mut app = utils::continuous_orders_app();
+    {
+        let mut map = app.world_mut().resource_mut::<Map>();
+        for x in 2..=11 {
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 9), true);
+            map.set_static_occupied(utils::GROUND, CellPos::new(x, 11), true);
+        }
+        map.set_static_occupied(utils::GROUND, CellPos::new(10, 10), true);
+    }
+    for x in 7..=9 {
+        utils::create_owned(&mut app, "ox", x, 10, owner);
+    }
+    let (soldier, soldier_id) = utils::create_owned(&mut app, "soldier", 3, 10, 0);
+    utils::select(&mut app, soldier_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(9, 10),
+            flush: true,
+        },
+    );
+    (app, soldier)
 }

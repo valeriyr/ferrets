@@ -385,7 +385,9 @@ fn movers_on(
                 return None;
             }
             let def = entity_def::of(world, entity);
-            let location = def.location?;
+            let location = def
+                .location
+                .expect("a body standing on the grid has a location");
             if !def.can_move() || location.occupies() & layers == LayerMask::EMPTY {
                 return None;
             }

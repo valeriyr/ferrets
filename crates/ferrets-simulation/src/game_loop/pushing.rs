@@ -9,7 +9,7 @@ use ferrets_nav_grid::mover_shape::MoverShape;
 use ferrets_physics::{body::Body, contact, terrain};
 
 use crate::{
-    components::{location::LocationComponent, movement::MoveComponent},
+    components::movement::MoveComponent,
     entity_def,
     entity_index::EntityIndex,
     map::Map,
@@ -71,10 +71,10 @@ pub fn resolve(world: &mut World) {
             continue;
         }
         let map = world.resource::<Map>();
-        let (position, grid) = (body.location.middle(), map.nav_grid());
+        let grid = map.nav_grid();
         let desired = terrain::displaced(body.location, push.x, push.y, map.size());
         let slid = map.location(
-            terrain::slide_toward(grid, shape, position, desired, body.radius),
+            terrain::slide_toward(grid, shape, body.shape(), desired),
             shape.size,
         );
         let committed = if grid.fits_statically(slid.anchor(), shape) {
@@ -105,13 +105,13 @@ fn claimants(world: &World) -> Vec<(Entity, MoverShape)> {
         .alive_entries()
         .into_iter()
         .filter_map(|(_, entity)| {
-            if !entity_def::stands_on_grid(world, entity)
-                || !world.entity(entity).contains::<LocationComponent>()
-            {
+            if !entity_def::stands_on_grid(world, entity) {
                 return None;
             }
             let def = entity_def::of(world, entity);
-            let location_def = def.location?;
+            let location_def = def
+                .location
+                .expect("a body standing on the grid has a location");
             (def.can_move() && location_def.solidity().claims_cells())
                 .then(|| (entity, entity_def::mover_shape(registry, &location_def)))
         })

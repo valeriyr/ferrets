@@ -114,7 +114,9 @@ pub(crate) fn ground_holders(world: &World, ignored: &[Entity]) -> Vec<GroundHol
                 return None;
             }
             let standing_def = entity_def::of(world, entity);
-            let standing_location = standing_def.location?;
+            let standing_location = standing_def
+                .location
+                .expect("a body standing on the grid has a location");
             // What claims its cells is judged in `clear_of_units`; a mover
             // claiming none keeps solid static footprints off every cell its
             // body lies over; a body that never walks keeps off what its
@@ -122,7 +124,7 @@ pub(crate) fn ground_holders(world: &World, ignored: &[Entity]) -> Vec<GroundHol
             let (footprint, keeps) = match (standing_location.solidity(), standing_def.can_move()) {
                 (Solidity::Solid, _) => return None,
                 (Solidity::Underfoot | Solidity::Passable, true) => {
-                    (entity_def::covered_rect(world, entity), Keeps::Solid)
+                    (entity_def::shape(world, entity).cell_bounds(), Keeps::Solid)
                 }
                 (solidity @ (Solidity::Underfoot | Solidity::Passable), false) => (
                     entity_def::location(world, entity).footprint(),

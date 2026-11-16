@@ -67,7 +67,6 @@ fn body_pressed_into_water_corner_rounds_it_on_land() {
             .expect("a landlubber has a location");
         entity_def::mover_shape(world.resource::<ContentRegistry>(), &location)
     };
-    let radius = entity_def::radius(app.world(), landlubber);
 
     // It starts clipping the water, as the keep test's runner clips the keep,
     // and still clips it after its first tick; its second squares it onto
@@ -75,15 +74,10 @@ fn body_pressed_into_water_corner_rounds_it_on_land() {
     utils::run_ticks(&mut app, 1);
     for tick in 1..300 {
         utils::run_ticks(&mut app, 1);
-        let position = utils::position_of(app.world_mut(), landlubber);
+        let body = entity_def::shape(app.world(), landlubber);
         assert!(
-            terrain::body_fits(
-                app.world().resource::<Map>().nav_grid(),
-                shape,
-                position,
-                radius
-            ),
-            "on tick {tick} the landlubber's circle at {position:?} reaches over water"
+            terrain::body_fits(app.world().resource::<Map>().nav_grid(), shape, body),
+            "on tick {tick} the landlubber's {body:?} reaches over water"
         );
     }
 
@@ -515,6 +509,28 @@ fn cell_walk_comes_round_before_it_claims() {
         start,
         "then it crosses"
     );
+}
+
+/// The cell model turns a walking body as the continuous one does, a tick's turn
+/// every tick: its look keeps coming round while it crosses, not only as each
+/// crossing starts.
+#[test]
+fn nimble_cell_walker_comes_round_at_its_turn_rate_while_crossing() {
+    let mut app = utils::turning_cell_app();
+    let (mover, _) = utils::create_owned(&mut app, "nimble", 10, 10, 0);
+    // From south to due north is 32768 units at 1638 a tick (9° of 65536 a
+    // turn, truncated): 20 ticks come 8 units short, the 21st arrives. Six
+    // cells at a quarter cell a tick take 24 ticks, so it is still walking.
+    walk_to_spot(&mut app, mover, utils::pos(10, 4));
+
+    utils::run_ticks(&mut app, 20);
+    // 32768 − 20 · 1638 = 8.
+    assert_eq!(
+        utils::facing_of(app.world(), mover).distance(Facing::NORTH),
+        8
+    );
+    utils::run_ticks(&mut app, 1);
+    assert_eq!(utils::facing_of(app.world(), mover), Facing::NORTH);
 }
 
 /// A body that finds its next cell free and stands to turn toward it has not set

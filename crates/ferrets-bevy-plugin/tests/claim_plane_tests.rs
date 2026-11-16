@@ -5,8 +5,15 @@ mod utils;
 use bevy::prelude::App;
 use ferrets_geometry::{cell_pos::CellPos, projection::Projection};
 use ferrets_simulation::{
-    command::PlayerCommand, components::location::LocationComponent, entity_def, map::Map,
-    movement_model::MovementModel, occupancy::GridMark, simulation_id::SimulationId, spawn,
+    command::PlayerCommand,
+    components::location::LocationComponent,
+    entity_def,
+    game_loop::claim_plane,
+    map::Map,
+    movement_model::{self, MovementModel},
+    occupancy::GridMark,
+    simulation_id::SimulationId,
+    spawn,
 };
 
 //
@@ -70,6 +77,92 @@ fn claim_under_another_holder_fails_plane_check() {
         ..mark
     });
     utils::run_ticks(&mut app, 1);
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
+#[should_panic(expected = "an entity has a location exactly when it is not hidden")]
+fn location_taken_without_hiding_fails_plane_check() {
+    let mut app = utils::orders_app();
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
+
+    // Taken around `spawn::hide_entity`: no hidden marker stands in for it.
+    app.world_mut()
+        .entity_mut(soldier)
+        .remove::<LocationComponent>();
+    claim_plane::check(app.world_mut());
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
+#[should_panic(
+    expected = "a body standing on the grid keeps to the cell lattice but for a crossing"
+)]
+fn cell_body_written_off_its_cells_fails_plane_check() {
+    let mut app = utils::orders_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Cell);
+    let (soldier, _) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
+
+    // Half a cell past its anchored middle (2.5, 2.5), with no walk crossing.
+    app.world_mut()
+        .get_mut::<LocationComponent>(soldier)
+        .expect("the soldier stands somewhere")
+        .position = utils::point("3", "2.5");
+    claim_plane::check(app.world_mut());
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
+#[should_panic(
+    expected = "a body standing on the grid keeps to the cell lattice but for a crossing"
+)]
+fn crossing_body_written_off_its_crossing_fails_plane_check() {
+    let mut app = utils::orders_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Cell);
+    let (soldier, soldier_id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
+    utils::select(&mut app, soldier_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(6, 2),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    for _ in 0..10 {
+        if movement_model::is_mid_crossing(app.world(), soldier) {
+            break;
+        }
+        utils::run_ticks(&mut app, 1);
+    }
+    assert!(movement_model::is_mid_crossing(app.world(), soldier));
+
+    // Crossing east along y 2.5, written a fifth of a cell off that line: it
+    // still walks, but no longer on its crossing.
+    let mut location = app
+        .world_mut()
+        .get_mut::<LocationComponent>(soldier)
+        .expect("the soldier stands somewhere");
+    location.position.y = utils::fixed("2.7");
+    claim_plane::check(app.world_mut());
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "guards a debug assertion")]
+#[should_panic(
+    expected = "a body standing on the grid keeps to the cell lattice but for a crossing"
+)]
+fn standing_body_written_off_its_cells_fails_plane_check_under_continuous_model() {
+    let mut app = utils::continuous_orders_app();
+    let (rampart, _) = utils::create_owned(&mut app, "rampart", 2, 2, 0);
+
+    // Half a cell past its anchored middle (2.5, 2.5): a body that never walks
+    // keeps to the lattice under either model.
+    app.world_mut()
+        .get_mut::<LocationComponent>(rampart)
+        .expect("the rampart stands somewhere")
+        .position = utils::point("3", "2.5");
+    claim_plane::check(app.world_mut());
 }
 
 //

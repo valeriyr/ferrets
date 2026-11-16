@@ -384,15 +384,9 @@ fn process_continuous(entity: Entity, order: &Order, world: &mut World) -> Order
         anchored_point(world, *move_component.path.last().unwrap(), shape.size)
     };
     let desired = projection.step_toward(position, waypoint, speed);
-    let radius = entity_def::radius(world, entity);
+    let body = entity_def::shape(world, entity);
     let slide = |aim: FixedUVec2, world: &World| {
-        terrain::slide_toward(
-            world.resource::<Map>().nav_grid(),
-            shape,
-            position,
-            aim,
-            radius,
-        )
+        terrain::slide_toward(world.resource::<Map>().nav_grid(), shape, body, aim)
     };
     let mut new_point = slide(desired, world);
     // Aiming into a wall rather than along it: the slide keeps the step's
@@ -627,15 +621,24 @@ fn process_cell(entity: Entity, order: &Order, world: &mut World) -> OrderState 
     // Mid-crossing: position is between the crossing's two anchored positions.
     if mid_crossing {
         let crossed_into = *move_component.path.last().unwrap();
-        debug_assert_on_crossing(
-            world,
-            position,
-            shape.size,
-            move_component.moving_from,
-            crossed_into,
-        );
         let target_point = anchored_point(world, crossed_into, shape.size);
+        debug_assert!(
+            movement_model::lies_on_crossing(
+                position,
+                anchored_point(world, move_component.moving_from, shape.size),
+                target_point,
+            ),
+            "a mid-crossing body lies on its crossing, both axes in step on a diagonal"
+        );
         let new_point = projection.step_toward(position, target_point, speed);
+        // The look keeps coming round the whole way across, a tick's turn at a
+        // time, as it does on every tick of a continuous walk.
+        if let Some(wanted) = Facing::of(FixedVec2::new(
+            target_point.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
+            target_point.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
+        )) {
+            turn::toward(world, entity, wanted, turn::Rate::Walking);
+        }
         step_body(world, entity, new_point);
 
         if new_point == target_point {
@@ -1306,48 +1309,20 @@ fn swap_crossings(
 }
 
 /// The entity holding a cell that a step of `shape` from `from` to `to`
-/// enters: a resting or crossing claimant, or a standing footprint covering
-/// it. Deterministic — the lowest simulation id wins.
-fn claimant_at(world: &mut World, shape: MoverShape, from: CellPos, to: CellPos) -> Option<Entity> {
-    let layers = shape.layers;
+/// enters: one whose mark on the grid on the step's layers — a claim, or a
+/// static body's stamp ([`entity_def::claim_on`]) — covers it.
+/// Deterministic — the lowest simulation id wins.
+fn claimant_at(world: &World, shape: MoverShape, from: CellPos, to: CellPos) -> Option<Entity> {
     let entered = entered_cells(shape, from, to);
-    for (_, candidate) in world.resource::<EntityIndex>().alive_entries() {
-        // An entity off the grid holds no cells.
-        if !entity_def::stands_on_grid(world, candidate) {
-            continue;
-        }
-        if !world.entity(candidate).contains::<LocationComponent>() {
-            continue;
-        }
-        let Some(location_def) = entity_def::of(world, candidate).location else {
-            continue;
-        };
-        if !location_def.solidity().claims_cells()
-            || location_def.occupies() & layers == LayerMask::EMPTY
-        {
-            continue;
-        }
-
-        let holds = if movement_model::is_mid_crossing(world, candidate) {
-            // A crossing holds its destination *footprint* — step_claim
-            // claimed every entered cell, not the anchor alone.
-            world
-                .entity(candidate)
-                .get::<MoveComponent>()
-                .and_then(|movement| movement.path.last().copied())
-                .is_some_and(|destination| {
-                    let held = CellRect::new(destination, location_def.size());
-                    entered.iter().any(|&cell| held.contains(cell))
-                })
-        } else {
-            let held = entity_def::location(world, candidate).footprint();
-            entered.iter().any(|&cell| held.contains(cell))
-        };
-        if holds {
-            return Some(candidate);
-        }
-    }
-    None
+    world
+        .resource::<EntityIndex>()
+        .alive_entries()
+        .into_iter()
+        .map(|(_, candidate)| candidate)
+        .find(|&candidate| {
+            entity_def::claim_on(world, candidate, shape.layers)
+                .is_some_and(|claim| entered.iter().any(|&cell| claim.contains(cell)))
+        })
 }
 
 /// Whether a body other than `entity`, claiming cells on the layers of
@@ -1360,21 +1335,10 @@ fn settled_body_over(world: &World, entity: Entity, shape: MoverShape, cell: Cel
         .resource::<EntityIndex>()
         .alive_iter()
         .any(|(_, &candidate)| {
-            if candidate == entity
-                || !entity_def::stands_on_grid(world, candidate)
-                || !world.entity(candidate).contains::<LocationComponent>()
-            {
-                return false;
-            }
-            let Some(location_def) = entity_def::of(world, candidate).location else {
-                return false;
-            };
-            location_def.solidity().claims_cells()
-                && location_def.occupies() & shape.layers != LayerMask::EMPTY
+            candidate != entity
                 && !entity_def::walking(world, candidate)
-                && entity_def::location(world, candidate)
-                    .footprint()
-                    .intersects(footprint)
+                && entity_def::claim_on(world, candidate, shape.layers)
+                    .is_some_and(|claim| claim.intersects(footprint))
         })
 }
 
@@ -1389,39 +1353,23 @@ fn resting_ally_within(
     range: u32,
 ) -> bool {
     let projection = world.resource::<Map>().projection();
-    for (_, candidate) in world.resource::<EntityIndex>().alive_entries() {
-        if candidate == entity {
-            continue;
-        }
-        // An entity off the grid holds no cells.
-        if !entity_def::stands_on_grid(world, candidate) {
-            continue;
-        }
-        if !world.entity(candidate).contains::<LocationComponent>() {
-            continue;
-        }
-        let def = entity_def::of(world, candidate);
-        let Some(location_def) = def.location else {
-            continue;
-        };
-        if !def.can_move()
-            || !location_def.solidity().claims_cells()
-            || location_def.occupies() & layers == LayerMask::EMPTY
-            || entity_def::walking(world, candidate)
-            || !entity_def::idle(world, candidate)
-            || !world.resource::<GameSession>().owners_allied(
-                entity_def::owner(world, entity),
-                entity_def::owner(world, candidate),
-            )
-        {
-            continue;
-        }
-        if projection.in_range_of_rect(entity_def::location(world, candidate).anchor(), goal, range)
-        {
-            return true;
-        }
-    }
-    false
+    world
+        .resource::<EntityIndex>()
+        .alive_entries()
+        .into_iter()
+        .map(|(_, candidate)| candidate)
+        .any(|candidate| {
+            candidate != entity
+                && entity_def::of(world, candidate).can_move()
+                && !entity_def::walking(world, candidate)
+                && entity_def::idle(world, candidate)
+                && world.resource::<GameSession>().owners_allied(
+                    entity_def::owner(world, entity),
+                    entity_def::owner(world, candidate),
+                )
+                && entity_def::claim_on(world, candidate, layers)
+                    .is_some_and(|claim| projection.in_range_of_rect(claim.origin, goal, range))
+        })
 }
 
 /// The cells a step of `shape` from `from` to `to` enters: those of the
@@ -1431,45 +1379,6 @@ fn entered_cells(shape: MoverShape, from: CellPos, to: CellPos) -> Vec<CellPos> 
         .minus(CellRect::new(from, shape.size))
         .flat_map(CellRect::cells)
         .collect()
-}
-
-/// Asserts (debug builds) the lattice invariant for a mid-crossing body of
-/// `size`: its position lies on the straight segment between the anchored
-/// positions of the crossing's departure and target anchors, advancing both
-/// axes in step on a diagonal.
-fn debug_assert_on_crossing(
-    world: &World,
-    position: FixedUVec2,
-    size: CellSize,
-    from: CellPos,
-    to: CellPos,
-) {
-    let from = anchored_point(world, from, size);
-    let to = anchored_point(world, to, size);
-    let on_axis = |value: FixedU64, a: FixedU64, b: FixedU64| {
-        if a <= b {
-            a <= value && value <= b
-        } else {
-            b <= value && value <= a
-        }
-    };
-    debug_assert!(
-        on_axis(position.x, from.x, to.x) && on_axis(position.y, from.y, to.y),
-        "mid-crossing position must lie between the crossing's cells"
-    );
-    let progress = |value: FixedU64, origin: FixedU64| {
-        if value >= origin {
-            value - origin
-        } else {
-            origin - value
-        }
-    };
-    debug_assert!(
-        from.x == to.x
-            || from.y == to.y
-            || progress(position.x, from.x) == progress(position.y, from.y),
-        "diagonal crossing must advance both axes in step"
-    );
 }
 
 /// Inserts MoveComponent to start processing a Move order.

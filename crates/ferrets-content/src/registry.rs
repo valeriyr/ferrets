@@ -2821,6 +2821,7 @@ impl ContentRegistry {
         let bears_on_its_own = !def.turrets.is_empty();
         for (stat, governs, missing) in [
             (EntityStatId::DAMAGE, def.can_attack(), "has no weapon"),
+            (EntityStatId::RADIUS, def.can_move(), "cannot move"),
             (EntityStatId::TURN_RATE, def.can_move(), "cannot move"),
             (EntityStatId::PIVOT_ANGLE, def.can_move(), "cannot move"),
             (EntityStatId::ATTACK_ARC, def.can_attack(), "has no weapon"),

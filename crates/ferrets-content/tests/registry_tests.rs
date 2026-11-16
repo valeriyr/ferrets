@@ -1675,6 +1675,16 @@ fn register_rejects_attack_arc_without_weapon() {
 }
 
 #[test]
+#[should_panic(expected = "entity type 'keep' declares radius but cannot move")]
+fn register_rejects_radius_without_movement() {
+    let mut registry = utils::ground_registry();
+    registry.register(
+        utils::standing("keep", utils::GROUND_DOMAIN)
+            .with_stat(EntityStatId::RADIUS, FixedU64::from_num(1)),
+    );
+}
+
+#[test]
 #[should_panic(expected = "declares pivot_angle but cannot move")]
 fn register_rejects_pivot_angle_without_movement() {
     let mut registry = utils::ground_registry();
