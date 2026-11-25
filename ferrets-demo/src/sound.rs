@@ -311,7 +311,7 @@ fn tone(seconds: f32, from_hz: f32, to_hz: f32, noise: f32, decay: f32) -> Vec<f
     samples
 }
 
-/// Where the view is centred, how wide it is in world units, and the zoom that
+/// Where the view is centered, how wide it is in world units, and the zoom that
 /// made it that wide.
 ///
 /// `None` while there is no camera to hear through.

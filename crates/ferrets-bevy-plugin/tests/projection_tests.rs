@@ -67,8 +67,9 @@ fn orthogonal_bodies_separate_as_circles() {
     let b = utils::position_of(world, second.0);
     // The exact equilibrium — identical to the isometric one, because
     // bodies are circles under every projection: both walks touch the
-    // contested spot the same tick and finish there, and the pushing pass
-    // parts the coincident pair half a body each way.
-    assert_eq!(a, utils::point("5", "5.5"));
-    assert_eq!(b, utils::point("6", "5.5"));
+    // contested spot the same tick and finish there, the pushing pass
+    // parts the coincident pair half a body each way, and the idle pair
+    // drifts 0.125 more each way to the 0.25 idle spacing.
+    assert_eq!(a, utils::point("4.875", "5.5"));
+    assert_eq!(b, utils::point("6.125", "5.5"));
 }

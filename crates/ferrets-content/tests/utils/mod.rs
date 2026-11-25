@@ -57,7 +57,13 @@ pub fn leaves(entity_type: &str) -> Vec<Bequest> {
 /// A solid entity in `domain`, occupying its layer, whose footprint spans
 /// `size`.
 pub fn sized(name: &str, domain: DomainId, size: CellSize) -> EntityTypeDef {
-    EntityTypeDef::new(name).with_location(domain, size, Solidity::Solid, domain_layer(domain))
+    EntityTypeDef::new(name).with_location(
+        domain,
+        size,
+        None,
+        Solidity::Solid,
+        domain_layer(domain),
+    )
 }
 
 /// The layer of a domain these tests declare.

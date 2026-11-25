@@ -85,20 +85,21 @@ fn continuous_group_move_settles_without_milling() {
         "a settled crowd must rest, not mill around"
     );
 
-    // The exact settle, to the bit: each walk finishes the moment it
-    // touches the ordered point, later arrivals shove earlier ones off it,
-    // and the resting pile packs the block around it (sorted by position,
-    // since the query order of the mission pair is not part of the
-    // contract).
+    // The exact settle, to the bit: the first walk finishes the moment it
+    // touches the ordered point, each later one on meeting a body that holds
+    // it once as near the point as that body lets it, and the resting pile
+    // drifts to the idle spacing around it, a body pushed from roughly
+    // opposite sides taking no drift (sorted by position, since the query
+    // order of the mission pair is not part of the contract).
     let mut resting = settled.clone();
     resting.sort_unstable_by_key(|position| (position.x, position.y));
     assert_eq!(
         resting,
         vec![
-            utils::position_bits(0x14_7dbc_670e, 0x14_6110_733d),
-            utils::position_bits(0x14_8fe9_1264, 0x15_607c_6fda),
-            utils::position_bits(0x15_67d6_a434, 0x13_d28b_9488),
-            utils::position_bits(0x15_8870_d286, 0x15_0e2f_d75b),
+            utils::position_bits(0x13_dd19_4dca, 0x13_ec62_9cd1),
+            utils::position_bits(0x14_2661_b5cb, 0x15_2274_c308),
+            utils::position_bits(0x14_fb19_3c7a, 0x13_652e_a40a),
+            utils::position_bits(0x15_5ad9_5fb4, 0x14_cf93_26d9),
         ]
     );
 }

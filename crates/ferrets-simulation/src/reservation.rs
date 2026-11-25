@@ -1,11 +1,12 @@
 //! Ground a body holds ahead of standing on it.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
     entity_def,
+    form::Form,
     map::Map,
     occupancy::{GridMark, OccupancyClass},
     simulation_id::SimulationId,
@@ -57,21 +58,21 @@ impl Reservation {
     }
 }
 
-/// Holds for `entity` the `size` footprint at `origin` on `layers`, around
-/// the cells its own standing claim already holds.
+/// Holds for `entity` the cells a body of `form` anchored at `anchor` covers,
+/// on the layers it occupies, around the cells its own standing claim
+/// already holds.
 ///
 /// Expects the cells held unclaimed; panics in debug builds otherwise.
 pub(crate) fn reserve(
     world: &mut World,
     entity: Entity,
-    layers: LayerMask,
-    origin: CellPos,
-    size: CellSize,
+    form: Form,
+    anchor: CellPos,
 ) -> Reservation {
     let reservation = Reservation {
         holder: entity_def::simulation_id(world, entity),
-        footprint: CellRect::new(origin, size),
-        layers,
+        footprint: form.rect_at(anchor),
+        layers: form.occupies(),
         standing: entity_def::grid_mark(world, entity),
     };
     let mut map = world.resource_mut::<Map>();

@@ -1,4 +1,4 @@
-//! Annexes: buildings that stand in a neighbour's dock. The bond is derived
+//! Annexes: buildings that stand in a neighbor's dock. The bond is derived
 //! from what stands where, so raising, landing, lifting off and dying all
 //! settle it; what an annex does without a primary, and who may take one, are
 //! its own content.

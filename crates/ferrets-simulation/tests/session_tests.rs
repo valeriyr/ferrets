@@ -2,20 +2,24 @@
 
 mod utils;
 
-use ferrets_simulation::ruleset::{RemainsLimit, Ruleset};
-use ferrets_simulation::session::{
-    GameResult, GameSession, Winner,
-    ai_detection::AiDetection,
-    ai_hosting::AiHosting,
-    ai_vision::AiVision,
-    authority::Authority,
-    drop_policy::DropPolicy,
-    elimination_scope::EliminationScope,
-    finish_policy::FinishPolicy,
-    game_speed::GameSpeed,
-    local_role::LocalRole,
-    player_slot::{Participation, PlayerSlot},
-    player_type::PlayerType,
+use ferrets_content::affiliation::Affiliation;
+use ferrets_simulation::{
+    ruleset::{RemainsLimit, Ruleset},
+    session::{
+        GameResult, GameSession, Winner,
+        ai_detection::AiDetection,
+        ai_hosting::AiHosting,
+        ai_vision::AiVision,
+        authority::Authority,
+        drop_policy::DropPolicy,
+        elimination_scope::EliminationScope,
+        finish_policy::FinishPolicy,
+        game_speed::GameSpeed,
+        local_role::LocalRole,
+        player_slot::{Participation, PlayerSlot},
+        player_type::PlayerType,
+        relation::Relation,
+    },
 };
 
 //
@@ -412,33 +416,63 @@ fn setting_race_on_free_slot_panics() {
 fn same_team_allies_players_different_teams_do_not() {
     let session = teams(&[Some(1), Some(1), Some(2)]);
     // Same team → allied, symmetrically.
-    assert!(session.are_allied(0, 1));
-    assert!(session.are_allied(1, 0));
-    // Different teams → not allied.
-    assert!(!session.are_allied(0, 2));
+    assert_eq!(session.relation(Some(0), Some(1)), Relation::Allied);
+    assert_eq!(session.relation(Some(1), Some(0)), Relation::Allied);
+    // Different teams → enemies.
+    assert_eq!(session.relation(Some(0), Some(2)), Relation::Enemy);
 }
 
 #[test]
-fn player_with_no_team_is_allied_with_no_one_but_itself() {
+fn player_with_no_team_is_allied_with_no_one() {
     let session = teams(&[None, None, Some(1)]);
-    // Teamless players are hostile to everyone, including other teamless ones.
-    assert!(!session.are_allied(0, 1));
-    assert!(!session.are_allied(0, 2));
-    // A player is always allied with itself.
-    assert!(session.are_allied(0, 0));
+    // Teamless players are enemies to everyone, including other teamless ones.
+    assert_eq!(session.relation(Some(0), Some(1)), Relation::Enemy);
+    assert_eq!(session.relation(Some(0), Some(2)), Relation::Enemy);
+    // A player is always its own.
+    assert_eq!(session.relation(Some(0), Some(0)), Relation::Own);
 }
 
 #[test]
-fn owners_allied_reads_teams_and_leaves_unowned_side_with_no_ally() {
+fn relation_reads_teams_and_names_unowned_side_neutral() {
     let session = teams(&[Some(1), Some(1), Some(2)]);
-    assert!(session.owners_allied(Some(0), Some(1)));
-    assert!(session.owners_allied(Some(0), Some(0)));
-    assert!(!session.owners_allied(Some(0), Some(2)));
-    // Nobody owns a side with no owner: it is allied with no one, itself
-    // included.
-    assert!(!session.owners_allied(Some(0), None));
-    assert!(!session.owners_allied(None, Some(0)));
-    assert!(!session.owners_allied(None, None));
+    assert_eq!(session.relation(Some(0), Some(1)), Relation::Allied);
+    assert_eq!(session.relation(Some(0), Some(0)), Relation::Own);
+    assert_eq!(session.relation(Some(0), Some(2)), Relation::Enemy);
+    assert_eq!(session.relation(Some(0), None), Relation::Neutral);
+    assert_eq!(session.relation(None, Some(2)), Relation::Neutral);
+    assert_eq!(session.relation(None, None), Relation::Neutral);
+}
+
+#[test]
+fn relations_fit_affiliations_naming_them() {
+    let session = teams(&[Some(1), Some(1), Some(2)]);
+    // Own, allied, enemy and neutral pairs, in that order.
+    let pairs = [
+        (Some(0), Some(0)),
+        (Some(0), Some(1)),
+        (Some(0), Some(2)),
+        (Some(0), None),
+    ];
+    let named =
+        |affiliation| pairs.map(|(mine, theirs)| session.relation(mine, theirs).fits(affiliation));
+    assert_eq!(named(Affiliation::Own), [true, false, false, false]);
+    assert_eq!(named(Affiliation::Allied), [true, true, false, false]);
+    assert_eq!(named(Affiliation::Enemy), [false, false, true, false]);
+    assert_eq!(named(Affiliation::Anyone), [true, true, true, true]);
+}
+
+#[test]
+fn relation_predicates_name_their_arms() {
+    // Own, allied, enemy and neutral, in that order.
+    let arms = [
+        Relation::Own,
+        Relation::Allied,
+        Relation::Enemy,
+        Relation::Neutral,
+    ];
+    assert_eq!(arms.map(Relation::is_own), [true, false, false, false]);
+    assert_eq!(arms.map(Relation::is_friendly), [true, true, false, false]);
+    assert_eq!(arms.map(Relation::is_enemy), [false, false, true, false]);
 }
 
 #[test]

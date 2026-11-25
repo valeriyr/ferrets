@@ -293,6 +293,7 @@ fn placement_starts_pool_under_passives_it_wakes() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

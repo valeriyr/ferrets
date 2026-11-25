@@ -72,6 +72,7 @@ use ferrets_simulation::{
     entity_index::EntityIndex,
     events::{EventRecord, SimulationEvent, SpawnCause},
     fields::FieldGrid,
+    form::Form,
     impacts::{Following, PendingImpacts},
     links::{self, LinkPassengers, Membership},
     map::Map,
@@ -80,7 +81,7 @@ use ferrets_simulation::{
     selection::Selection,
     session::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, local_role::LocalRole,
-        player_id::PlayerId, player_mask::PlayerMask, player_slot::PlayerSlot,
+        player_id::PlayerId, player_mask::PlayerMask, player_slot::PlayerSlot, relation::Relation,
     },
     simulation_id::SimulationId,
     visibility::{self, CellVisibility, Senses, Sighting, VisibilityGrid},
@@ -247,13 +248,12 @@ enum GhostShape {
 /// and local to this client; persists (stale) even after the real building dies
 /// in the fog, until the cell is seen again.
 struct GhostSprite {
-    /// The cell the remembered building was anchored at.
-    anchor: (u32, u32),
+    /// The cells the remembered building was counted on.
+    footprint: CellRect,
     /// The remembered building's middle, in pixels.
     center: Vec2,
-    /// The footprint remembered under the outline, for consumers that draw the
-    /// remembered building as cells rather than as a shape.
-    size: CellSize,
+    /// The cells its declared look covered.
+    look: CellRect,
     /// The layers the remembered building occupied.
     layers: LayerMask,
     /// How the remembered building held the cells under it.
@@ -283,16 +283,16 @@ pub struct MadeOutFootprint {
 pub struct Ghosts(HashMap<SimulationId, GhostSprite>);
 
 impl Ghosts {
-    /// Where each remembered building stood and how much ground it covered.
-    pub(crate) fn remembered(&self) -> impl Iterator<Item = ((u32, u32), CellSize)> {
-        self.0.values().map(|ghost| (ghost.anchor, ghost.size))
+    /// The cells each remembered building's declared look covered.
+    pub(crate) fn remembered(&self) -> impl Iterator<Item = CellRect> + '_ {
+        self.0.values().map(|ghost| ghost.look)
     }
 
     /// The footprint of each remembered building.
     pub(crate) fn remembered_footprints(&self) -> impl Iterator<Item = MadeOutFootprint> + '_ {
         self.0.values().map(|ghost| MadeOutFootprint {
             layers: ghost.layers,
-            rect: CellRect::new(CellPos::new(ghost.anchor.0, ghost.anchor.1), ghost.size),
+            rect: ghost.footprint,
             solidity: ghost.solidity,
             class: ghost.class,
         })
@@ -430,14 +430,6 @@ pub fn sees(
     y: u32,
 ) -> bool {
     perspective(session, watch, fog, x, y) == CellVisibility::Visible
-}
-
-/// Whether `player` is the local player or one of its allies — `false` on a
-/// node with no local player, which is on nobody's side.
-pub fn allied_with_local(session: &GameSession, player: PlayerId) -> bool {
-    session
-        .local_player()
-        .is_some_and(|local| session.are_allied(local, player))
 }
 
 /// Whether the drawing smooths what the simulation hands it — the walk between
@@ -695,6 +687,12 @@ enum Shape {
     /// The stilt walker — an upright body high on two long legs in a wide
     /// stride, a lighter head on top.
     StiltWalker,
+    /// The tusker — a broad hunched body filling its footprint, a head at
+    /// the front and two pale tusks curving forward from it.
+    Tusker,
+    /// The burster — a swollen sac of acid in a glowing haze, three bright
+    /// blisters on its back, a small head and four stubby legs.
+    Burster,
 }
 
 /// Picks a shape from the entity type name. Add new types here.
@@ -717,6 +715,7 @@ fn shape_for(type_name: &str) -> Shape {
         "training_camp"
         | "war_camp"
         | "spawning_pit"
+        | "acid_nest"
         | "gateway"
         | "barracks"
         | "barracks_aloft"
@@ -735,8 +734,10 @@ fn shape_for(type_name: &str) -> Shape {
         "tunnel" => Shape::TunnelEnd,
         "stalker" => Shape::Stalker,
         "stilt_walker" => Shape::StiltWalker,
+        "tusker" => Shape::Tusker,
+        "burster" => Shape::Burster,
         "war_wagon" => Shape::WarWagon,
-        "siege_works" | "factory" | "factory_aloft" => Shape::Octagon,
+        "siege_works" | "factory" | "factory_aloft" | "tusker_cavern" => Shape::Octagon,
         "watch_tower" => Shape::WatchTower,
         "guard_tower" | "photon_cannon" => Shape::GuardTower,
         "missile_turret" => Shape::Pad,
@@ -1497,6 +1498,80 @@ pub fn attach_sprites(
                     ));
                 });
             }
+            Shape::Tusker => {
+                // A broad hunched body filling the footprint, a head at the
+                // front and two pale tusks curving forward from it.
+                let tusk = Vec2::new(radius * 0.1, radius * 0.6);
+                entity.insert((
+                    Mesh2d(meshes.add(Ellipse::new(radius * 0.85, radius * 0.7))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.3))),
+                        MeshMaterial2d(materials.add(color.darker(0.2))),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.6, 0.1)),
+                    ));
+                    for side in [-1.0_f32, 1.0] {
+                        parent.spawn((
+                            Sprite::from_color(color.lighter(0.5), tusk),
+                            Transform::from_translation(Vec3::new(
+                                side * radius * 0.25,
+                                radius * 0.95,
+                                0.2,
+                            ))
+                            .with_rotation(Quat::from_rotation_z(-side * 0.35)),
+                        ));
+                    }
+                });
+            }
+            Shape::Burster => {
+                // A swollen acid sac filling the footprint inside a glowing
+                // haze, three bright blisters on its back, a small head at the
+                // front and four stubby legs under it.
+                let leg = Vec2::new(radius * 0.14, radius * 0.5);
+                entity.insert((
+                    Mesh2d(meshes.add(Ellipse::new(radius * 1.0, radius * 0.9))),
+                    MeshMaterial2d(materials.add(color)),
+                ));
+                entity.with_children(|parent| {
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 1.25))),
+                        MeshMaterial2d(materials.add(color.lighter(0.4).with_alpha(0.3))),
+                        Transform::from_translation(Vec3::new(0.0, 0.0, -0.2)),
+                    ));
+                    for (lane, lift) in [(-0.62, 0.42), (0.62, 0.42), (-0.62, -0.42), (0.62, -0.42)]
+                    {
+                        parent.spawn((
+                            Sprite::from_color(color.darker(0.4), leg),
+                            Transform::from_translation(Vec3::new(
+                                radius * lane * 1.25,
+                                radius * lift,
+                                -0.1,
+                            ))
+                            .with_rotation(Quat::from_rotation_z(-lane * lift * 2.0)),
+                        ));
+                    }
+                    parent.spawn((
+                        Mesh2d(meshes.add(Circle::new(radius * 0.28))),
+                        MeshMaterial2d(materials.add(color.darker(0.35))),
+                        Transform::from_translation(Vec3::new(0.0, radius * 0.9, 0.1)),
+                    ));
+                    for (lane, lift, blister) in
+                        [(0.0, -0.05, 0.38), (-0.45, -0.3, 0.22), (0.45, -0.3, 0.22)]
+                    {
+                        parent.spawn((
+                            Mesh2d(meshes.add(Circle::new(radius * blister))),
+                            MeshMaterial2d(materials.add(color.lighter(0.55))),
+                            Transform::from_translation(Vec3::new(
+                                radius * lane,
+                                radius * lift,
+                                0.2,
+                            )),
+                        ));
+                    }
+                });
+            }
             Shape::Wraith => {
                 // A narrow dart with a swept wing bar behind its nose: the
                 // fighter among the fliers, pointing where it flies.
@@ -2124,7 +2199,10 @@ pub fn draw_detected(
         if !sighted.0.is_seen() {
             continue;
         }
-        if owner.is_some_and(|owner| session.are_allied(viewed, owner.player())) {
+        if session
+            .relation(Some(viewed), owner.map(OwnerComponent::player))
+            .is_friendly()
+        {
             continue;
         }
         let size = registry.def(info.type_id()).location.unwrap().size();
@@ -2184,6 +2262,7 @@ pub fn draw_selection(
     selection: Res<Selection>,
     inspected: Res<crate::input::Inspected>,
     registry: Res<ContentRegistry>,
+    map: Res<Map>,
     watch: Res<ObserverPerspective>,
     query: Query<
         (
@@ -2249,22 +2328,21 @@ pub fn draw_selection(
         // under it, not at its altitude. A halted or still-rising source shows no
         // ring, and another side's reach is its own to know, as on the
         // overlay; an observer watching the whole map sees every side's.
-        let side_of_view = match viewed {
-            None => true,
-            Some(viewed) => owner.is_some_and(|owner| session.are_allied(viewed, owner.player())),
-        };
+        let side_of_view = on_viewed_side(&session, viewed, owner.map(OwnerComponent::player));
         if rings_drawn > 0
             && side_of_view
             && let Some(sources) = sources
         {
             let def = registry.def(info.type_id());
-            let size = def.location.unwrap().size();
+            // A reach is measured from the cells the source is counted on.
+            let extent = Form::of(def, map.movement_model()).extent();
             let ground = transform.translation.truncate() - lift(&registry, def).truncate();
             for (source, state) in def.field_sources.iter().zip(&sources.0) {
                 let Emitted::Reach(reach) = state.last_emitted else {
                     continue;
                 };
-                let radius = (reach as f32 + size.width.max(size.height) as f32 / 2.0) * CELL_PX;
+                let radius =
+                    (reach as f32 + extent.width.max(extent.height) as f32 / 2.0) * CELL_PX;
                 gizmos.circle_2d(
                     ground,
                     radius,
@@ -2437,7 +2515,7 @@ pub fn collect_puffs(world: &mut World) {
                         if made_out_before(*entity)
                             && let Some(moved) = index.any(*entity)
                         {
-                            let size = entity_def::size(world, moved);
+                            let size = declared_size(world, moved);
                             puffs.active.push((*from, size, PuffKind::Relocated, tick));
                         }
                         made_out_now(*entity).then_some((*entity, Some(*to), PuffKind::Relocated))
@@ -2452,7 +2530,7 @@ pub fn collect_puffs(world: &mut World) {
                 && let Some(entity) = index.any(id)
             {
                 let whereabouts = entity_def::whereabouts(world, entity);
-                let size = entity_def::size(world, entity);
+                let size = declared_size(world, entity);
                 let position = match place {
                     Some(position) => position,
                     None => whereabouts,
@@ -3110,6 +3188,20 @@ pub(crate) fn viewed_player(
     session.local_player().or(watch.0)
 }
 
+/// Whether what `owner` holds is on the side `viewed` watches: its own or an
+/// ally's. An observer watching the whole map has no side and is shown every
+/// side's.
+pub(crate) fn on_viewed_side(
+    session: &GameSession,
+    viewed: Option<PlayerId>,
+    owner: Option<PlayerId>,
+) -> bool {
+    match viewed {
+        None => true,
+        Some(viewed) => session.relation(Some(viewed), owner).is_friendly(),
+    }
+}
+
 /// The color of the link from a repairer of `owner`, `stalled` ticks unable to
 /// pay, to its patient, as `viewed` sees it: stalled only for a repairer of
 /// the viewed side or its allies.
@@ -3119,7 +3211,7 @@ pub fn repair_link_color(
     owner: Option<PlayerId>,
     stalled: u32,
 ) -> Color {
-    if stalled > 0 && session.owners_allied(viewed, owner) {
+    if stalled > 0 && session.relation(viewed, owner).is_friendly() {
         STALLED_WORK_COLOR
     } else {
         REPAIR_WORK_COLOR
@@ -3310,10 +3402,7 @@ pub fn draw_ghosts(
     let mut seen = HashSet::new();
     for (info, location, tags, owner, sighted) in &buildings {
         // The whole-map view has no rival to remember.
-        let own_side = match viewed {
-            None => true,
-            Some(viewed) => owner.is_some_and(|owner| session.are_allied(viewed, owner.player())),
-        };
+        let own_side = on_viewed_side(&session, viewed, owner.map(OwnerComponent::player));
         if own_side || !tags.contains(tags::BUILDING) {
             continue;
         }
@@ -3323,18 +3412,21 @@ pub fn draw_ghosts(
         // snapshotted though its origin cell is not.
         if stamped(sighted).is_seen() {
             seen.insert(info.id());
-            let location_def = registry.def(info.type_id()).location.unwrap();
-            let size = location_def.size();
-            let anchor = map.location(location.position, size).anchor();
+            let def = registry.def(info.type_id());
+            let form = Form::of(def, map.movement_model());
+            let size = def
+                .location
+                .expect("validated content defines a location")
+                .size();
             ghosts.0.insert(
                 info.id(),
                 GhostSprite {
-                    anchor: (anchor.x, anchor.y),
+                    footprint: map.location(location.position, form.extent()).footprint(),
                     center: world_point(location.position).truncate(),
-                    size,
-                    layers: location_def.occupies(),
-                    solidity: location_def.solidity(),
-                    class: OccupancyClass::of(registry.def(info.type_id())),
+                    look: map.location_clamped(location.position, size).footprint(),
+                    layers: form.occupies(),
+                    solidity: form.solidity(),
+                    class: form.occupancy(),
                     shape: ghost_shape(info.type_name(), size),
                 },
             );
@@ -3342,7 +3434,13 @@ pub fn draw_ghosts(
     }
 
     ghosts.0.retain(|id, ghost| {
-        match perspective(&session, &watch, &fog, ghost.anchor.0, ghost.anchor.1) {
+        match perspective(
+            &session,
+            &watch,
+            &fog,
+            ghost.footprint.origin.x,
+            ghost.footprint.origin.y,
+        ) {
             // Seen again: keep only if the building is seen there still (else
             // it was destroyed or moved away while we were gone, so drop the
             // stale ghost).
@@ -3400,6 +3498,8 @@ fn ghost_shape(type_name: &str, size: CellSize) -> GhostShape {
         | Shape::Hole
         | Shape::Worm
         | Shape::Stalker
+        | Shape::Tusker
+        | Shape::Burster
         | Shape::Observer
         | Shape::Arbiter => GhostShape::Circle { circumradius },
         // Everything else is ghosted by its footprint: the shapes that are
@@ -3581,10 +3681,7 @@ pub fn draw_watch_reach(
 ) {
     let viewed = viewed_player(&session, &watch);
     for held in watches.in_force() {
-        let shown = match viewed {
-            None => true,
-            Some(viewed) => session.are_allied(viewed, held.player),
-        };
+        let shown = on_viewed_side(&session, viewed, Some(held.player));
         if !shown {
             continue;
         }
@@ -3820,12 +3917,14 @@ pub fn passenger_dot_color(
     viewed: Option<PlayerId>,
     owner: Option<PlayerId>,
 ) -> Color {
-    match (viewed, owner) {
-        (_, None) => UNOWNED_PASSENGER_COLOR,
-        (None, Some(owner)) => player_color(owner),
-        (Some(viewed), Some(owner)) if owner == viewed => OWN_PASSENGER_COLOR,
-        (Some(viewed), Some(owner)) if session.are_allied(viewed, owner) => ALLIED_PASSENGER_COLOR,
-        (Some(_), Some(_)) => ENEMY_PASSENGER_COLOR,
+    match viewed {
+        None => owner.map_or(UNOWNED_PASSENGER_COLOR, player_color),
+        Some(viewed) => match session.relation(Some(viewed), owner) {
+            Relation::Own => OWN_PASSENGER_COLOR,
+            Relation::Allied => ALLIED_PASSENGER_COLOR,
+            Relation::Enemy => ENEMY_PASSENGER_COLOR,
+            Relation::Neutral => UNOWNED_PASSENGER_COLOR,
+        },
     }
 }
 
@@ -3839,11 +3938,7 @@ pub fn crew_counts(
     visibility: &Visibility,
     sighted: Option<&Sighted>,
 ) -> bool {
-    let own_side = match (viewed, owner) {
-        (None, _) => true,
-        (Some(viewed), Some(owner)) => session.are_allied(viewed, owner.player()),
-        (Some(_), None) => false,
-    };
+    let own_side = on_viewed_side(session, viewed, owner.map(OwnerComponent::player));
     own_side || made_out(visibility, sighted)
 }
 
@@ -4402,4 +4497,12 @@ fn summoned_size(registry: &ContentRegistry, skill: SkillId) -> CellSize {
             .size(),
         Some(SkillCaster::Entity { .. } | SkillCaster::Player { .. }) | None => CellSize::ONE,
     }
+}
+
+/// The footprint `entity`'s type declares: the size it is drawn at.
+fn declared_size(world: &World, entity: Entity) -> CellSize {
+    entity_def::of(world, entity)
+        .location
+        .expect("validated content defines a location")
+        .size()
 }

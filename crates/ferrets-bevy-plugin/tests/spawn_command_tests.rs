@@ -98,6 +98,7 @@ fn spawn_wider_than_map_is_ignored() {
         registry.register(EntityTypeDef::new("colossus").with_location(
             utils::GROUND_DOMAIN,
             CellSize::new(40, 40),
+            None,
             Solidity::Solid,
             utils::GROUND,
         ));

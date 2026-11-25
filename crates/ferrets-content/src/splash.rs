@@ -10,7 +10,7 @@ use crate::{area::Area, quantity::Quantity};
 pub enum SplashShape {
     /// Bands measure distance from the impact point.
     Circular,
-    /// Bands measure distance from the line the shot travelled, so the blast
+    /// Bands measure distance from the line the shot traveled, so the blast
     /// sweeps everything along its path rather than pooling at the end.
     Line,
 }

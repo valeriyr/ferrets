@@ -3,7 +3,8 @@
 mod utils;
 
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
-use ferrets_physics::body;
+use ferrets_math::fixed_vec2::FixedVec2;
+use ferrets_physics::body::{self, Heading};
 
 //
 // ─── Standing rect ────────────────────────────────────────────────────────────
@@ -55,5 +56,19 @@ fn wide_body_across_boundary_stands_on_cells_of_full_span() {
     assert_eq!(
         body::standing_rect(utils::location("6.6", "6", CellSize::new(2, 2))),
         CellRect::new(CellPos::new(5, 5), CellSize::new(3, 2)),
+    );
+}
+
+//
+// ─── Heading ──────────────────────────────────────────────────────────────────
+//
+
+/// A walk aiming at the point it stands on aims nowhere.
+#[test]
+fn heading_toward_no_offset_is_unaimed() {
+    assert_eq!(Heading::toward(FixedVec2::ZERO), Heading::Unaimed);
+    assert_eq!(
+        Heading::toward(utils::push("1", "0")),
+        Heading::Toward(utils::push("1", "0"))
     );
 }

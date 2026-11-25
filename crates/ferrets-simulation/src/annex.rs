@@ -346,13 +346,14 @@ fn claim_admits(
     primary: Option<PlayerId>,
 ) -> bool {
     match claim {
-        AnnexClaim::Bound => owner.is_some() && owner == primary,
-        AnnexClaim::Allied => match (owner, primary) {
-            (Some(owner), Some(primary)) => {
-                world.resource::<GameSession>().are_allied(owner, primary)
-            }
-            _ => false,
-        },
+        AnnexClaim::Bound => world
+            .resource::<GameSession>()
+            .relation(owner, primary)
+            .is_own(),
+        AnnexClaim::Allied => world
+            .resource::<GameSession>()
+            .relation(owner, primary)
+            .is_friendly(),
         AnnexClaim::Seized => primary.is_some(),
     }
 }

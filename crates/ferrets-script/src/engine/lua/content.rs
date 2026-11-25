@@ -327,9 +327,13 @@ fn build_entity(
         None => LayerMask::from(registry.domain_def(domain).layer()),
         Some(layers) => LayerMask::from(layers),
     };
+    let radius = optional::<Value>(&location, "radius")?
+        .map(|radius| fixed_value("radius", &radius))
+        .transpose()?;
     def = def.with_location(
         domain,
         cell_size(&location)?,
+        radius,
         content::solidity(&solidity)?,
         occupies,
     );

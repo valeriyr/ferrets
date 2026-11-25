@@ -243,6 +243,17 @@ impl NavHierarchy {
         self.abstraction(shape).is_dirty()
     }
 
+    /// Whether a change was reported for `shape` since the last
+    /// [`refresh`](Self::refresh) in the cluster holding `cell`, so its
+    /// regions there may not reflect the grid.
+    ///
+    /// Panics if no hierarchy was built for the shape.
+    pub fn is_dirty_at(&self, cell: CellPos, shape: MoverShape) -> bool {
+        self.abstraction(shape)
+            .dirty_clusters
+            .contains(&self.cluster_of(cell))
+    }
+
     /// Returns the cells per cluster side.
     pub fn cluster_size(&self) -> u32 {
         self.cluster_size

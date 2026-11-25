@@ -60,10 +60,19 @@ enum LayerRelief {
     Shaped(Vec<Relief>),
 }
 
+/// The most cells a grid may span along either side.
+pub const MAX_SIDE: u32 = 65_536;
+
 impl NavGrid {
     /// Creates a grid with no layers registered, each cell of the terrain
     /// `terrain_at` gives it.
+    ///
+    /// Panics if a side spans more than [`MAX_SIDE`] cells.
     pub fn new(width: u32, height: u32, terrain_at: impl Fn(CellPos) -> TerrainId) -> Self {
+        assert!(
+            width <= MAX_SIDE && height <= MAX_SIDE,
+            "a grid spans at most {MAX_SIDE} cells a side, not {width} × {height}"
+        );
         Self {
             width,
             height,
@@ -547,6 +556,21 @@ impl NavGrid {
             .cells()
             .all(|cell| self.cell_fits_statically(cell, shape))
             && self.holds_together(anchor, shape)
+    }
+
+    /// Returns `true` if the shape's footprint at `anchor`
+    /// [fits statically](Self::fits_statically) but for the cells of `held`,
+    /// the footprint it stands at now: a footprint already over blocked ground
+    /// may keep those cells, and may not take a new one.
+    ///
+    /// A footprint other than `held` reaching out of bounds returns `false`.
+    pub fn fits_statically_from(&self, anchor: CellPos, shape: MoverShape, held: CellRect) -> bool {
+        let footprint = CellRect::new(anchor, shape.size);
+        footprint == held
+            || footprint
+                .cells()
+                .all(|cell| self.cell_fits_statically(cell, shape) || held.contains(cell))
+                && self.holds_together(anchor, shape)
     }
 
     /// Returns `true` if `shape` anchored at `anchor` may stand on the ground

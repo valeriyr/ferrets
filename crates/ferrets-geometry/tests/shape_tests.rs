@@ -66,6 +66,15 @@ fn box_middle_lies_halfway_across_its_bounds() {
     );
 }
 
+#[test]
+fn circle_has_its_radius_and_box_none() {
+    assert_eq!(
+        circle(("2.5", "2.5"), "0.75").radius(),
+        Some(utils::fixed("0.75"))
+    );
+    assert_eq!(Shape::cell(CellPos::new(2, 2)).radius(), None);
+}
+
 //
 // ─── Cells of a circle ────────────────────────────────────────────────────────
 //

@@ -679,6 +679,7 @@ fn body_in_air_domain_is_drawn_lifted_whatever_else_it_occupies() {
                 .with_location(
                     domain,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     LayerMask::from(ground) | air,
                 )
@@ -1007,7 +1008,7 @@ fn spawn_owned_at(app: &mut App, type_name: &str, x: u32, y: u32, owner: PlayerI
 
 /// A mover carrying a gun that bears on its own — the combination where a single
 /// drawn look would show the wrong thing. Its own registration rather than the
-/// demo's war wagon, so a one-cell body with a centred mount keeps the geometry
+/// demo's war wagon, so a one-cell body with a centered mount keeps the geometry
 /// here trivial whatever the demo rebalances.
 fn register_gun_wagon(app: &mut App) {
     let (ground, domain) = {
@@ -1030,10 +1031,15 @@ fn register_gun_wagon(app: &mut App) {
     );
     registry.register(
         EntityTypeDef::new("gun_wagon")
-            .with_location(domain, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(
+                domain,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                ground,
+            )
             .with_movement(
                 utils::fixed("0.3"),
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(30),
                 FixedU64::from_num(30),

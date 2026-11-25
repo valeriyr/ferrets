@@ -3,11 +3,13 @@
 //! defeat once everything is gone.
 
 use ferrets_demo::{content::CONTENT, scenario::builtin_mission};
-use ferrets_geometry::projection::Projection;
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
 use ferrets_script::{
     ai::view::{
         content::ContentView,
-        game::{EntityView, GameView},
+        game::{EntityView, GameView, Whereabouts},
     },
     content,
     engine::{ScriptEngine, lua::LuaEngine},
@@ -80,14 +82,12 @@ fn entity(type_name: &str, rising: bool) -> EntityView {
     EntityView {
         id: 1,
         type_name: type_name.to_string(),
-        x: 0,
-        y: 0,
+        whereabouts: Whereabouts::Standing(CellRect::new(CellPos::new(0, 0), CellSize::new(1, 1))),
         health: Some(1),
         energy: None,
         damage: None,
         armor: None,
         idle: true,
-        hidden: false,
         concealed: false,
         buffs: Vec::new(),
         carrying: None,
@@ -96,7 +96,6 @@ fn entity(type_name: &str, rising: bool) -> EntityView {
         disabled: false,
         stance: None,
         resource_amount: None,
-        boarded: None,
         passengers: Vec::new(),
         broodlings: Vec::new(),
         bred_by: None,

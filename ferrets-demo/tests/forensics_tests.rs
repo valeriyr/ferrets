@@ -24,6 +24,11 @@
 //! `REFRESH_TIMES=1` times every hierarchy refresh the game runs — on a copy,
 //! after each tick that left the hierarchy dirty — and prints each with its
 //! tick, then the count, total, mean and longest.
+//! `SELECTION=<player>` prints, at each tick that player's recorded commands
+//! hold a command other than a selection change and five ticks later, every
+//! entity in that player's selection with its type, stance and position.
+//! `CREEP=1` prints every body with no order that moves on thirty ticks
+//! running: the tick range of the creep and how far it went.
 //! `VISIBILITY_TIMES=1` times every tick and, after it, the fog of war
 //! recompute run again on the tick's end state into a scratch grid — the
 //! game's own grid is set aside and put back untouched — and prints the
@@ -55,7 +60,7 @@ use ferrets_simulation::{
         concealed::ConcealedComponent, entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent, hidden::HiddenComponent, location::LocationComponent,
         movement::MoveComponent, order_queue::OrderQueueComponent, owner::OwnerComponent,
-        pools::PoolsComponent, resource::ResourceCarrierComponent,
+        pools::PoolsComponent, resource::ResourceCarrierComponent, stance::StanceComponent,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -63,6 +68,7 @@ use ferrets_simulation::{
     game_loop::visibility,
     map::Map,
     resources::PlayerResources,
+    selection::Selection,
     session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
     visibility::VisibilityGrid,
@@ -92,15 +98,24 @@ fn replay_forensics() {
     let path = std::env::var("FREP").expect("set FREP to a .frep path");
     let replay = Replay::read(BufReader::new(File::open(&path).expect("replay opens")))
         .expect("replay reads");
+    // Every recorded command as text, with its tick and player.
+    let replay_inputs: Vec<(u32, PlayerId, String)> = (0..=replay.last_tick().unwrap_or(0))
+        .flat_map(|tick| {
+            replay
+                .inputs_at(tick)
+                .iter()
+                .flat_map(move |(player, commands)| {
+                    commands
+                        .iter()
+                        .map(move |command| (tick, *player, format!("{command:?}")))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
     if let Ok(wanted) = std::env::var("COMMANDS") {
-        for tick in 0..=replay.last_tick().unwrap_or(0) {
-            for (player, commands) in replay.inputs_at(tick) {
-                for command in commands {
-                    let text = format!("{command:?}");
-                    if text.contains(wanted.as_str()) {
-                        println!("command t{tick} p{player} {text}");
-                    }
-                }
+        for (tick, player, text) in &replay_inputs {
+            if text.contains(wanted.as_str()) {
+                println!("command t{tick} p{player} {text}");
             }
         }
     }
@@ -149,6 +164,21 @@ fn replay_forensics() {
             .map(|_| (Vec::new(), Vec::new()));
     let mut bore: BTreeMap<SimulationId, Vec<String>> = BTreeMap::new();
 
+    // SELECTION=<player>: the ticks that player gave a command, and five after.
+    let selection_ticks: Option<(PlayerId, Vec<u32>)> = std::env::var("SELECTION")
+        .ok()
+        .and_then(|player| player.parse().ok())
+        .map(|player: PlayerId| {
+            let ticks = (0..=last)
+                .filter(|&tick| {
+                    replay_inputs.iter().any(|(at, from, text)| {
+                        *at == tick && *from == player && !text.starts_with("Select")
+                    })
+                })
+                .flat_map(|tick| [tick, tick + 5])
+                .collect();
+            (player, ticks)
+        });
     let mut tracks: BTreeMap<SimulationId, (String, Vec<Sample>)> = BTreeMap::new();
     for _ in 0..last + 10 {
         let tick_started = Instant::now();
@@ -169,6 +199,35 @@ fn replay_forensics() {
         }
         let world = app.world_mut();
         let tick = world.resource::<GameSession>().tick();
+        if let Some((player, ticks)) = &selection_ticks
+            && ticks.contains(&tick)
+        {
+            let selected: Vec<String> = world
+                .resource::<Selection>()
+                .get(*player)
+                .iter()
+                .filter_map(|&id| {
+                    world
+                        .resource::<EntityIndex>()
+                        .alive(id)
+                        .map(|entity| (id, entity))
+                })
+                .map(|(id, entity)| {
+                    let entity_ref = world.entity(entity);
+                    let name = entity_ref
+                        .get::<EntityInfoComponent>()
+                        .map_or("?", |info| info.type_name());
+                    let stance = entity_ref
+                        .get::<StanceComponent>()
+                        .map(|StanceComponent(stance)| *stance);
+                    let position = entity_ref
+                        .get::<LocationComponent>()
+                        .map(|location| location.position);
+                    format!("{id:?} {name} {stance:?} at {position:?}")
+                })
+                .collect();
+            println!("t{tick} selection of {player}: {}", selected.join(", "));
+        }
         if let Some(refreshes) = &mut refreshes {
             let map = world.resource::<Map>();
             if map.hierarchy().is_dirty() {
@@ -335,14 +394,14 @@ fn replay_forensics() {
                 .get::<MoveComponent>()
                 .map(|movement| {
                     format!(
-                        "path {:?} corridor {} plan {:?} frustration {} wait {} best {} regaining {} avoid {} detoured {}",
+                        "path {:?} corridor {} plan {:?} frustration {} wait {} best {:?} pursued {:?} avoid {} detoured {}",
                         movement.path,
                         movement.corridor.len(),
                         movement.plan,
                         movement.frustration,
                         movement.wait_ticks,
                         movement.best_distance,
-                        movement.regaining,
+                        movement.pursued,
                         movement.avoid_claims,
                         movement.detoured,
                     )
@@ -504,6 +563,42 @@ fn replay_forensics() {
         }
     }
 
+    // Creep: a body with no order that moves on thirty ticks running —
+    // contact settling that never ends; a shove from a passing walker lasts a
+    // few ticks.
+    if std::env::var("CREEP").is_ok() {
+        for (id, (name, track)) in &tracks {
+            let mut run: Option<(u32, u32, FixedI64)> = None;
+            let report = |run: Option<(u32, u32, FixedI64)>| {
+                if let Some((from, to, far)) = run
+                    && to - from + 1 >= 30
+                {
+                    println!("CREEP {name} {id:?}: ticks {from}..{to}, {far} cells");
+                }
+            };
+            for pair in track.windows(2) {
+                let (before, after) = (&pair[0], &pair[1]);
+                let creeping = after.queued == 0
+                    && before.queued == 0
+                    && after.tick == before.tick + 1
+                    && after.position != before.position;
+                if !creeping {
+                    report(run.take());
+                    continue;
+                }
+                let step = before
+                    .position
+                    .distance(after.position)
+                    .to_num::<FixedI64>();
+                run = Some(match run {
+                    Some((from, _, far)) => (from, after.tick, far + step),
+                    None => (after.tick, after.tick, step),
+                });
+            }
+            report(run);
+        }
+    }
+
     // Facing flick: the look the sprite is drawn at disagrees with the step the
     // body took, so the unit walks one way while pointing another.
     for (id, (name, track)) in &tracks {
@@ -609,7 +704,7 @@ fn offset(from: FixedUVec2, to: FixedUVec2) -> FixedVec2 {
 }
 
 /// The shortest step whose direction the eye can read, in cells. Below it the
-/// body is being nudged by its neighbours rather than walking, and which way it
+/// body is being nudged by its neighbors rather than walking, and which way it
 /// looks while that happens says nothing.
 const READABLE_STEP: FixedI64 = FixedI64::lit("0.05");
 
@@ -625,7 +720,7 @@ fn sector(facing: Facing) -> u8 {
 }
 
 /// The sector a step was taken along, or `None` when the step is too short to
-/// point anywhere — below that the body is being nudged by its neighbours rather
+/// point anywhere — below that the body is being nudged by its neighbors rather
 /// than walking, and which way it goes while that happens says nothing.
 fn stepped_sector(direction: FixedVec2) -> Option<u8> {
     if direction.x.abs() < READABLE_STEP && direction.y.abs() < READABLE_STEP {

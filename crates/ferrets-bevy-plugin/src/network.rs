@@ -275,7 +275,7 @@ pub struct PendingSpeed(PendingChange<GameSpeed>);
 /// stall has arrived (the boundary is
 /// [`MARGIN_HEADROOM`](tick::MARGIN_HEADROOM)). Measured where frames land, so
 /// it says how late they are *here* — under a host or a relayed mesh a frame
-/// may have travelled through another peer, and this cannot tell the two apart.
+/// may have traveled through another peer, and this cannot tell the two apart.
 #[derive(Resource, Default)]
 pub struct FrameMargins(BTreeMap<PlayerId, (u32, FixedU64)>);
 

@@ -497,7 +497,7 @@ fn read_target(world: &World, entity: Entity, order: &Order) -> Result<Reading, 
     let Some(storage) = target_def.resource_storage.as_ref() else {
         return Err(Refusal::TargetUnfit);
     };
-    let own = entity_def::same_owner(world, entity, target);
+    let own = entity_def::relation(world, entity, target).is_own();
     let load = world
         .entity(entity)
         .get::<ResourceCarrierComponent>()

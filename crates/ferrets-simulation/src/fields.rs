@@ -11,7 +11,6 @@ use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
-    components::owner,
     entity_def, requirements,
     session::{GameSession, player_id::PlayerId, player_mask::PlayerMask},
 };
@@ -293,7 +292,7 @@ impl PlayerMask {
         player: Option<PlayerId>,
     ) -> bool {
         self.players()
-            .any(|other| owner::admits(session, of, player, Some(other)))
+            .any(|other| session.relation(player, Some(other)).fits(of))
     }
 }
 
@@ -305,10 +304,7 @@ pub fn allows_placement(
     def: &EntityTypeDef,
     anchor: CellPos,
 ) -> bool {
-    let size = def
-        .location
-        .expect("validated content defines a location")
-        .size();
+    let size = entity_def::form(world, def).extent();
     debug_assert_spreads_on(
         world.resource::<ContentRegistry>(),
         def,

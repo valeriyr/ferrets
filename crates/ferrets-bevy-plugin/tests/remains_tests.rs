@@ -340,6 +340,7 @@ fn remains_of_mover_between_cells_are_set_down_from_cells_it_stood_across() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -351,11 +352,11 @@ fn remains_of_mover_between_cells_are_set_down_from_cells_it_stood_across() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    Some(utils::fixed("0.5")),
                     Solidity::Solid,
                     utils::GROUND,
                 )
                 .with_movement(
-                    utils::fixed("0.5"),
                     utils::fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -424,6 +425,7 @@ fn remains_whose_domain_takes_water_lie_in_water() {
                     .with_location(
                         utils::GROUND_DOMAIN,
                         CellSize::ONE,
+                        None,
                         Solidity::Passable,
                         utils::GROUND,
                     )
@@ -435,6 +437,7 @@ fn remains_whose_domain_takes_water_lie_in_water() {
                     .with_location(
                         utils::GROUND_DOMAIN,
                         CellSize::ONE,
+                        None,
                         Solidity::Solid,
                         utils::GROUND,
                     )
@@ -464,7 +467,7 @@ fn remains_refused_where_body_fell_lie_at_most_cell_beside_it() {
         |registry, dry| {
             registry.register(
                 EntityTypeDef::new("dry_corpse")
-                    .with_location(dry, CellSize::ONE, Solidity::Passable, utils::GROUND)
+                    .with_location(dry, CellSize::ONE, None, Solidity::Passable, utils::GROUND)
                     .with_tags(["remains"])
                     .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
             );
@@ -473,6 +476,7 @@ fn remains_refused_where_body_fell_lie_at_most_cell_beside_it() {
                     .with_location(
                         utils::GROUND_DOMAIN,
                         CellSize::ONE,
+                        None,
                         Solidity::Solid,
                         utils::GROUND,
                     )
@@ -509,6 +513,7 @@ fn what_death_stands_up_stands_only_on_terrain_its_domain_takes() {
                     .with_location(
                         utils::GROUND_DOMAIN,
                         CellSize::ONE,
+                        None,
                         Solidity::Solid,
                         utils::GROUND,
                     )
@@ -552,6 +557,7 @@ fn what_death_in_berth_stands_up_comes_out_of_job_around_it() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -763,6 +769,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -774,6 +781,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -786,11 +794,11 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    Some(utils::fixed("0.5")),
                     Solidity::Solid,
                     utils::GROUND,
                 )
                 .with_movement(
-                    utils::fixed("0.5"),
                     utils::fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -803,6 +811,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -814,6 +823,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -826,6 +836,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -837,6 +848,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -849,6 +861,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -901,6 +914,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -912,6 +926,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -924,6 +939,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -935,6 +951,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -946,6 +963,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -965,6 +983,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -981,6 +1000,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Underfoot,
                     utils::GROUND,
                 )

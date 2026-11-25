@@ -939,7 +939,8 @@ pub fn update_spectator_note(
             // network layer's to announce.
             LocalRole::Player(local) if session.is_player_eliminated(local) => {
                 let side_plays_on = session.player_slots().any(|slot| {
-                    session.are_allied(local, slot.id()) && session.is_player_live(slot.id())
+                    session.relation(Some(local), Some(slot.id())).is_friendly()
+                        && session.is_player_live(slot.id())
                 });
                 if side_plays_on {
                     "Eliminated - spectating (your side plays on)".to_string()

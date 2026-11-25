@@ -310,9 +310,14 @@ fn blast_victims(
         // Without friendly fire the blast spares the attacker's own side. Neutrals
         // are nobody's ally, so they are still caught.
         if !splash.friendly_fire()
-            && let (Some(attacker_owner), Some(victim_owner)) =
-                (attacker_owner, entity_ref.get::<OwnerComponent>())
-            && session.are_allied(attacker_owner.player(), victim_owner.player())
+            && session
+                .relation(
+                    attacker_owner.as_ref().map(OwnerComponent::player),
+                    entity_ref
+                        .get::<OwnerComponent>()
+                        .map(OwnerComponent::player),
+                )
+                .is_friendly()
         {
             continue;
         }

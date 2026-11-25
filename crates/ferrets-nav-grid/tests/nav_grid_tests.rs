@@ -13,6 +13,29 @@ use ferrets_nav_grid::{
 };
 
 //
+// ─── Size ─────────────────────────────────────────────────────────────────────
+//
+
+#[test]
+#[should_panic(expected = "a grid spans at most 65536 cells a side, not 65537 × 1")]
+fn grid_wider_than_bound_panics() {
+    NavGrid::new(65_537, 1, |_| utils::LAND);
+}
+
+#[test]
+#[should_panic(expected = "a grid spans at most 65536 cells a side, not 1 × 65537")]
+fn grid_taller_than_bound_panics() {
+    NavGrid::new(1, 65_537, |_| utils::LAND);
+}
+
+#[test]
+fn grid_at_bound_is_accepted() {
+    let grid = NavGrid::new(65_536, 1, |_| utils::LAND);
+
+    assert_eq!(grid.width(), 65_536);
+}
+
+//
 // ─── Layers ───────────────────────────────────────────────────────────────────
 //
 
@@ -236,6 +259,23 @@ fn static_occupancy_refuses_shape_on_both_queries() {
 
     assert!(!grid.fits(utils::nav(2, 2), shape));
     assert!(!grid.fits_statically(utils::nav(2, 2), shape));
+}
+
+#[test]
+fn footprint_over_blocked_ground_keeps_its_cells_and_takes_no_new_one() {
+    // A 2×2 held at (2, 2) over a wall at (3, 3). Anchored at (3, 2) it keeps
+    // (3, 3) and takes (4, 2), (4, 3), all open; at (3, 3) it would take
+    // (3, 4) and (4, 4), with a wall on (4, 4).
+    let mut grid = utils::grid(8, 8);
+    let shape = utils::square_on_ground(2);
+    grid.set_occupied(utils::GROUND, utils::nav(3, 3), true);
+    grid.set_occupied(utils::GROUND, utils::nav(4, 4), true);
+    let held = CellRect::new(utils::nav(2, 2), CellSize::new(2, 2));
+
+    assert!(grid.fits_statically_from(utils::nav(2, 2), shape, held));
+    assert!(grid.fits_statically_from(utils::nav(3, 2), shape, held));
+    assert!(!grid.fits_statically(utils::nav(3, 2), shape));
+    assert!(!grid.fits_statically_from(utils::nav(3, 3), shape, held));
 }
 
 #[test]

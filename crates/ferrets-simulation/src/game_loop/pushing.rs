@@ -1,98 +1,61 @@
 //! Contact resolution for the continuous movement model: gathers the
-//! bodies, lets the physics separate them, and commits the displacements
-//! through terrain, each body's claim following it.
+//! bodies, lets the physics settle their contacts, and commits each body's
+//! new place, its claim following it.
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::registry::ContentRegistry;
-use ferrets_math::{FixedI64, fixed_vec2::FixedVec2};
 use ferrets_nav_grid::mover_shape::MoverShape;
-use ferrets_physics::{body::Body, contact, terrain};
+use ferrets_physics::{body::Body, resolve};
 
 use crate::{
-    components::movement::MoveComponent,
     entity_def,
     entity_index::EntityIndex,
     map::Map,
     movement_model::{self, MovementModel},
 };
 
-/// Resolves body contact between continuous movers: gather every body,
-/// take one pass of pairwise separations, and commit each displacement
-/// through terrain checks, each body's claim following it. A no-op under the
-/// cell model.
+/// Resolves body contact between continuous movers: gathers every body with
+/// what it is doing, read once, settles their contacts in one pass (see
+/// [`resolve::settle`]), and commits each changed place, the body's claim
+/// following it. A no-op under the cell model.
 pub fn resolve(world: &mut World) {
     match world.resource::<Map>().movement_model() {
         MovementModel::Cell => return,
         MovementModel::Continuous => {}
     }
 
-    // Gather, in simulation-id order.
+    // Gathered in simulation-id order.
     let claimants = claimants(world);
-    let map = world.resource::<Map>();
-    let mut bodies: Vec<Body> = Vec::new();
-
-    for &(entity, shape) in &claimants {
-        let location = entity_def::location(world, entity);
-        let position = location.middle();
-        let heading = world
-            .entity(entity)
-            .get::<MoveComponent>()
-            .and_then(|movement| movement.path.last())
-            .map(|waypoint| {
-                let waypoint = map.location_at(*waypoint, shape.size).middle();
-                FixedVec2::new(
-                    waypoint.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
-                    waypoint.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
-                )
-            });
-        bodies.push(Body {
-            location,
+    let bodies: Vec<Body> = claimants
+        .iter()
+        .map(|&(entity, shape)| Body {
+            location: entity_def::location(world, entity),
             radius: entity_def::radius(world, entity),
             weight: entity_def::weight(world, entity),
-            layers: shape.layers,
-            heading,
-        });
-    }
+            mover: shape,
+            bearing: entity_def::bearing(world, entity),
+        })
+        .collect();
+    let settled = resolve::settle(
+        &bodies,
+        |first, second| entity_def::meeting(world, claimants[first].0, claimants[second].0),
+        world.resource::<Map>().nav_grid(),
+    );
 
-    // Commit through terrain: a push may never overlap a body onto a
-    // statically blocked cell — the blocked axis is dropped, sliding along
-    // the other — nor leave the footprint it is anchored at anywhere
-    // its shape does not fit: past the map's edge, or over standing ground a
-    // circle smaller than its footprint can skirt.
-    let pushes = contact::separations(&bodies);
-    for ((&(entity, shape), body), push) in claimants.iter().zip(&bodies).zip(pushes) {
-        // A mover still rising, or changing form on ground it reserved,
-        // pushes the others but stands where it is, as a structure does,
-        // until it has risen or the change has landed.
-        if push == FixedVec2::ZERO
-            || entity_def::rising(world, entity)
-            || entity_def::reserving(world, entity)
-        {
+    for ((&(entity, shape), body), committed) in claimants.iter().zip(&bodies).zip(settled) {
+        if committed == body.location {
             continue;
         }
-        let map = world.resource::<Map>();
-        let grid = map.nav_grid();
-        let desired = terrain::displaced(body.location, push.x, push.y, map.size());
-        let slid = map.location(
-            terrain::slide_toward(grid, shape, body.shape(), desired),
-            shape.size,
+        assert!(
+            {
+                let hierarchy = world.resource::<Map>().hierarchy();
+                hierarchy.is_dirty_at(committed.anchor(), shape)
+                    || hierarchy.region_of(committed.anchor(), shape).is_some()
+            },
+            "a body stands on an anchor in a region of its shape, unless this \
+             tick's changes left its own cluster stale"
         );
-        let committed = if grid.fits_statically(slid.anchor(), shape) {
-            slid
-        } else {
-            body.location
-        };
-        if committed != body.location {
-            debug_assert!(
-                {
-                    let hierarchy = map.hierarchy();
-                    hierarchy.is_dirty_for(shape)
-                        || hierarchy.region_of(committed.anchor(), shape).is_some()
-                },
-                "a slid walker keeps an anchor in a region of its shape"
-            );
-            movement_model::move_body(world, entity, committed);
-        }
+        movement_model::move_body(world, entity, committed);
     }
 }
 
@@ -109,11 +72,9 @@ fn claimants(world: &World) -> Vec<(Entity, MoverShape)> {
                 return None;
             }
             let def = entity_def::of(world, entity);
-            let location_def = def
-                .location
-                .expect("a body standing on the grid has a location");
-            (def.can_move() && location_def.solidity().claims_cells())
-                .then(|| (entity, entity_def::mover_shape(registry, &location_def)))
+            let form = entity_def::form(world, def);
+            (def.can_move() && form.solidity().claims_cells())
+                .then(|| (entity, entity_def::mover_shape(registry, form)))
         })
         .collect()
 }

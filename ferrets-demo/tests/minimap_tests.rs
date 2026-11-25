@@ -405,6 +405,30 @@ fn glimpsed_entity_paints_no_blip() {
     assert_ne!(painted(&app, 5, 30), ground, "made out, it is painted");
 }
 
+/// A blip is the declared look held on the map: a tusker (a 3×3 look on a
+/// body of radius 0.5) standing in cell (0, 30), its middle half a cell from
+/// the edge, paints the 3×3 from (0, 29), not past the edge.
+#[test]
+fn wide_look_at_map_edge_paints_blip_held_on_map() {
+    let mut app = utils::view_app();
+    *app.world_mut().resource_mut::<FogReveal>() = FogReveal::Revealed;
+    utils::compose_minimap(&mut app);
+    let ground = painted(&app, 3, 30);
+
+    let (rival, _) = utils::create_entity(app.world_mut(), "tusker", utils::cell(0, 30), Some(1))
+        .expect("the demo content defines a tusker");
+    app.world_mut()
+        .entity_mut(rival)
+        .insert(Sighted(Sighting::Seen));
+    recompose(&mut app);
+
+    // Player 1's blip color at both corners of the 3×3 look.
+    let rival_blip = [255, 89, 89, 255];
+    assert_eq!(painted(&app, 0, 29), rival_blip, "the look's first cell");
+    assert_eq!(painted(&app, 2, 31), rival_blip, "the look's last cell");
+    assert_eq!(painted(&app, 3, 30), ground, "nothing past the look");
+}
+
 #[test]
 fn power_tints_only_viewers_own_coverage() {
     // The map revealed, so the ground under each cell is the terrain itself.

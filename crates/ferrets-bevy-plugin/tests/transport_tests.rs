@@ -1080,6 +1080,7 @@ fn wide_passenger_unloaded_at_cell_walks_on_as_move_does() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2147,6 +2148,7 @@ fn raft_app_over(water: &[(u32, u32)], unload_range: u32) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

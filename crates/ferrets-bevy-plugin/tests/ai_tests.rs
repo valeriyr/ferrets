@@ -8,11 +8,17 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::{AiPlugin, AiRuntimes, game_view, install_ai_runtimes};
-use ferrets_content::{entity_stats::EntityStatId, stats::ModifierOp};
-use ferrets_geometry::cell_pos::CellPos;
+use ferrets_content::{
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, location::Solidity,
+    registry::ContentRegistry, stats::ModifierOp,
+};
+use ferrets_geometry::{
+    cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
+};
+use ferrets_math::FixedU64;
 use ferrets_replay::{buffer::SharedBuffer, recorder::Recorder, replay::Replay};
 use ferrets_script::{
-    ai::view::content::ContentView,
+    ai::view::{content::ContentView, game::Whereabouts},
     engine::{ScriptEngine, lua::LuaEngine},
 };
 use ferrets_simulation::{
@@ -23,6 +29,7 @@ use ferrets_simulation::{
     },
     entity_def,
     input::{InputFrames, PlayerFrame, SYNC_LATENCY},
+    movement_model::MovementModel,
     resources::PlayerResources,
     session::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, finish_policy::FinishPolicy,
@@ -255,23 +262,36 @@ fn game_view_classifies_and_snapshots_entities() {
     assert_eq!((view.map_width, view.map_height), (32, 32));
     assert_eq!(view.resources, vec![("gold".to_string(), 120)]);
 
-    // Own entities include the hidden one, flagged; ids ascend.
+    // Own entities include the hidden one, untracked; ids ascend.
     assert_eq!(view.my_entities.len(), 2);
     assert!(view.my_entities[0].id < view.my_entities[1].id);
     let worker = &view.my_entities[0];
-    assert_eq!((worker.x, worker.y), (5, 5));
+    assert_eq!(
+        worker.whereabouts,
+        Whereabouts::Standing(CellRect::new(CellPos::new(5, 5), CellSize::ONE))
+    );
     assert_eq!(worker.type_name, "worker");
     assert_eq!(worker.health, Some(20));
-    assert!(worker.idle && !worker.hidden && !worker.rising);
+    assert!(worker.idle && !worker.rising);
     assert!(worker.carrying.is_none() && worker.resource_amount.is_none());
     // The hidden one is listed where it went in.
-    assert!(view.my_entities[1].hidden);
-    assert_eq!((view.my_entities[1].x, view.my_entities[1].y), (7, 5));
+    assert_eq!(
+        view.my_entities[1].whereabouts,
+        Whereabouts::Untracked(CellRect::new(CellPos::new(7, 5), CellSize::ONE))
+    );
 
-    // An ally's entities are listed by ownership, the hidden one flagged, as
-    // the brain's own are.
+    // An ally's entities are listed by ownership, the hidden one untracked,
+    // as the brain's own are: standing on (25, 25), hidden where it went in
+    // at (27, 25).
     assert_eq!(view.ally_entities.len(), 2);
-    assert!(!view.ally_entities[0].hidden && view.ally_entities[1].hidden);
+    assert_eq!(
+        view.ally_entities[0].whereabouts,
+        Whereabouts::Standing(CellRect::new(CellPos::new(25, 25), CellSize::ONE))
+    );
+    assert_eq!(
+        view.ally_entities[1].whereabouts,
+        Whereabouts::Untracked(CellRect::new(CellPos::new(27, 25), CellSize::ONE))
+    );
 
     // Hidden enemies are omitted; the neutral source exposes its remainder.
     assert_eq!(view.enemy_entities.len(), 1);
@@ -381,15 +401,17 @@ fn passenger_aboard_unseen_holder_of_another_side_is_listed_where_it_boarded() {
         .iter()
         .find(|entity| entity.id == rifleman_id.0)
         .expect("a side keeps its own in view");
-    assert!(rifleman.hidden);
-    assert_eq!((rifleman.x, rifleman.y), (11, 10));
+    assert_eq!(
+        rifleman.whereabouts,
+        Whereabouts::Untracked(CellRect::new(CellPos::new(11, 10), CellSize::ONE))
+    );
     assert!(view.enemy_entities.is_empty(), "the raft itself is unseen");
 }
 
 #[test]
-fn passenger_aboard_sighted_holder_of_another_side_is_listed_where_holder_is() {
+fn passenger_aboard_sighted_holder_of_another_side_is_listed_inside_it() {
     let mut app = utils::transport_app();
-    let (raft, _) = utils::create_owned(&mut app, "raft", 10, 10, 2);
+    let (raft, raft_id) = utils::create_owned(&mut app, "raft", 10, 10, 2);
     let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 1);
     assert_eq!(
         spawn::board(app.world_mut(), rifleman, raft),
@@ -407,14 +429,13 @@ fn passenger_aboard_sighted_holder_of_another_side_is_listed_where_holder_is() {
         AiDetection::Detectors,
     );
 
-    // The brain sees the raft, so it knows where its rifleman is carried.
+    // The brain sees the raft, so it knows what its rifleman is carried in.
     let rifleman = view
         .my_entities
         .iter()
         .find(|entity| entity.id == rifleman_id.0)
         .expect("a side keeps its own in view");
-    assert!(rifleman.hidden);
-    assert_eq!((rifleman.x, rifleman.y), (10, 10));
+    assert_eq!(rifleman.whereabouts, Whereabouts::Inside(raft_id.0));
 }
 
 #[test]
@@ -447,7 +468,7 @@ fn sighted_holder_of_another_side_lists_no_passengers() {
 }
 
 #[test]
-fn worker_inside_own_walking_job_is_listed_where_job_is() {
+fn worker_inside_own_walking_job_is_listed_inside_it() {
     let mut app = utils::transport_app();
     let (rifleman, rifleman_id) = utils::create_owned(&mut app, "rifleman", 11, 10, 0);
     let (surgeon, surgeon_id) = utils::create_owned(&mut app, "surgeon", 12, 10, 0);
@@ -473,7 +494,6 @@ fn worker_inside_own_walking_job_is_listed_where_job_is() {
         },
     );
     utils::run_ticks(&mut app, 8);
-    let patient_at = CellPos::from(entity_def::position(app.world(), rifleman));
 
     let view = game_view(
         app.world_mut(),
@@ -487,13 +507,11 @@ fn worker_inside_own_walking_job_is_listed_where_job_is() {
         .iter()
         .find(|entity| entity.id == surgeon_id.0)
         .expect("a side keeps its own in view");
-    assert!(listed.hidden);
-    assert_ne!(patient_at, CellPos::new(12, 10));
-    assert_eq!((listed.x, listed.y), (patient_at.x, patient_at.y));
+    assert_eq!(listed.whereabouts, Whereabouts::Inside(rifleman_id.0));
 }
 
 #[test]
-fn rider_of_holder_inside_unseen_job_is_listed_where_holder_went_in() {
+fn rider_of_holder_inside_unseen_job_is_listed_inside_holder() {
     let mut app = utils::transport_app();
     let (seam, seam_id) =
         utils::create_entity(app.world_mut(), "ore_seam", utils::cell(10, 5), None).unwrap();
@@ -518,8 +536,9 @@ fn rider_of_holder_inside_unseen_job_is_listed_where_holder_went_in() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
     assert!(entity_def::hidden(app.world(), hauler));
 
-    // The hauler works inside a seam nobody of the brain's sights: both it and
-    // its rider are listed where the hauler went in, (9, 5), not at the seam.
+    // The hauler works inside a seam nobody of the brain's sights: it is
+    // listed where it went in, (9, 5), not at the seam; its rider, inside the
+    // hauler the brain sides with, is listed inside the hauler.
     let view = game_view(
         app.world_mut(),
         0,
@@ -528,15 +547,17 @@ fn rider_of_holder_inside_unseen_job_is_listed_where_holder_went_in() {
         AiDetection::Detectors,
     );
     let listed = |id: u32| {
-        let entity = view
-            .my_entities
+        view.my_entities
             .iter()
             .find(|entity| entity.id == id)
-            .expect("a side keeps its own in view");
-        (entity.x, entity.y)
+            .expect("a side keeps its own in view")
+            .whereabouts
     };
-    assert_eq!(listed(hauler_id.0), (9, 5));
-    assert_eq!(listed(rifleman_id.0), (9, 5));
+    assert_eq!(
+        listed(hauler_id.0),
+        Whereabouts::Untracked(CellRect::new(CellPos::new(9, 5), CellSize::ONE))
+    );
+    assert_eq!(listed(rifleman_id.0), Whereabouts::Inside(hauler_id.0));
 }
 
 #[test]
@@ -580,8 +601,97 @@ fn carrier_waiting_beside_removed_source_is_listed_where_source_stood() {
         .iter()
         .find(|entity| entity.id == worker_id.0)
         .expect("a side keeps its own in view");
-    assert!(digger.hidden);
-    assert_eq!((digger.x, digger.y), (9, 5));
+    assert_eq!(
+        digger.whereabouts,
+        Whereabouts::Untracked(CellRect::new(CellPos::new(9, 5), CellSize::ONE))
+    );
+}
+
+/// A worker waiting off the map beside a site that is dying is listed by
+/// its own cells where it went in, not inside a holder the view lists
+/// nowhere: the site, being destroyed, is in no list.
+#[test]
+fn worker_waiting_beside_dying_site_is_untracked() {
+    let mut app = utils::orders_app();
+    let (worker, worker_id) = utils::create_owned(&mut app, "worker", 10, 10, 0);
+    utils::grant_gold(&mut app, 80);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::BuildEntity {
+            builder: worker_id,
+            type_name: "depot".into(),
+            anchor: utils::cell(10, 10),
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    assert!(entity_def::hidden(app.world(), worker));
+    utils::set_all_cells_statically_occupied(app.world_mut(), true);
+    let site = utils::single_owned_of_type(app.world_mut(), "depot", 0);
+    spawn::destroy_entity(app.world_mut(), site);
+
+    let view = game_view(
+        app.world_mut(),
+        0,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+
+    let listed = view
+        .my_entities
+        .iter()
+        .find(|entity| entity.id == worker_id.0)
+        .expect("a side keeps its own in view");
+    // The worker went into the site from its own cell, (10, 10).
+    assert_eq!(
+        listed.whereabouts,
+        Whereabouts::Untracked(CellRect::new(CellPos::new(10, 10), CellSize::ONE))
+    );
+}
+
+/// On a continuous map a mover is listed by the cells its body is counted
+/// on, not its declared look: a 3×3 look on a body of radius 0.5 stands on
+/// the one cell (10, 10).
+#[test]
+fn continuous_mover_is_listed_by_its_body() {
+    let mut app = utils::orders_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    app.world_mut().resource_mut::<ContentRegistry>().register(
+        EntityTypeDef::new("bodied")
+            .with_location(
+                utils::GROUND_DOMAIN,
+                CellSize::new(3, 3),
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                utils::GROUND,
+            )
+            .with_movement(
+                utils::fixed("0.5"),
+                FixedU64::ONE,
+                FixedU64::from_num(360),
+                FixedU64::from_num(360),
+            ),
+    );
+    let (_, bodied_id) = utils::create_owned(&mut app, "bodied", 10, 10, 0);
+
+    let view = game_view(
+        app.world_mut(),
+        0,
+        "human",
+        AiVision::Filtered,
+        AiDetection::Detectors,
+    );
+
+    let listed = view
+        .my_entities
+        .iter()
+        .find(|entity| entity.id == bodied_id.0)
+        .expect("a side keeps its own in view");
+    assert_eq!(
+        listed.whereabouts,
+        Whereabouts::Standing(CellRect::new(CellPos::new(10, 10), CellSize::ONE))
+    );
 }
 
 //

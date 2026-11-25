@@ -4,7 +4,7 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{field::FieldPlacement, price::Price, registry::ContentRegistry};
-use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect};
+use ferrets_geometry::cell_pos::CellPos;
 
 use super::orders::{self, Refusal};
 use crate::{
@@ -17,7 +17,6 @@ use crate::{
     entity_index::EntityIndex,
     events::{DeathCause, SpendCause},
     fields, ground, landing,
-    occupancy::OccupancyClass,
     overbuild::{self, Cover},
     requirements,
     resources::{self, PlayerResources},
@@ -91,8 +90,8 @@ pub fn judge(
         .resource::<ContentRegistry>()
         .entity(type_name)
         .expect("a warper warps in only registered types");
-    let location_def = unit.location.expect("a warped unit stands somewhere");
-    let footprint = CellRect::new(anchor, location_def.size());
+    let form = entity_def::form(world, unit);
+    let footprint = form.rect_at(anchor);
     let cover = match unit.overbuilds.as_deref() {
         Some(over) => Cover::Source(
             overbuild::source_under(world, over, footprint).ok_or(WarpRefusal::Blocked)?,
@@ -100,14 +99,7 @@ pub fn judge(
         None => Cover::Nothing,
     };
     let (lifted, ignored) = overbuild::set_aside(world, cover);
-    if !ground::can_place(
-        world,
-        anchor,
-        location_def,
-        OccupancyClass::of(unit),
-        &lifted,
-        &ignored,
-    ) {
+    if !ground::can_place(world, anchor, form, &lifted, &ignored) {
         return Err(WarpRefusal::Blocked);
     }
     if !landing::sees(world, player, warper_def.landing(), footprint) {

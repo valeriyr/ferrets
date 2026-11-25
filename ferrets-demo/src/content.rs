@@ -279,9 +279,9 @@ pub const CONTENT: &str = r#"
     -- The lake boss: a raceless sea fortress spawning free ships. Ships are
     -- ranged so they shell shore targets; the fortress is the boss's building.
     define_entity("ship", {
-        location = { domain = "naval", size = 1, solidity = "solid" },
+        location = { domain = "naval", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.25", turn_rate = 6, pivot_rate = 9, radius = "0.5", weight = 6,
+            speed = "0.25", turn_rate = 6, pivot_rate = 9, weight = 6,
             damage = 12, attack_range = 5, acquire_range = 8, attack_period = 10, damage_point = 4,
             -- Sees past its acquire range so its circular vision covers the square it
             -- can auto-engage.
@@ -387,11 +387,11 @@ pub const CONTENT: &str = r#"
     local function worker(name, race, builds, work)
         define_entity(name, {
             race = race,
-            location = { domain = "ground", size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
             stats = {
                 -- The baseline weight everything else is authored against: a
                 -- worker is what a crowd is made of, and what gives way in one.
-                speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
+                speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1, sight_range = 4,
                 -- Mends at the rate it builds, and bills a quarter of the price for
                 -- a full restore, so repairing is cheaper than rebuilding. It works
                 -- from the next cell over.
@@ -560,9 +560,9 @@ pub const CONTENT: &str = r#"
     -- with a slow ball, as the lake boss's ships do.
     define_entity("galley", {
         race = "human",
-        location = { domain = "naval", size = 1, solidity = "solid" },
+        location = { domain = "naval", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.25", turn_rate = 6, pivot_rate = 9, radius = "0.5", weight = 6,
+            speed = "0.25", turn_rate = 6, pivot_rate = 9, weight = 6,
             damage = 12, attack_range = 5, acquire_range = 8, attack_period = 10, damage_point = 4,
             sight_range = 12,
             supply_cost = 2,
@@ -577,9 +577,9 @@ pub const CONTENT: &str = r#"
     })
     define_entity("archer", {
         race = "human",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 7, damage_point = 3,
             -- Sees comfortably past its acquire range, so its circular vision covers
             -- what it can auto-engage.
@@ -618,9 +618,9 @@ pub const CONTENT: &str = r#"
     -- and only one medic may work a patient at a time.
     define_entity("medic", {
         race = "human",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 9,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1, sight_range = 9,
             -- A flat point of health per tick, whatever the patient is — a unit's
             -- price says nothing about how long it takes to patch up.
             repair_speed = "1.0", repair_range = 2,
@@ -654,11 +654,11 @@ pub const CONTENT: &str = r#"
     -- where the shot was aimed rather than on whatever it was tracking.
     define_entity("mortar", {
         race = "human",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
             -- Tube, carriage and crew: heavier than the infantry it walks with,
             -- though nothing like the grunt that can shoulder it aside.
-            speed = "0.2", turn_rate = 6, pivot_rate = 12, pivot_angle = 90, radius = "0.5", weight = 3,
+            speed = "0.2", turn_rate = 6, pivot_rate = 12, pivot_angle = 90, weight = 3,
             damage = 14, attack_range = 7, acquire_range = 9, attack_period = 20, damage_point = 8,
             sight_range = 11,
             supply_cost = 1,
@@ -716,12 +716,12 @@ pub const CONTENT: &str = r#"
     local function gryphon(name, domain, targetable, speed, fate, morphs, trainable)
         define_entity(name, {
             race = "human",
-            location = { domain = domain, size = { 2, 2 }, solidity = "solid" },
+            location = { domain = domain, size = { 2, 2 }, radius = "1", solidity = "solid" },
             targetable = targetable,
             morphs = morphs,
             stats = {
                 speed = speed, turn_rate = 18, pivot_rate = 24, pivot_angle = 90,
-                radius = "1", weight = 4, sight_range = 10,
+                weight = 4, sight_range = 10,
                 supply_cost = 2,
                 -- One rider, who fights from the saddle.
                 cargo_capacity = 1,
@@ -786,16 +786,15 @@ pub const CONTENT: &str = r#"
     }, false)
 
     -- The orc air transport: a 2x2 flier, and the demo's first mover wider than
-    -- one cell. Its footprint is what the planner has to fit, so it only routes
-    -- through two-wide gaps — and its body is the circle inscribed in that
-    -- footprint, radius one, which is the widest a 2x2 may carry.
+    -- one cell. Its body is a circle of radius one, the circle inscribed in its
+    -- footprint, so it only routes through two-wide gaps.
     define_entity("zeppelin", {
         race = "orc",
-        location = { domain = "air", size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "air", size = { 2, 2 }, radius = "1", solidity = "solid" },
         stats = {
             -- A gas envelope the size of a building: the heaviest thing that
             -- flies, so a gryphon meeting one aloft is the one that gives way.
-            speed = "0.35", turn_rate = 6, pivot_rate = 9, pivot_angle = 90, radius = "1", weight = 8, sight_range = 10,
+            speed = "0.35", turn_rate = 6, pivot_rate = 9, pivot_angle = 90, weight = 8, sight_range = 10,
             supply_cost = 2,
             cargo_capacity = 4,
             -- A gangplank: one body a second each way, as the pig farm's is.
@@ -978,15 +977,14 @@ pub const CONTENT: &str = r#"
     -- for a moment.
     define_entity("war_wagon", {
         race = "orc",
-        -- Two cells on a side, like the gryphon: the widest body a two-wide gap
-        -- lets through, and a footprint that has to round a corner rather than
-        -- slip past it.
-        location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
+        -- Two cells on a side, like the gryphon, its body the circle inscribed in
+        -- that footprint, radius one: the widest body a two-wide gap lets
+        -- through, and one that has to round a corner rather than slip past it.
+        location = { domain = "ground", size = { 2, 2 }, radius = "1", solidity = "solid" },
         stats = {
             -- Slow, and heavy enough that a grunt walking into one gives way.
-            -- Its body is the circle inscribed in that footprint, radius one.
             speed = "0.2", turn_rate = 9, pivot_rate = 18, pivot_angle = 90,
-            radius = "1", weight = 6,
+            weight = 6,
             -- One heavy shot on a long cycle: it out-ranges a grunt several times
             -- over and loses to anything that closes while it is reloading.
             damage = 24, attack_range = 6, acquire_range = 8, attack_period = 24,
@@ -1029,12 +1027,12 @@ pub const CONTENT: &str = r#"
     })
     define_entity("grunt", {
         race = "orc",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
             -- Heavy melee in body as well as armor: four times a worker's
             -- weight on the same one-cell footprint, so a peon walking into a
             -- standing grunt is the one that gives way and slides around it.
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 4,
             damage = 10, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
             -- Heavy melee: flat armor blunts each incoming hit.
             armor = 3,
@@ -1071,9 +1069,9 @@ pub const CONTENT: &str = r#"
     -- pool. The heal takes a target, so casting is button-then-click.
     define_entity("shaman", {
         race = "orc",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1,
             sight_range = 8,
             supply_cost = 1,
             cargo_size = 1,
@@ -1118,9 +1116,9 @@ pub const CONTENT: &str = r#"
     -- to bury.
     define_entity("hatchling", {
         race = "swarm",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.32", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
+            speed = "0.32", turn_rate = 30, pivot_rate = 30, weight = 1,
             damage = 4, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 2,
             sight_range = 6,
             lifetime = 400,
@@ -1266,6 +1264,11 @@ pub const CONTENT: &str = r#"
             { into = "overlord", land_pool_carry = { health = "full" },
               via = { form = "egg", enter_pool_carry = { health = "full" }, interrupted = { reverts = { health = "restore" } } },
               time = 60, placement = "nearby", cancel = "refundable", reason = "production", cost = { resources = { gold = 100 } } },
+            { into = "tusker", land_pool_carry = { health = "full" },
+              via = { form = "egg", enter_pool_carry = { health = "full" }, interrupted = { reverts = { health = "restore" } } },
+              time = 80, placement = "nearby", cancel = "refundable", reason = "production",
+              cost = { resources = { gold = 275, wood = 200 } },
+              requires = { { entity_type = "tusker_cavern" } } },
         },
     })
 
@@ -1275,9 +1278,9 @@ pub const CONTENT: &str = r#"
     -- sees at all.
     define_entity("overlord", {
         race = "swarm",
-        location = { domain = "air", size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "air", size = { 2, 2 }, radius = "1", solidity = "solid" },
         stats = {
-            speed = "0.2", turn_rate = 4, pivot_rate = 6, pivot_angle = 90, radius = "1", weight = 6, armor = 1, sight_range = 8, supply_provided = 6,
+            speed = "0.2", turn_rate = 4, pivot_rate = 6, pivot_angle = 90, weight = 6, armor = 1, sight_range = 8, supply_provided = 6,
         },
         pools = { health = { maximum = 200 } },
         dying = { time = 2 },
@@ -1309,16 +1312,16 @@ pub const CONTENT: &str = r#"
     })
     define_entity("drone", {
         race = "swarm",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
             supply_cost = 1,
             cargo_size = 1,
         },
         pools = { health = { maximum = 30 } },
         dying = FALLS,
-        builder = { builds = { "hatchery", "tumor", "spawning_pit", "warren", "tunnel" }, attendance = "consumed" },
+        builder = { builds = { "hatchery", "tumor", "spawning_pit", "acid_nest", "tusker_cavern", "warren", "tunnel" }, attendance = "consumed" },
         tags = { "biological" },
         skills = { "spew_creep" },
         resource_carrier = {
@@ -1354,6 +1357,38 @@ pub const CONTENT: &str = r#"
         price = { gold = 200, wood = 100 },
         rise = { time = 120, pools = { health = "initial" } },
         tags = { "building" },
+        field_placement = { ON_CREEP },
+        field_effects = { WITHERS_OFF_CREEP },
+    })
+
+    -- The acid nest, raised once the pit stands, lets a swarmling grow into
+    -- a burster.
+    define_entity("acid_nest", {
+        race = "swarm",
+        location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 400 } },
+        dying = { time = 2, leaves = BURSTS },
+        price = { gold = 100, wood = 50 },
+        rise = { time = 80, pools = { health = "initial" } },
+        tags = { "building" },
+        requires = { { entity_type = "spawning_pit" } },
+        field_placement = { ON_CREEP },
+        field_effects = { WITHERS_OFF_CREEP },
+    })
+
+    -- The tusker cavern, raised once the hive stands, lets a larva grow into
+    -- a tusker.
+    define_entity("tusker_cavern", {
+        race = "swarm",
+        location = { domain = "land", size = { 3, 3 }, solidity = "solid" },
+        stats = { sight_range = 6 },
+        pools = { health = { maximum = 600 } },
+        dying = { time = 2, leaves = BURSTS },
+        price = { gold = 150, wood = 200 },
+        rise = { time = 160, pools = { health = "initial" } },
+        tags = { "building" },
+        requires = { { entity_type = "hive" } },
         field_placement = { ON_CREEP },
         field_effects = { WITHERS_OFF_CREEP },
     })
@@ -1399,9 +1434,9 @@ pub const CONTENT: &str = r#"
     -- called off. While it crawls, nobody comes out of it.
     define_entity("burrower", {
         race = "swarm",
-        location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "ground", size = { 2, 2 }, radius = "1", solidity = "solid" },
         stats = {
-            speed = "0.15", turn_rate = 12, pivot_rate = 12, radius = "1", weight = 6,
+            speed = "0.15", turn_rate = 12, pivot_rate = 12, weight = 6,
             armor = 2,
             sight_range = 7,
         },
@@ -1473,9 +1508,9 @@ pub const CONTENT: &str = r#"
 
     define_entity("swarmling", {
         race = "swarm",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 2,
             damage = 5, attack_range = 1, acquire_range = 5, attack_period = 4, damage_point = 2,
             sight_range = 8,
             supply_cost = 1,
@@ -1503,6 +1538,15 @@ pub const CONTENT: &str = r#"
               cancel = "refundable",
               cost = { resources = { gold = 25, wood = 25 } },
               requires = { { entity_type = "hive" } } },
+            -- A burster takes a moment in the cocoon, once the acid nest
+            -- stands.
+            { into = "burster", land_pool_carry = { health = "full" },
+              via = { form = "cocoon", enter_pool_carry = { health = "full" }, interrupted = { reverts = { health = "restore" } } },
+              time = 20,
+              placement = "nearby",
+              cancel = "refundable",
+              cost = { resources = { gold = 25, wood = 25 } },
+              requires = { { entity_type = "acid_nest" } } },
             -- Digging in takes a moment and cannot be called off; the ground
             -- it digs into is the ground it stands on.
             { into = "swarmling_burrowed", land_pool_carry = { health = "clamp" },
@@ -1558,9 +1602,9 @@ pub const CONTENT: &str = r#"
     -- to feed.
     define_entity("ravager", {
         race = "swarm",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.25", turn_rate = 24, pivot_rate = 24, radius = "0.5", weight = 3,
+            speed = "0.25", turn_rate = 24, pivot_rate = 24, weight = 3,
             damage = 12, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
             armor = 1,
             sight_range = 8,
@@ -1577,6 +1621,53 @@ pub const CONTENT: &str = r#"
                 stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } } },
         },
+    })
+
+    -- The burster: a small rolling sac of acid, drawn one cell wide, whose
+    -- body is two: on a continuous map it plugs a two-cell gap alone and
+    -- shoves like a body that size. Fast, and faster on creep.
+    define_entity("burster", {
+        race = "swarm",
+        location = { domain = "ground", size = 1, radius = "1", solidity = "solid" },
+        stats = {
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, weight = 4,
+            damage = 16, attack_range = 1, acquire_range = 5, attack_period = 6, damage_point = 3,
+            sight_range = 8,
+            supply_cost = 1,
+            cargo_size = 1,
+        },
+        pools = { health = { maximum = 30, regen = "0.05" } },
+        dying = FALLS,
+        tags = { "biological" },
+        attack = { targets = GROUND },
+        selection = { priority = 11 },
+        field_effects = {
+            { field = "creep", of = "anyone", coverage = "any", inside = { {
+                stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
+            } } },
+        },
+    })
+
+    -- The tusker: a hulking tusked beast drawn three cells wide on a body of
+    -- one: on a continuous map it slips through a one-cell gap its look
+    -- seems to fill; on a cell map it is the 3×3 it looks. Slow, armored,
+    -- heavy enough to shove smaller bodies aside.
+    define_entity("tusker", {
+        race = "swarm",
+        location = { domain = "ground", size = { 3, 3 }, radius = "0.5", solidity = "solid" },
+        stats = {
+            speed = "0.2", turn_rate = 8, pivot_rate = 8, weight = 10,
+            damage = 25, attack_range = 1, acquire_range = 5, attack_period = 10, damage_point = 4,
+            armor = 2,
+            sight_range = 8,
+            supply_cost = 6,
+            cargo_size = 4,
+        },
+        pools = { health = { maximum = 400, regen = "0.05" } },
+        dying = FALLS,
+        tags = { "biological" },
+        attack = { targets = GROUND },
+        selection = { priority = 13 },
     })
 
     -- ── The Conclave ───────────────────────────────────────────────────────
@@ -1620,9 +1711,9 @@ pub const CONTENT: &str = r#"
     })
     define_entity("probe", {
         race = "conclave",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
             supply_cost = 1,
             cargo_size = 1,
@@ -1744,9 +1835,9 @@ pub const CONTENT: &str = r#"
 
     define_entity("zealot", {
         race = "conclave",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 3,
             damage = 8, attack_range = 1, acquire_range = 5, attack_period = 5, damage_point = 2,
             armor = 1,
             sight_range = 8,
@@ -1778,9 +1869,9 @@ pub const CONTENT: &str = r#"
     })
     define_entity("stalker", {
         race = "conclave",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 3,
             damage = 10, attack_range = 5, acquire_range = 6, attack_period = 20, damage_point = 4,
             armor = 1,
             sight_range = 9,
@@ -1806,10 +1897,10 @@ pub const CONTENT: &str = r#"
     -- stand across a cliff's edge mid-stride.
     define_entity("stilt_walker", {
         race = "conclave",
-        location = { domain = "striding", size = { 2, 2 }, solidity = "solid" },
+        location = { domain = "striding", size = { 2, 2 }, radius = "1", solidity = "solid" },
         targetable = GROUND | AIR,
         stats = {
-            speed = "0.2", turn_rate = 20, pivot_rate = 20, radius = "1", weight = 8,
+            speed = "0.2", turn_rate = 20, pivot_rate = 20, weight = 8,
             damage = 18, attack_range = 6, acquire_range = 7, attack_period = 30, damage_point = 6,
             armor = 1,
             sight_range = 10,
@@ -1840,9 +1931,9 @@ pub const CONTENT: &str = r#"
     -- cloak it was born with.
     define_entity("dark_templar", {
         race = "conclave",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 3,
             damage = 20, attack_range = 1, acquire_range = 5, attack_period = 20, damage_point = 6,
             armor = 1,
             sight_range = 8,
@@ -1866,9 +1957,9 @@ pub const CONTENT: &str = r#"
     -- observer.
     define_entity("observer", {
         race = "conclave",
-        location = { domain = "air", size = 1, solidity = "solid" },
+        location = { domain = "air", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1,
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, weight = 1,
             sight_range = 9,
             supply_cost = 1,
         },
@@ -1929,9 +2020,9 @@ pub const CONTENT: &str = r#"
     -- concealed, itself excepted, and the veil moves with it.
     define_entity("arbiter", {
         race = "conclave",
-        location = { domain = "air", size = 1, solidity = "solid" },
+        location = { domain = "air", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 20, pivot_rate = 20, radius = "0.5", weight = 4,
+            speed = "0.3", turn_rate = 20, pivot_rate = 20, weight = 4,
             armor = 1,
             sight_range = 9,
             supply_cost = 3,
@@ -1961,9 +2052,9 @@ pub const CONTENT: &str = r#"
     -- made its own is ground no ancient will stand in.
     define_entity("wisp", {
         race = "elves",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
             supply_cost = 1,
             cargo_size = 1,
@@ -2043,7 +2134,7 @@ pub const CONTENT: &str = r#"
         })
         define_entity(uprooted, {
             race = "elves",
-            location = { domain = "ground", size = size, solidity = "solid" },
+            location = { domain = "ground", size = size, radius = walker.radius, solidity = "solid" },
             stats = walker.stats,
             pools = walker.pools,
             dying = { time = 2 },
@@ -2064,8 +2155,9 @@ pub const CONTENT: &str = r#"
         rise = { time = 200, pools = { health = "initial" } },
         trainer = { trains = { "wisp" } },
     }, {
+        radius = "1.5",
         stats = {
-            speed = "0.1", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12, sight_range = 9, supply_provided = 10,
+            speed = "0.1", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, weight = 12, sight_range = 9, supply_provided = 10,
             damage = 20, attack_range = 1, acquire_range = 5, attack_period = 30, damage_point = 10,
         },
         pools = { health = { maximum = 800 } },
@@ -2091,8 +2183,9 @@ pub const CONTENT: &str = r#"
         rise = { time = 120, pools = { health = "initial" } },
         trainer = { trains = { "huntress", "naga" } },
     }, {
+        radius = "1.5",
         stats = {
-            speed = "0.15", turn_rate = 8, pivot_rate = 8, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
+            speed = "0.15", turn_rate = 8, pivot_rate = 8, pivot_angle = 90, weight = 10, sight_range = 6,
             damage = 25, attack_range = 1, acquire_range = 5, attack_period = 25, damage_point = 8,
         },
         pools = { health = { maximum = 500 } },
@@ -2112,8 +2205,9 @@ pub const CONTENT: &str = r#"
             { field = "true_sight", area = 7, growth = "instant", while_rising = "nothing", while_disabled = "nothing" },
         },
     }, {
+        radius = "1",
         stats = {
-            speed = "0.15", turn_rate = 12, pivot_rate = 12, radius = "1", weight = 6, armor = 1, sight_range = 8,
+            speed = "0.15", turn_rate = 12, pivot_rate = 12, weight = 6, armor = 1, sight_range = 8,
             damage = 14, attack_range = 1, acquire_range = 5, attack_period = 20, damage_point = 5,
         },
         pools = { health = { maximum = 300 } },
@@ -2153,9 +2247,9 @@ pub const CONTENT: &str = r#"
     })
     define_entity("huntress", {
         race = "elves",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, weight = 2,
             damage = 9, attack_range = 1, acquire_range = 6, attack_period = 5, damage_point = 2,
             -- A scout that looks a level up: onto a plateau from the low
             -- ground below it, though not past a standing stone.
@@ -2202,9 +2296,9 @@ pub const CONTENT: &str = r#"
     -- ground or floats, nothing that flies.
     define_entity("naga", {
         race = "elves",
-        location = { domain = "amphibious", size = 1, solidity = "solid" },
+        location = { domain = "amphibious", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 24, pivot_rate = 24, radius = "0.5", weight = 3,
+            speed = "0.3", turn_rate = 24, pivot_rate = 24, weight = 3,
             damage = 11, attack_range = 3, acquire_range = 6, attack_period = 14, damage_point = 5,
             sight_range = 8,
             supply_cost = 2,
@@ -2308,9 +2402,9 @@ pub const CONTENT: &str = r#"
     -- it.
     define_entity("scv", {
         race = "terran",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1, sight_range = 4,
             repair_speed = "1.0", repair_cost_factor = "0.25", repair_range = 1,
             build_range = 1, harvest_range = 1,
             supply_cost = 1,
@@ -2374,9 +2468,9 @@ pub const CONTENT: &str = r#"
     -- the map.
     define_entity("command_center_aloft", {
         race = "terran",
-        location = { domain = "air", size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "air", size = { 3, 3 }, radius = "1.5", solidity = "solid" },
         stats = {
-            speed = "0.12", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 12, sight_range = 9, supply_provided = 10,
+            speed = "0.12", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, weight = 12, sight_range = 9, supply_provided = 10,
         },
         pools = { health = { maximum = 800 } },
         dying = { time = 2 },
@@ -2413,9 +2507,9 @@ pub const CONTENT: &str = r#"
     })
     define_entity("barracks_aloft", {
         race = "terran",
-        location = { domain = "air", size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "air", size = { 3, 3 }, radius = "1.5", solidity = "solid" },
         stats = {
-            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
+            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, weight = 10, sight_range = 6,
         },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
@@ -2452,9 +2546,9 @@ pub const CONTENT: &str = r#"
     })
     define_entity("factory_aloft", {
         race = "terran",
-        location = { domain = "air", size = { 3, 3 }, solidity = "solid" },
+        location = { domain = "air", size = { 3, 3 }, radius = "1.5", solidity = "solid" },
         stats = {
-            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, radius = "1.5", weight = 10, sight_range = 6,
+            speed = "0.15", turn_rate = 6, pivot_rate = 6, pivot_angle = 90, weight = 10, sight_range = 6,
         },
         pools = { health = { maximum = 500 } },
         dying = { time = 2 },
@@ -2499,9 +2593,9 @@ pub const CONTENT: &str = r#"
     -- plain sight for as long as its energy holds.
     define_entity("wraith", {
         race = "terran",
-        location = { domain = "air", size = 1, solidity = "solid" },
+        location = { domain = "air", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.45", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 3,
+            speed = "0.45", turn_rate = 30, pivot_rate = 30, weight = 3,
             damage = 8, attack_range = 5, acquire_range = 7, attack_period = 12, damage_point = 4,
             sight_range = 9,
             supply_cost = 2,
@@ -2645,9 +2739,9 @@ pub const CONTENT: &str = r#"
     })
     define_entity("marine", {
         race = "terran",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 2,
             damage = 6, attack_range = 4, acquire_range = 7, attack_period = 8, damage_point = 3,
             sight_range = 8,
             supply_cost = 1,
@@ -2676,10 +2770,10 @@ pub const CONTENT: &str = r#"
     -- ground going down, revalidating it coming back up. A factory builds one
     -- with a tech lab docked, or without once siege mechanics are known, and
     -- only siege mechanics let it dig in.
-    local function tank(name, extra)
+    local function tank(name, radius, extra)
         local def = {
             race = "terran",
-            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
+            location = { domain = "ground", size = { 2, 2 }, radius = radius, solidity = "solid" },
             dying = { time = 2 },
             tags = { "mechanical" },
             selection = { priority = 10 },
@@ -2687,10 +2781,10 @@ pub const CONTENT: &str = r#"
         for key, value in pairs(extra) do def[key] = value end
         define_entity(name, def)
     end
-    tank("tank", {
+    tank("tank", "1", {
         stats = {
             speed = "0.18", turn_rate = 9, pivot_rate = 12, pivot_angle = 90,
-            radius = "1", weight = 6, armor = 1, sight_range = 9,
+            weight = 6, armor = 1, sight_range = 9,
             damage = 20, attack_range = 6, acquire_range = 8, attack_period = 26, damage_point = 10,
             -- The gun is the hull: it comes about at the hull's own pace, and
             -- fires only through a narrow arc ahead of it.
@@ -2713,7 +2807,7 @@ pub const CONTENT: &str = r#"
         },
     })
 
-    tank("siege_tank", {
+    tank("siege_tank", nil, {
         stats = { armor = 1, sight_range = 11,
             -- Planted, the gun traverses: no arc, so it answers whatever comes
             -- into its reach from any side.
@@ -2781,9 +2875,9 @@ pub const CONTENT: &str = r#"
         } } }
     define_entity("acolyte", {
         race = "undead",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1, sight_range = 4,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1, sight_range = 4,
             build_range = 1, harvest_range = 1,
             supply_cost = 1,
             cargo_size = 1,
@@ -2812,9 +2906,9 @@ pub const CONTENT: &str = r#"
 
     define_entity("ghoul", {
         race = "undead",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.35", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
+            speed = "0.35", turn_rate = 30, pivot_rate = 30, weight = 2,
             damage = 8, attack_range = 1, acquire_range = 6, attack_period = 8, damage_point = 4,
             sight_range = 6, harvest_range = 1,
             supply_cost = 1,
@@ -2839,9 +2933,9 @@ pub const CONTENT: &str = r#"
     -- falls apart.
     define_entity("skeleton", {
         race = "undead",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 2,
             damage = 7, attack_range = 1, acquire_range = 6, attack_period = 14, damage_point = 6,
             sight_range = 5,
             lifetime = 900,
@@ -2929,9 +3023,9 @@ pub const CONTENT: &str = r#"
     })
     define_entity("necromancer", {
         race = "undead",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.28", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
+            speed = "0.28", turn_rate = 30, pivot_rate = 30, weight = 2,
             damage = 5, attack_range = 4, acquire_range = 6, attack_period = 20, damage_point = 8,
             sight_range = 8,
             supply_cost = 2,

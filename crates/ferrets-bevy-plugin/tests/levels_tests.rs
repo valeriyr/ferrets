@@ -1504,9 +1504,14 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     ]));
     registry.register(
         EntityTypeDef::new("post")
-            .with_location(striding, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(
+                striding,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                ground,
+            )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -1524,10 +1529,22 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
         mover("weaver", walking, ground, 1).with_morphs([change("mat", MorphPlacement::Reserve)]),
     );
     let wisp = mover("wisp", walking, ground, 1);
-    registry.register(wisp.with_location(walking, CellSize::ONE, Solidity::Passable, ground));
+    registry.register(wisp.with_location(
+        walking,
+        CellSize::ONE,
+        Some(utils::fixed("0.5")),
+        Solidity::Passable,
+        ground,
+    ));
     registry.register(
         EntityTypeDef::new("mat")
-            .with_location(walking, CellSize::new(2, 2), Solidity::Underfoot, ground)
+            .with_location(
+                walking,
+                CellSize::new(2, 2),
+                None,
+                Solidity::Underfoot,
+                ground,
+            )
             .with_pool(Pool::health(50)),
     );
     registry.register(
@@ -1535,14 +1552,20 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     );
     registry.register(
         EntityTypeDef::new("net")
-            .with_location(walking, CellSize::new(2, 2), Solidity::Passable, ground)
+            .with_location(
+                walking,
+                CellSize::new(2, 2),
+                None,
+                Solidity::Passable,
+                ground,
+            )
             .with_pool(Pool::health(50)),
     );
     registry
         .register(mover("cairn_bearer", walking, ground, 1).with_dying(1, utils::leaves("cairn")));
     registry.register(
         EntityTypeDef::new("cairn")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(50))
             .with_train_time(2),
     );
@@ -1559,7 +1582,7 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     );
     registry.register(
         EntityTypeDef::new("kiln")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(50))
             .with_morphs([change_through(
                 "scaffold",
@@ -1569,12 +1592,12 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     );
     registry.register(
         EntityTypeDef::new("scaffold")
-            .with_location(walking, CellSize::ONE, Solidity::Underfoot, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Underfoot, ground)
             .with_pool(Pool::health(50)),
     );
     registry.register(
         EntityTypeDef::new("furnace")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(50)),
     );
     registry.register(
@@ -1587,32 +1610,38 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     for (name, size) in [("chrysalis", 1), ("seed_pod", 1), ("grove", 2)] {
         registry.register(
             EntityTypeDef::new(name)
-                .with_location(walking, CellSize::new(size, size), Solidity::Solid, ground)
+                .with_location(
+                    walking,
+                    CellSize::new(size, size),
+                    None,
+                    Solidity::Solid,
+                    ground,
+                )
                 .with_pool(Pool::health(50))
                 .with_dying(1, []),
         );
     }
     registry.register(
         EntityTypeDef::new("hut")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(50))
             .with_trainer(["cairn", "recruit"]),
     );
     registry.register(
         EntityTypeDef::new("aerie")
-            .with_location(aloft, CellSize::new(2, 2), Solidity::Solid, air)
+            .with_location(aloft, CellSize::new(2, 2), None, Solidity::Solid, air)
             .with_pool(Pool::health(50))
             .with_trainer(["recruit", "cairn"]),
     );
     registry.register(
         EntityTypeDef::new("den")
-            .with_location(delving, CellSize::new(2, 2), Solidity::Solid, deep)
+            .with_location(delving, CellSize::new(2, 2), None, Solidity::Solid, deep)
             .with_pool(Pool::health(50))
             .with_trainer(["recruit", "cairn"]),
     );
     registry.register(
         EntityTypeDef::new("airship")
-            .with_location(aloft, CellSize::new(2, 2), Solidity::Solid, air)
+            .with_location(aloft, CellSize::new(2, 2), None, Solidity::Solid, air)
             .with_pool(Pool::health(50))
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
@@ -1628,13 +1657,13 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     );
     registry.register(
         EntityTypeDef::new("sky_shrine")
-            .with_location(aloft, CellSize::new(2, 2), Solidity::Solid, air)
+            .with_location(aloft, CellSize::new(2, 2), None, Solidity::Solid, air)
             .with_pool(Pool::health(50))
             .with_dying(1, utils::leaves("cairn")),
     );
     registry.register(
         EntityTypeDef::new("cellar")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(50))
             .with_morphs([change_through(
                 "cellar_frame",
@@ -1644,7 +1673,7 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     );
     registry.register(
         EntityTypeDef::new("cellar_frame")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(50))
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::ONE)
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
@@ -1660,20 +1689,20 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     );
     registry.register(
         EntityTypeDef::new("sprig")
-            .with_location(walking, CellSize::ONE, Solidity::Passable, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Passable, ground)
             .with_pool(Pool::health(50))
             .with_morphs([change_through("bud", "tree", MorphPlacement::Reserve)]),
     );
     for name in ["bud", "tree"] {
         registry.register(
             EntityTypeDef::new(name)
-                .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+                .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
                 .with_pool(Pool::health(50)),
         );
     }
     registry.register(
         EntityTypeDef::new("wagon")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(50))
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
@@ -1698,7 +1727,7 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     );
     registry.register(
         EntityTypeDef::new("burrow")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(50))
             .with_gateway(Joins::Network(warren), Doors::Both)
             .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
@@ -1710,18 +1739,18 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
     let call_cairn = summon_nearby(&mut registry, "call_cairn", "cairn");
     registry.register(
         EntityTypeDef::new("invoker")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(50))
             .with_skills([call_walker, call_cairn]),
     );
     registry.register(
         EntityTypeDef::new("beacon")
-            .with_location(aloft, CellSize::ONE, Solidity::Solid, air)
+            .with_location(aloft, CellSize::ONE, None, Solidity::Solid, air)
             .with_pool(Pool::health(50)),
     );
     registry.register(
         EntityTypeDef::new("depot")
-            .with_location(walking, CellSize::new(2, 2), Solidity::Solid, ground)
+            .with_location(walking, CellSize::new(2, 2), None, Solidity::Solid, ground)
             .with_pool(Pool::health(100))
             .with_tags(["building"]),
     );
@@ -1792,10 +1821,15 @@ fn summon_nearby(registry: &mut ContentRegistry, name: &str, summoned: &str) -> 
 /// every 2 ticks.
 fn mover(name: &str, domain: DomainId, ground: LayerId, size: u32) -> EntityTypeDef {
     EntityTypeDef::new(name)
-        .with_location(domain, CellSize::new(size, size), Solidity::Solid, ground)
+        .with_location(
+            domain,
+            CellSize::new(size, size),
+            Some(utils::fixed("0.5") * FixedU64::from_num(size)),
+            Solidity::Solid,
+            ground,
+        )
         .with_movement(
             utils::fixed("0.5"),
-            utils::fixed("0.5") * FixedU64::from_num(size),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -1854,7 +1888,7 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("nest")
-            .with_location(walking, CellSize::new(3, 3), Solidity::Solid, ground)
+            .with_location(walking, CellSize::new(3, 3), None, Solidity::Solid, ground)
             .with_pool(Pool::health(300))
             .with_dying(2, [])
             .with_tags(["building"])
@@ -1863,7 +1897,7 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("larva")
-            .with_location(walking, CellSize::ONE, Solidity::Passable, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Passable, ground)
             .with_pool(Pool::health(25))
             .with_dying(1, [])
             .with_broodling(Attachment::new("brood", BerthStance::Still))
@@ -1874,7 +1908,7 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("nymph_nest")
-            .with_location(walking, CellSize::new(3, 3), Solidity::Solid, ground)
+            .with_location(walking, CellSize::new(3, 3), None, Solidity::Solid, ground)
             .with_pool(Pool::health(300))
             .with_dying(2, [])
             .with_tags(["building"])
@@ -1883,7 +1917,7 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("offset_nymph_nest")
-            .with_location(walking, CellSize::new(3, 3), Solidity::Solid, ground)
+            .with_location(walking, CellSize::new(3, 3), None, Solidity::Solid, ground)
             .with_pool(Pool::health(300))
             .with_dying(2, [])
             .with_tags(["building"])
@@ -1892,7 +1926,7 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("nymph")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(25))
             .with_dying(1, [])
             .with_broodling(Attachment::new("brood", BerthStance::Still))
@@ -1904,13 +1938,13 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("cocoon")
-            .with_location(walking, CellSize::ONE, Solidity::Underfoot, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Underfoot, ground)
             .with_pool(Pool::health(25))
             .with_dying(1, []),
     );
     registry.register(
         EntityTypeDef::new("cliff_nest")
-            .with_location(walking, CellSize::new(3, 3), Solidity::Solid, ground)
+            .with_location(walking, CellSize::new(3, 3), None, Solidity::Solid, ground)
             .with_pool(Pool::health(300))
             .with_dying(2, [])
             .with_tags(["building"])
@@ -1919,7 +1953,7 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("pod_nest")
-            .with_location(walking, CellSize::new(3, 3), Solidity::Solid, ground)
+            .with_location(walking, CellSize::new(3, 3), None, Solidity::Solid, ground)
             .with_pool(Pool::health(300))
             .with_dying(2, [])
             .with_tags(["building"])
@@ -1928,7 +1962,7 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("pod")
-            .with_location(walking, CellSize::ONE, Solidity::Underfoot, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Underfoot, ground)
             .with_pool(Pool::health(25))
             .with_dying(1, [])
             .with_broodling(Attachment::new("brood", BerthStance::Still))
@@ -1941,14 +1975,14 @@ fn nest_app() -> App {
     for name in ["bulb", "sealed_bulb"] {
         registry.register(
             EntityTypeDef::new(name)
-                .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+                .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
                 .with_pool(Pool::health(25))
                 .with_dying(1, []),
         );
     }
     registry.register(
         EntityTypeDef::new("sprout")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(25))
             .with_dying(1, [])
             .with_field_placement([FieldPlacement::Requires {
@@ -1959,7 +1993,7 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("mulcher")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(25))
             .with_dying(1, [])
             .with_field_sources([FieldSourceDef::new(
@@ -1972,15 +2006,20 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("rug")
-            .with_location(walking, CellSize::ONE, Solidity::Underfoot, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Underfoot, ground)
             .with_pool(Pool::health(25))
             .with_dying(1, []),
     );
     registry.register(
         EntityTypeDef::new("husk")
-            .with_location(striding, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(
+                striding,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                ground,
+            )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -1991,9 +2030,14 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("glider")
-            .with_location(aloft, CellSize::ONE, Solidity::Solid, air)
+            .with_location(
+                aloft,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                air,
+            )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -2004,9 +2048,14 @@ fn nest_app() -> App {
     );
     registry.register(
         EntityTypeDef::new("drone")
-            .with_location(aloft, CellSize::ONE, Solidity::Solid, air)
+            .with_location(
+                aloft,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                air,
+            )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),

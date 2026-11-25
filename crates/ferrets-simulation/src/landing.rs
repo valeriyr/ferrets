@@ -276,7 +276,7 @@ pub(crate) struct Lander<'a> {
 ///
 /// Panics for a type that stands nowhere.
 pub(crate) fn land(world: &World, landings: &mut Landings, lander: Lander) -> Option<CellPos> {
-    let class = OccupancyClass::of(lander.def);
+    let class = entity_def::form(world, lander.def).occupancy();
     // The ground holders are read once for every body set down together, and
     // lent back to `landings` after this one.
     let holders: Vec<GroundHolder> = match class {
@@ -326,8 +326,8 @@ pub(crate) fn land_over(
             ignored,
         },
     )?;
-    let size = lander.def.location.expect("a landed type stands").size();
-    let source = overbuild::source_under(world, over, CellRect::new(cell, size))
+    let footprint = entity_def::form(world, lander.def).rect_at(cell);
+    let source = overbuild::source_under(world, over, footprint)
         .expect("a cell is landed over only where a source stands");
     Some((cell, source))
 }
@@ -449,8 +449,8 @@ fn land_on(
             && sees(world, landings.player, landings.landing, footprint)
             && fields::rules_allow(world, Some(landings.player), landings.within, footprint)
     })?;
-    let size = lander.def.location.expect("a landed type stands").size();
-    landings.taken.push(CellRect::new(cell, size));
+    let footprint = entity_def::form(world, lander.def).rect_at(cell);
+    landings.taken.push(footprint);
     Some(cell)
 }
 
@@ -465,19 +465,15 @@ fn search(
     coming: Coming,
     also: impl Fn(CellPos, CellRect) -> bool,
 ) -> Option<CellPos> {
-    let location_def = lander
-        .def
-        .location
-        .expect("only a type that stands somewhere lands");
-    let size = location_def.size();
-    let class = OccupancyClass::of(lander.def);
+    let form = entity_def::form(world, lander.def);
+    let size = form.extent();
     let map = world.resource::<Map>();
     let projection = map.projection();
-    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location_def);
+    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), form);
     let reachability = Reachability::of(map, lander.def, shape, lander.from);
     let takes = |cell: CellPos, footprint: CellRect| match ground {
         Ground::Open { lifted, holders } => {
-            ground::can_place_clear_of(world, cell, location_def, class, lifted, holders)
+            ground::can_place_clear_of(world, cell, form, lifted, holders)
         }
         Ground::Over {
             over,
@@ -489,20 +485,13 @@ fn search(
                     overbuild::set_aside(world, Cover::Source(source));
                 lifted_over.extend_from_slice(lifted);
                 ignored_over.extend_from_slice(ignored);
-                ground::can_place(
-                    world,
-                    cell,
-                    location_def,
-                    class,
-                    &lifted_over,
-                    &ignored_over,
-                )
+                ground::can_place(world, cell, form, &lifted_over, &ignored_over)
             }
             None => false,
         },
     };
     let lands = |cell: CellPos, first: Levels| {
-        let footprint = CellRect::new(cell, size);
+        let footprint = form.rect_at(cell);
         // The bound first; the level and reach checks never panic on a
         // footprint running off the map, and the ground refuses it before the
         // placement rules and `also` read its cells.

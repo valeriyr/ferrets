@@ -36,7 +36,7 @@ pub enum Aim {
     Position,
 }
 
-/// Content-defined delivery of a weapon's damage as a travelling projectile.
+/// Content-defined delivery of a weapon's damage as a traveling projectile.
 ///
 /// A type without this definition delivers damage in the same tick the attack
 /// cycle reaches its damage point. With it, the damage point releases a

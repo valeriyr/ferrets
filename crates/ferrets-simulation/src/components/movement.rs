@@ -3,7 +3,7 @@
 use bevy_ecs::prelude::*;
 
 use ferrets_geometry::cell_pos::CellPos;
-use ferrets_math::FixedU64;
+use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
 use ferrets_pathfinder::hpa::{Crossing, PlanTarget};
 
 /// Per-entity in-flight movement state.
@@ -28,7 +28,8 @@ pub struct MoveComponent {
     pub detoured: bool,
     /// Consecutive blockage escalations without a completed crossing. Grows
     /// the acceptance range so crowds settle into a ring, and bounds how
-    /// long a walk grinds before giving up. Reset by any progress.
+    /// long a walk grinds before giving up. Reset when progress forgives (see
+    /// [`Self::land`] and [`Self::measure`]).
     pub frustration: u32,
     /// The cell the entity departed from when the current crossing started.
     pub moving_from: CellPos,
@@ -43,20 +44,59 @@ pub struct MoveComponent {
     /// it, a body between the two could not tell a turn it is part way through
     /// from a look it is merely carrying.
     pub pivoting: bool,
-    /// Ticks remaining to wait for a blocked cell to clear before recalculating the path.
+    /// Ticks the walk has gone without progress: the stall clock.
     pub wait_ticks: u32,
-    /// The closest straight-line distance to the pursued waypoint the walk
-    /// has reached so far; reset whenever the waypoint changes. A continuous
-    /// walk counts as progressing only while it keeps setting new records —
-    /// a body churned around a crowd drifts without getting anywhere, and
-    /// must escalate instead, while a long way round keeps consuming
-    /// waypoints and never escalates.
-    pub best_distance: FixedU64,
-    /// The pursued waypoint is an anchored position the walk regains after
-    /// being walled off, and pops only on exact arrival: the ordinary half-body
-    /// slack would consume it early and leave the body off-lattice, still
-    /// pressed into the corner it was regaining from.
-    pub regaining: bool,
+    /// The closest straight-line distance to where the walk aims it has
+    /// reached so far; `None` until it is first measured after the waypoint
+    /// changes.
+    pub best_distance: Option<FixedU64>,
+    /// What the pursued waypoint is, for how it pops and whether its pop
+    /// forgives.
+    pub pursued: Pursued,
+}
+
+/// What a continuous walk's pursued waypoint is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pursued {
+    /// An ordinary waypoint, popped within the pop slack.
+    Ordinary,
+    /// An anchored position the walk regains after being walled off, popped
+    /// only on exact arrival.
+    Regaining,
+    /// An ordinary waypoint, the one before it popped last tick at this point:
+    /// whether the pop forgives waits on where contact left the body.
+    Popped(FixedUVec2),
+}
+
+/// How a pursued waypoint left the path.
+#[derive(Debug, Clone, Copy)]
+pub enum Pop {
+    /// Reached: the step ended within the pop slack of this point, the
+    /// waypoint's aim.
+    Reached(FixedUVec2),
+    /// Dropped for its holder, a body that does not give way: the step met
+    /// it at this point.
+    Skipped(FixedUVec2),
+}
+
+/// Where contact left a body whose waypoint popped last tick.
+#[derive(Debug, Clone, Copy)]
+pub enum Landing {
+    /// Within the pop slack of where the pop was.
+    AtPop,
+    /// Handed back beyond the pop slack.
+    HandedBack,
+}
+
+/// What one measurement of a walk's distance to its pursued waypoint found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Measured {
+    /// The first since the waypoint changed: it only sets the record.
+    Baseline,
+    /// A new record.
+    Closer,
+    /// No closer: the stall clock's count after this tick.
+    Stalled(u32),
 }
 
 impl MoveComponent {
@@ -83,24 +123,38 @@ impl MoveComponent {
         self.detoured = false;
     }
 
-    /// Records a new closest distance to the pursued waypoint. Closing in on
-    /// a real waypoint means the way ahead is clear, so every escalation is
-    /// forgiven along with it — but a record set while regaining or detouring
-    /// is no such proof, and forgiving there lets a walk launder its
-    /// frustration and grind forever.
+    /// Measures the walk's distance to the pursued waypoint against its
+    /// record. The first measurement after the waypoint changes only sets the
+    /// record. A closer one is a new record: it restarts the stall clock, and
+    /// on an ordinary waypoint off a detour forgives every escalation as well.
+    /// Any other ticks the stall clock on, and the tick's count is returned
+    /// as [`Measured::Stalled`].
     ///
-    /// Regaining proves only that the body can walk *back* to where it was
-    /// walled off. Detouring is the same laundering by another route: the
-    /// splice resets the record to the maximum, so the very next tick beats it
-    /// whatever the body did, and the escalation just earned is wiped before it
-    /// can count toward the give-up budget. Escape is proven by reaching a
-    /// waypoint, which [`Self::consume_waypoint`] forgives.
-    pub fn record_progress(&mut self, distance: FixedU64) {
-        self.best_distance = distance;
-        if self.regaining || self.detoured {
-            self.wait_ticks = 0;
-        } else {
-            self.forgive();
+    /// Panics if a pop waits unlanded.
+    pub fn measure(&mut self, distance: FixedU64) -> Measured {
+        let forgives = match self.pursued {
+            Pursued::Ordinary => !self.detoured,
+            Pursued::Regaining => false,
+            Pursued::Popped(_) => panic!("a pop lands before the walk measures its progress"),
+        };
+        match self.best_distance {
+            None => {
+                self.best_distance = Some(distance);
+                Measured::Baseline
+            }
+            Some(best) if distance < best => {
+                self.best_distance = Some(distance);
+                if forgives {
+                    self.forgive();
+                } else {
+                    self.wait_ticks = 0;
+                }
+                Measured::Closer
+            }
+            Some(_) => {
+                self.wait_ticks += 1;
+                Measured::Stalled(self.wait_ticks)
+            }
         }
     }
 
@@ -126,14 +180,17 @@ impl MoveComponent {
     /// waypoint starts its own progress record.
     pub fn pursue_segment(&mut self, segment: Vec<CellPos>) {
         self.path = segment.into_iter().rev().collect();
-        self.best_distance = FixedU64::MAX;
+        self.best_distance = None;
     }
 
-    /// Takes up `waypoint` as the immediate next target, with its own
-    /// progress record.
-    pub fn pursue(&mut self, waypoint: CellPos) {
+    /// Throws the rest of the plan away and takes up `waypoint` as the walk's
+    /// last, with its own progress record.
+    pub fn pursue_last(&mut self, waypoint: CellPos) {
+        self.path.clear();
+        self.corridor.clear();
+        self.plan = None;
         self.path.push(waypoint);
-        self.best_distance = FixedU64::MAX;
+        self.best_distance = None;
     }
 
     /// Replaces the pursued waypoint with a detour that rejoins it, walked
@@ -142,61 +199,84 @@ impl MoveComponent {
         self.detoured = true;
         self.path.pop();
         self.path.extend(cells.into_iter().rev());
-        self.best_distance = FixedU64::MAX;
+        self.best_distance = None;
         // The point being regained is what the pop just discarded; the detour's
         // cells are ordinary waypoints, and holding them to an exact hit would
         // strand a body the pushing pass keeps nudging off them.
-        self.regaining = false;
+        self.pursued = Pursued::Ordinary;
     }
 
     /// Holds `lattice` as the immediate waypoint, to be regained exactly: the
-    /// pop stays precise (see [`Self::regaining`]) and the escalation state
+    /// pop stays precise (see [`Pursued::Regaining`]) and the escalation state
     /// stays — the body is only being put back where it was walled off.
     ///
     /// A body walled off tick after tick regains the same point each time;
     /// one held waypoint is the intent, not one per attempt, so a repeat of
     /// the waypoint already being regained is not pushed again.
     pub fn regain(&mut self, lattice: CellPos) {
-        if !(self.regaining && self.path.last() == Some(&lattice)) {
+        if !(matches!(self.pursued, Pursued::Regaining) && self.path.last() == Some(&lattice)) {
             self.path.push(lattice);
         }
-        self.regaining = true;
-        self.best_distance = FixedU64::MAX;
+        self.pursued = Pursued::Regaining;
+        self.best_distance = None;
     }
 
-    /// Consumes the reached waypoint; the next one starts its own progress
-    /// record. An ordinary waypoint is progress and forgives every escalation;
-    /// a regained anchored position is not — it only put the body back where it
-    /// was walled off, and forgiving there would let a loop of wall, regain,
-    /// wall reset its own give-up clock each pass.
-    pub fn consume_waypoint(&mut self) {
-        self.path.pop();
-        self.best_distance = FixedU64::MAX;
-        self.wait_ticks = 0;
-        if self.regaining {
-            self.regaining = false;
-        } else {
-            self.frustration = 0;
-            self.detoured = false;
+    /// Takes the pursued waypoint off the path; the next one starts its own
+    /// progress record and the stall clock runs on. An ordinary waypoint
+    /// reached, or skipped off a detour, waits as [`Pursued::Popped`] for the
+    /// next tick's [`Self::land`]; a regained position, or a waypoint skipped
+    /// on a detour, forgives nothing.
+    ///
+    /// Panics if the walk pursues no waypoint, or a pop waits unlanded.
+    pub fn pop_waypoint(&mut self, pop: Pop) {
+        self.path
+            .pop()
+            .expect("a popped waypoint is one the walk pursues");
+        self.best_distance = None;
+        self.pursued = match (self.pursued, pop) {
+            (Pursued::Regaining, Pop::Reached(_) | Pop::Skipped(_)) => Pursued::Ordinary,
+            (Pursued::Ordinary, Pop::Reached(point)) => Pursued::Popped(point),
+            (Pursued::Ordinary, Pop::Skipped(met)) => {
+                if self.detoured {
+                    Pursued::Ordinary
+                } else {
+                    Pursued::Popped(met)
+                }
+            }
+            (Pursued::Popped(_), Pop::Reached(_) | Pop::Skipped(_)) => {
+                panic!("a pop lands at the top of the next tick")
+            }
+        };
+    }
+
+    /// Settles last tick's pop by where contact left the body: at the pop it
+    /// forgives every escalation; handed back it forgives nothing.
+    ///
+    /// Panics if no pop waits.
+    pub fn land(&mut self, landing: Landing) {
+        match self.pursued {
+            Pursued::Popped(_) => {}
+            Pursued::Ordinary | Pursued::Regaining => panic!("only a popped waypoint lands"),
+        }
+        self.pursued = Pursued::Ordinary;
+        match landing {
+            Landing::AtPop => self.forgive(),
+            Landing::HandedBack => {}
         }
     }
 
     /// Throws the whole plan away for `route`, a claim-aware route walked front
     /// to back.
     pub fn take_route(&mut self, route: Vec<CellPos>) {
-        self.corridor.clear();
-        self.plan = None;
-        self.detoured = false;
+        self.replace_plan();
         self.pursue_segment(route);
     }
 
     /// Throws the whole plan away and asks the next one to honor unit claims.
     pub fn repath_avoiding_claims(&mut self) {
         self.path.clear();
-        self.corridor.clear();
-        self.plan = None;
+        self.replace_plan();
         self.avoid_claims = true;
-        self.detoured = false;
     }
 
     /// Creates a new `MoveComponent` with the given entity position.
@@ -213,8 +293,23 @@ impl MoveComponent {
             winding_down: false,
             pivoting: false,
             wait_ticks: 0,
-            best_distance: FixedU64::MAX,
-            regaining: false,
+            best_distance: None,
+            pursued: Pursued::Ordinary,
         }
+    }
+
+    /// Drops the plan's corridor and destination for a new plan: its
+    /// blockage's detour unspent, its waypoints ordinary — a position being
+    /// regained dropped with the plan, a pop waiting to land still waiting —
+    /// and no progress record until the new waypoint is measured.
+    fn replace_plan(&mut self) {
+        self.corridor.clear();
+        self.plan = None;
+        self.detoured = false;
+        self.best_distance = None;
+        self.pursued = match self.pursued {
+            Pursued::Regaining => Pursued::Ordinary,
+            kept @ (Pursued::Ordinary | Pursued::Popped(_)) => kept,
+        };
     }
 }

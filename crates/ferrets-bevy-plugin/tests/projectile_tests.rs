@@ -527,7 +527,7 @@ fn shot_lands_after_its_attacker_dies() {
         "the shot is in flight"
     );
 
-    // Kill the gunner while its shell is still travelling.
+    // Kill the gunner while its shell is still traveling.
     spawn::destroy_entity(app.world_mut(), gunner_entity);
     utils::run_ticks(&mut app, 8);
 
@@ -599,6 +599,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -633,6 +634,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -684,6 +686,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -708,6 +711,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -719,6 +723,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -733,6 +738,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -759,6 +765,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -772,6 +779,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -784,6 +792,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -815,6 +824,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND | utils::AIR,
                 )
@@ -825,6 +835,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

@@ -41,7 +41,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
         return Err(Refusal::TargetGone);
     };
     orders::target_operating(world, target)?;
-    if !entity_def::same_owner(world, entity, target) {
+    if !entity_def::relation(world, entity, target).is_own() {
         return Err(Refusal::TargetUnfit);
     }
     match board::would_board(world, target, entity) {
@@ -129,7 +129,7 @@ pub fn process(entity: Entity, _order: &Order, world: &mut World) -> Processing 
         return Processing::state(OrderState::Finished);
     };
     if orders::target_operating(world, target).is_err()
-        || !entity_def::same_owner(world, entity, target)
+        || !entity_def::relation(world, entity, target).is_own()
         || board::would_board(world, target, entity).is_err()
     {
         return Processing::state(OrderState::Finished);

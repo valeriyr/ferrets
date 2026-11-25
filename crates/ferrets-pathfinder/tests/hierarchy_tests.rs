@@ -671,6 +671,24 @@ fn ground_write_dirties_ground_shape_alone() {
     assert!(!hierarchy.is_dirty_for(utils::on_ground()));
 }
 
+/// A change dirties the cluster of the anchor it touches, not the others:
+/// on an 8×4 grid in clusters of 4, a write at (3, 2) dirties the cluster
+/// holding x 0..4 while the cluster holding x 4..8 stays clean, and a
+/// refresh cleans the dirtied one.
+#[test]
+fn ground_write_dirties_its_own_cluster_alone() {
+    let mut grid = utils::grid(8, 4);
+    let mut hierarchy = utils::build_for(&grid, 4, &[utils::on_ground()]);
+
+    grid.set_occupied(utils::GROUND, utils::nav(3, 2), true);
+    hierarchy.mark_dirty(utils::nav(3, 2), utils::GROUND);
+
+    assert!(hierarchy.is_dirty_at(utils::nav(0, 0), utils::on_ground()));
+    assert!(!hierarchy.is_dirty_at(utils::nav(5, 2), utils::on_ground()));
+    hierarchy.refresh(&grid);
+    assert!(!hierarchy.is_dirty_at(utils::nav(0, 0), utils::on_ground()));
+}
+
 #[test]
 #[should_panic(expected = "a static change lies on the grid")]
 fn marking_cell_off_grid_panics() {

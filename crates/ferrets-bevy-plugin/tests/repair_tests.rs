@@ -910,6 +910,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -971,6 +972,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1059,6 +1061,7 @@ fn building(name: &str, repair_ratio: Option<FixedU64>) -> EntityTypeDef {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::new(2, 2),
+            None,
             Solidity::Solid,
             utils::GROUND,
         )

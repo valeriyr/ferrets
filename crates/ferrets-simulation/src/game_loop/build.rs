@@ -37,11 +37,13 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::{DeathCause, SpendCause},
-    fields, ground,
+    fields,
+    form::Form,
+    ground,
     landing::{self, Bound, ComesFrom, Lander},
     make_way::{self, Clearance},
     map::Map,
-    occupancy::{GridMark, OccupancyClass},
+    occupancy::GridMark,
     order::{BuildTask, Order},
     overbuild::{self, Cover},
     reach, requirements,
@@ -197,17 +199,12 @@ fn found(
     type_name: &str,
     anchor: CellPos,
 ) -> Processing {
-    let (building_location_def, price) = {
+    let (site_form, price) = {
         let registry = world.resource::<ContentRegistry>();
         let type_def = registry.entity(type_name).expect("type checked in prepare");
-        (
-            type_def
-                .location
-                .expect("validated content defines a location"),
-            type_def.price.clone(),
-        )
+        (entity_def::form(world, type_def), type_def.price.clone())
     };
-    let size = building_location_def.size();
+    let size = site_form.extent();
 
     // A builder in the open in the site's way already reaches it, and is
     // walked off it only once the site is judged.
@@ -271,7 +268,7 @@ fn found(
     }
     // Fields and docks gate the placement the same way: judged at the
     // raise, never again for a site already standing.
-    let (overbuilds, site_class) = {
+    let overbuilds = {
         let def = world
             .resource::<ContentRegistry>()
             .entity(type_name)
@@ -281,7 +278,7 @@ fn found(
         {
             return Processing::state(OrderState::Finished);
         }
-        (def.overbuilds.clone(), OccupancyClass::of(def))
+        def.overbuilds.clone()
     };
 
     // A site raised over a resource source needs one of the type under it,
@@ -306,16 +303,15 @@ fn found(
     let clearance = make_way::clearance(
         world,
         owner,
-        site,
-        building_location_def.occupies(),
-        site_class,
+        site_form,
+        anchor,
         &[entity],
         |marks, bodies| {
             let lifted: Vec<GridMark> = builder_mark.iter().chain(marks).copied().collect();
             let ignored: Vec<Entity> = std::iter::once(entity)
                 .chain(bodies.iter().copied())
                 .collect();
-            ground_takes_site(world, type_name, anchor, cover, &lifted, &ignored)
+            ground_takes_site(world, site_form, anchor, cover, &lifted, &ignored)
         },
     );
     match clearance {
@@ -542,7 +538,7 @@ fn construct(
         return leave_finished_site(world, entity, building_id);
     }
     // A site not the builder's side's is not its to raise.
-    if !entity_def::same_owner(world, entity, building) {
+    if !entity_def::relation(world, entity, building).is_own() {
         leave_site(world, entity, building_id);
         return Processing::state(OrderState::Finished);
     }
@@ -609,7 +605,7 @@ fn can_join(world: &World, entity: Entity, site: SimulationId) -> Result<Entity,
     };
     if !entity_def::rising(world, building)
         || entity_def::dying(world, building)
-        || !entity_def::same_owner(world, entity, building)
+        || !entity_def::relation(world, entity, building).is_own()
     {
         return Err(Refusal::TargetUnfit);
     }
@@ -693,12 +689,7 @@ fn site_under_way_at(
     anchor: CellPos,
     owner: Option<PlayerId>,
 ) -> Option<SimulationId> {
-    let size = world
-        .resource::<ContentRegistry>()
-        .entity(type_name)
-        .and_then(|def| def.location)
-        .expect("a site's type stands somewhere")
-        .size();
+    let size = site_form(world, type_name).extent();
     let mut query = world.query_filtered::<(
         &EntityInfoComponent,
         &LocationComponent,
@@ -749,13 +740,13 @@ fn in_the_way(world: &World, entity: Entity, type_name: &str, anchor: CellPos) -
         .resource::<ContentRegistry>()
         .entity(type_name)
         .expect("the ordered type is registered");
-    let site_def = def.location.expect("validated content defines a location");
-    let site = CellRect::new(anchor, site_def.size());
+    let site_form = entity_def::form(world, def);
+    let site = site_form.rect_at(anchor);
     let builder_def = entity_def::of(world, entity)
         .location
         .expect("a builder stands somewhere");
-    if builder_def.occupies() & site_def.occupies() == LayerMask::EMPTY
-        || !entity_def::measured_rect(world, entity, OccupancyClass::of(def)).intersects(site)
+    if builder_def.occupies() & site_form.occupies() == LayerMask::EMPTY
+        || !entity_def::measured_rect(world, entity, site_form.occupancy()).intersects(site)
     {
         return InTheWay::Clear;
     }
@@ -768,57 +759,50 @@ fn in_the_way(world: &World, entity: Entity, type_name: &str, anchor: CellPos) -
         },
         None => Cover::Nothing,
     };
-    if ground_takes_site(world, type_name, anchor, cover, &[], &[]) {
+    if ground_takes_site(world, site_form, anchor, cover, &[], &[]) {
         return InTheWay::Clear;
     }
     let builder_mark: Vec<GridMark> = mark_on_grid(world, entity).into_iter().collect();
-    if ground_takes_site(world, type_name, anchor, cover, &builder_mark, &[entity]) {
+    if ground_takes_site(world, site_form, anchor, cover, &builder_mark, &[entity]) {
         InTheWay::InItsWay
     } else {
         InTheWay::Clear
     }
 }
 
-/// Whether the ground takes a site of `type_name` anchored at `anchor` with
+/// Whether the ground takes the site `site` anchored at `anchor` with
 /// `cover`'s source, the `marks` and the `bodies` set aside.
 fn ground_takes_site(
     world: &World,
-    type_name: &str,
+    site: Form,
     anchor: CellPos,
     cover: Cover,
     marks: &[GridMark],
     bodies: &[Entity],
 ) -> bool {
-    let def = world
-        .resource::<ContentRegistry>()
-        .entity(type_name)
-        .expect("the ordered type is registered");
-    let site_def = def.location.expect("validated content defines a location");
     let (mut lifted, mut ignored) = overbuild::set_aside(world, cover);
     lifted.extend_from_slice(marks);
     ignored.extend_from_slice(bodies);
-    ground::can_place(
-        world,
-        anchor,
-        site_def,
-        OccupancyClass::of(def),
-        &lifted,
-        &ignored,
-    )
+    ground::can_place(world, anchor, site, &lifted, &ignored)
 }
 
 /// Whether `entity` reaches a site of `type_name` anchored at `anchor` within
 /// its build range from where it stands.
 fn reaches_site(world: &World, entity: Entity, type_name: &str, anchor: CellPos) -> bool {
-    let site_def = world
-        .resource::<ContentRegistry>()
-        .entity(type_name)
-        .expect("the ordered type is registered")
-        .location
-        .expect("validated content defines a location");
-    let site = CellRect::new(anchor, site_def.size());
+    let site = site_form(world, type_name).rect_at(anchor);
     let range = entity_def::effective_stat_u32(world, entity, EntityStatId::BUILD_RANGE);
     reach::in_reach(world, entity, site, range)
+}
+
+/// The body a site of `type_name` stands as.
+///
+/// Panics if `type_name` is not registered, or declares no location.
+fn site_form(world: &World, type_name: &str) -> Form {
+    let def = world
+        .resource::<ContentRegistry>()
+        .entity(type_name)
+        .expect("the ordered type is registered");
+    entity_def::form(world, def)
 }
 
 /// The cells `entity` marks on the grid, while it stands on it.
@@ -980,7 +964,7 @@ fn leave_site(world: &mut World, entity: Entity, site: SimulationId) {
                 .resource::<EntityIndex>()
                 .alive(site)
                 .expect("the last builder leaves a site that still stands");
-            if entity_def::same_owner(world, entity, building) {
+            if entity_def::relation(world, entity, building).is_own() {
                 abandon_site(world, site)
             } else {
                 halt_site(world, site)

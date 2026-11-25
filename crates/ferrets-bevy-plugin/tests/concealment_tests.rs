@@ -47,7 +47,6 @@ use ferrets_geometry::{
 };
 use ferrets_math::FixedU64;
 use ferrets_nav_grid::{layer_mask::LayerMask, nav_grid::NavGrid};
-use ferrets_script::ai::view::game::Glimpse;
 use ferrets_simulation::{
     beside::{Beside, Lean},
     command::{PlayerCommand, SelectMode, SkillCasterRef, SkillTarget},
@@ -195,12 +194,7 @@ fn filtered_brain_receives_glimpse_positions_only() {
     // A glimpse is the ground it stands on and nothing else.
     assert_eq!(
         filtered.glimpses,
-        vec![Glimpse {
-            x: 5,
-            y: 8,
-            width: 1,
-            height: 1,
-        }]
+        vec![CellRect::new(CellPos::new(5, 8), CellSize::new(1, 1))]
     );
 
     // Omniscience lifts the fog and nothing else: the cloak still needs
@@ -215,12 +209,7 @@ fn filtered_brain_receives_glimpse_positions_only() {
     assert!(omniscient.enemy_entities.is_empty());
     assert_eq!(
         omniscient.glimpses,
-        vec![Glimpse {
-            x: 5,
-            y: 8,
-            width: 1,
-            height: 1,
-        }]
+        vec![CellRect::new(CellPos::new(5, 8), CellSize::new(1, 1))]
     );
 
     // Detection everywhere names it, fog or no fog.
@@ -638,12 +627,7 @@ fn glimpse_carries_whole_footprint_not_one_cell() {
     assert!(view.enemy_entities.is_empty(), "a glimpse names no entity");
     assert_eq!(
         view.glimpses,
-        vec![Glimpse {
-            x: 7,
-            y: 7,
-            width: 3,
-            height: 3,
-        }],
+        vec![CellRect::new(CellPos::new(7, 7), CellSize::new(3, 3))],
         "the ground it stands on is the whole footprint"
     );
 }
@@ -1872,6 +1856,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1894,6 +1879,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1908,6 +1894,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1921,6 +1908,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1934,6 +1922,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1961,6 +1950,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1980,6 +1970,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2000,6 +1991,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND | air,
                 )
@@ -2031,6 +2023,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2044,6 +2037,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -2077,6 +2071,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2097,6 +2092,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

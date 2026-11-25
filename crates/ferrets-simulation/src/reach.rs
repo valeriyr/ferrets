@@ -3,7 +3,6 @@
 //! the regions it walks in — and how far a body stands from a set of cells.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::{cell_rect::CellRect, cell_size::CellSize};
 use ferrets_nav_grid::mover_shape::MoverShape;
 
@@ -25,10 +24,7 @@ pub(crate) fn reaches(
     if !map.projection().in_range_for_rects(from, goal, range) {
         return false;
     }
-    let location = entity_def::of(world, entity)
-        .location
-        .expect("only entities with a location reach");
-    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location);
+    let shape = entity_def::mover_shape_of(world, entity);
     reaches_from(map, from, shape, goal, range)
 }
 
@@ -99,11 +95,7 @@ impl Approach {
             }
             Some(Seating::Held) | None => {}
         }
-        let def = entity_def::of(world, entity);
-        let location = def
-            .location
-            .expect("only a body that stands somewhere approaches");
-        let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location);
+        let shape = entity_def::mover_shape_of(world, entity);
         if entity_def::may_close(world, entity) {
             let anchor = entity_def::location(world, entity).anchor();
             Approach::Walks {
@@ -131,10 +123,7 @@ impl Approach {
     /// location.
     pub(crate) fn coming_from(world: &World, entity: Entity, from: ComesFrom) -> Self {
         let def = entity_def::of(world, entity);
-        let location = def
-            .location
-            .expect("only a body that stands somewhere approaches");
-        let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &location);
+        let shape = entity_def::mover_shape_of(world, entity);
         if def.can_move() {
             Approach::Walks {
                 shape,

@@ -13,13 +13,11 @@ use std::collections::BTreeMap;
 
 use bevy::{ecs::world::EntityRef, prelude::*};
 use ferrets_content::{
-    affiliation::Affiliation, entity_stats::EntityStatId, holder::Holder, pool_def::PoolId,
-    registry::ContentRegistry,
+    entity_stats::EntityStatId, holder::Holder, pool_def::PoolId, registry::ContentRegistry,
 };
-use ferrets_geometry::cell_pos::CellPos;
 use ferrets_script::ai::{
     AiRuntime,
-    view::game::{EntityView, GameView, Glimpse, RemainsView},
+    view::game::{EntityView, GameView, RemainsView, Whereabouts},
 };
 use ferrets_simulation::{
     components::{
@@ -29,17 +27,15 @@ use ferrets_simulation::{
         entity_buffs::BuffsComponent,
         entity_info::EntityInfoComponent,
         entity_stats::StatsComponent,
-        hidden::HiddenComponent,
         lifetime::LifetimeComponent,
         location::LocationComponent,
         order_queue::OrderQueueComponent,
-        owner,
         pools::{self, PoolsComponent},
         resource::{ResourceCarrierComponent, ResourceSourceComponent},
         rise::RisingComponent,
         stance::StanceComponent,
         train::TrainQueueComponent,
-        transport::{BoardedComponent, TransporterComponent},
+        transport::TransporterComponent,
     },
     entity_def::{self, Operation},
     entity_index::EntityIndex,
@@ -51,7 +47,7 @@ use ferrets_simulation::{
     resources::PlayerResources,
     session::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
-        player_type::PlayerType,
+        player_type::PlayerType, relation::Relation,
     },
     simulation_id::SimulationId,
     supply,
@@ -286,7 +282,7 @@ pub fn game_view(
                 world.resource::<ContentRegistry>(),
                 entity_ref,
                 id,
-                listed_cell(world, session, player, vision, detection, entity_ref),
+                whereabouts(world, session, player, vision, detection, entity_ref),
                 entity_def::operation(world, entity),
                 entity_def::idle(world, entity),
                 match hold {
@@ -295,30 +291,29 @@ pub fn game_view(
                 },
             )
         };
-        match owner {
+        let relation = session.relation(Some(player), owner);
+        match relation {
             // Own and allied entities are always seen; enemy and neutral ones
             // only as the seat's vision and detection make them out — fog
             // lifted by omniscient vision, a cloak pierced by detection
-            // everywhere. A glimpse is a position and nothing more.
-            Some(owner) if owner == player => my_entities.push(view(&entity_ref, Hold::Listed)),
-            Some(owner) if session.are_allied(player, owner) => {
-                ally_entities.push(view(&entity_ref, Hold::Listed))
-            }
-            Some(_) | None => {
+            // everywhere. A glimpse is a footprint and nothing more.
+            Relation::Own => my_entities.push(view(&entity_ref, Hold::Listed)),
+            Relation::Allied => ally_entities.push(view(&entity_ref, Hold::Listed)),
+            Relation::Enemy | Relation::Neutral => {
                 match visibility::sighting(world, player, entity, Senses::Given(vision, detection))
                 {
-                    Sighting::Seen => match owner {
-                        Some(_) => enemy_entities.push(view(&entity_ref, Hold::Withheld)),
-                        None => neutral_entities.push(view(&entity_ref, Hold::Withheld)),
+                    Sighting::Seen => match relation {
+                        Relation::Enemy => enemy_entities.push(view(&entity_ref, Hold::Withheld)),
+                        Relation::Neutral => {
+                            neutral_entities.push(view(&entity_ref, Hold::Withheld))
+                        }
+                        Relation::Own | Relation::Allied => {
+                            unreachable!("own and allied entities are listed above")
+                        }
                     },
                     Sighting::Glimpsed => {
                         let footprint = entity_def::location(world, entity).footprint();
-                        glimpses.push(Glimpse {
-                            x: footprint.origin.x,
-                            y: footprint.origin.y,
-                            width: footprint.size.width,
-                            height: footprint.size.height,
-                        });
+                        glimpses.push(footprint);
                     }
                     Sighting::Unseen => {}
                 }
@@ -403,7 +398,7 @@ fn passengers(world: &World, entity: &EntityRef, player: PlayerId) -> Vec<u32> {
             let owner = index
                 .alive(id)
                 .and_then(|body| entity_def::owner(world, body));
-            owner::admits(session, Affiliation::Allied, Some(player), owner)
+            session.relation(Some(player), owner).is_friendly()
         })
         .map(|id| id.0)
         .collect()
@@ -418,63 +413,55 @@ enum Hold {
     Withheld,
 }
 
-/// The cell a brain lists `entity` at: where it is, except inside a holder, a
-/// job, or the container a waiting return is set down beside, that the brain
-/// neither sides with nor sights, whose cell is not the brain's to know; then
-/// the cell it went in by. A known container is listed by the same rule, and
-/// an entity inside nothing that remains at the anchor of its
-/// [`entity_def::whereabouts_rect`].
-fn listed_cell(
+/// Where a brain lists `entity`: the cells it stands on while on the map;
+/// off it, the holder it is inside when the brain sides with or sights that
+/// holder and the holder is listed (not dying); inside any other holder, its
+/// own cells where it went in; inside nothing that remains, its
+/// [`entity_def::whereabouts_rect`] — where it went in, or where a waiting
+/// return searches.
+fn whereabouts(
     world: &World,
     session: &GameSession,
     player: PlayerId,
     vision: AiVision,
     detection: AiDetection,
     entity_ref: &EntityRef,
-) -> CellPos {
+) -> Whereabouts {
+    let entity = entity_ref.id();
     if entity_ref.contains::<LocationComponent>() {
-        return entity_def::location(world, entity_ref.id()).anchor();
+        return Whereabouts::Standing(entity_def::location(world, entity).footprint());
     }
-    match entity_def::inside(world, entity_ref.id()) {
-        Some(container) => {
-            let known = owner::admits(
-                session,
-                Affiliation::Allied,
-                Some(player),
-                entity_def::owner(world, container),
-            ) || visibility::sighting(
-                world,
-                player,
-                container,
-                Senses::Given(vision, detection),
-            )
-            .is_seen();
-            if known {
-                listed_cell(
-                    world,
-                    session,
-                    player,
-                    vision,
-                    detection,
-                    &world.entity(container),
-                )
-            } else {
-                entity_def::went_in_anchor(world, entity_ref.id())
-            }
+    let known = |container: Entity| {
+        session
+            .relation(Some(player), entity_def::owner(world, container))
+            .is_friendly()
+            || visibility::sighting(world, player, container, Senses::Given(vision, detection))
+                .is_seen()
+    };
+    let listed = |container: Entity| {
+        world
+            .resource::<EntityIndex>()
+            .alive(entity_def::simulation_id(world, container))
+            .is_some()
+    };
+    match entity_def::inside(world, entity) {
+        Some(container) if known(container) && listed(container) => {
+            Whereabouts::Inside(entity_def::simulation_id(world, container).0)
         }
-        None => entity_def::whereabouts_rect(world, entity_ref.id()).origin,
+        Some(_) => Whereabouts::Untracked(entity_def::went_in_rect(world, entity)),
+        None => Whereabouts::Untracked(entity_def::whereabouts_rect(world, entity)),
     }
 }
 
-/// Snapshots one entity to its integer view, `cell` being the cell
-/// [`listed_cell`] lists it at, `operation` the state it is in to carry out
+/// Snapshots one entity to its integer view, `whereabouts` being where
+/// [`whereabouts`] lists it, `operation` the state it is in to carry out
 /// its type's work, `idle` whether it takes orders and runs none, and
 /// `passengers` the ids it lists as aboard or inside its link.
 fn entity_view(
     registry: &ContentRegistry,
     entity: &EntityRef,
     id: SimulationId,
-    cell: CellPos,
+    whereabouts: Whereabouts,
     operation: Operation,
     idle: bool,
     passengers: Vec<u32>,
@@ -487,8 +474,7 @@ fn entity_view(
         type_name: entity
             .get::<EntityInfoComponent>()
             .map_or_else(String::new, |info| info.type_name().to_string()),
-        x: cell.x,
-        y: cell.y,
+        whereabouts,
         health: entity_pools
             .current(PoolId::HEALTH)
             .map(pools::displayed_health),
@@ -502,7 +488,6 @@ fn entity_view(
             .get::<StatsComponent>()
             .and_then(|stats| stats.effective_as_u32(EntityStatId::ARMOR)),
         idle,
-        hidden: entity.contains::<HiddenComponent>(),
         concealed: entity.contains::<ConcealedComponent>(),
         buffs: entity
             .get::<BuffsComponent>()
@@ -534,9 +519,6 @@ fn entity_view(
         resource_amount: entity
             .get::<ResourceSourceComponent>()
             .map(|source| source.amount),
-        boarded: entity
-            .get::<BoardedComponent>()
-            .map(|boarded| boarded.holder.0),
         passengers,
         broodlings: entity
             .get::<BroodComponent>()

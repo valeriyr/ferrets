@@ -35,6 +35,7 @@ use ferrets_simulation::{
     entity_def,
     entity_index::EntityIndex,
     fields::{self, FieldGrid},
+    form::Form,
     game_loop::{
         cast::{self, AimRefusal},
         warp,
@@ -363,8 +364,12 @@ pub(crate) fn entity_at(
             continue;
         }
         let def = registry.def(info.type_id());
-        let size = def.location.unwrap().size();
-        let bounds = map.location(location.position, size).bounds();
+        let size = def
+            .location
+            .expect("validated content defines a location")
+            .size();
+        // The box the player sees: the declared look, held on the map.
+        let bounds = map.location_clamped(location.position, size).bounds();
         // An airborne sprite is drawn lifted up the screen; the click meets
         // the unit where the player sees it, so the lift comes back off the
         // cursor before the bounds test. Left of the map or above it the
@@ -1384,7 +1389,9 @@ pub fn placement_input(
         // side's own, allies included — another side's reach is its own to
         // know, whatever the fog shows of the source itself.
         for (info, location, _, _, owner, states, _) in &sources {
-            let own_side = owner.is_some_and(|owner| session.are_allied(local, owner.player()));
+            let own_side = session
+                .relation(Some(local), owner.map(OwnerComponent::player))
+                .is_friendly();
             let Some(states) = states else {
                 continue;
             };
@@ -1392,15 +1399,9 @@ pub fn placement_input(
                 continue;
             }
             let standing = registry.def(info.type_id());
-            let cell = map
-                .location(
-                    location.position,
-                    standing
-                        .location
-                        .expect("a field source stands somewhere")
-                        .size(),
-                )
-                .anchor();
+            // A reach is measured from the cells the source is counted on.
+            let extent = Form::of(standing, map.movement_model()).extent();
+            let cell = map.location(location.position, extent).anchor();
             for (other, state) in standing.field_sources.iter().zip(&states.0) {
                 if other.field() != source.field() {
                     continue;
@@ -1408,16 +1409,7 @@ pub fn placement_input(
                 let Emitted::Reach(reach) = state.last_emitted else {
                     continue;
                 };
-                draw_reach(
-                    &mut gizmos,
-                    cell,
-                    standing
-                        .location
-                        .expect("validated content defines a location")
-                        .size(),
-                    reach,
-                    color.with_alpha(0.35),
-                );
+                draw_reach(&mut gizmos, cell, extent, reach, color.with_alpha(0.35));
             }
         }
     }
@@ -1530,16 +1522,12 @@ pub fn warp_placement_input(
         seen.iter()
             .map(|(info, location, visibility, sighted, _)| (info, location, visibility, sighted)),
     );
+    // Drawn at the declared look, judged on the cells the body would hold.
     let footprint = CellRect::new(anchor, size);
+    let body = Form::of(def, map.movement_model()).rect_at(anchor);
     let fits = placed
-        && ghost.allows(warper_def.within(), footprint)
-        && landing::sees_in(
-            &visibility,
-            &session,
-            local,
-            warper_def.landing(),
-            footprint,
-        );
+        && ghost.allows(warper_def.within(), body)
+        && landing::sees_in(&visibility, &session, local, warper_def.landing(), body);
 
     draw_footprint_ghost(&mut gizmos, footprint, fits);
 
@@ -1652,15 +1640,17 @@ pub fn summon_ghost(
         seen.iter()
             .map(|(info, location, visibility, sighted, _)| (info, location, visibility, sighted)),
     );
+    // Drawn at the declared look, judged on the cells the body would hold.
     let footprint = CellRect::new(anchor, size);
+    let body = Form::of(def, map.movement_model()).rect_at(anchor);
     let takes_aim = match *verdict {
         AimVerdict::Takes => true,
         AimVerdict::Idle | AimVerdict::Refuses(_) | AimVerdict::OutOfReach => false,
     };
     let fits = takes_aim
         && placed
-        && ghost.allows(within, footprint)
-        && landing::sees_in(&visibility, &session, local, *landing, footprint);
+        && ghost.allows(within, body)
+        && landing::sees_in(&visibility, &session, local, *landing, body);
     draw_footprint_ghost(&mut gizmos, footprint, fits);
 }
 
@@ -1817,10 +1807,10 @@ impl GhostView<'_> {
     /// on the static plane, of every ground holder that keeps it off; and its
     /// type's field rules met.
     pub fn fits(&self, def: &EntityTypeDef, anchor: CellPos) -> bool {
-        let location_def = def.location.expect("validated content defines a location");
-        let shape = entity_def::mover_shape(self.registry, &location_def);
-        let placed = CellRect::new(anchor, shape.size);
-        let class = OccupancyClass::of(def);
+        let form = Form::of(def, self.map.movement_model());
+        let shape = entity_def::mover_shape(self.registry, form);
+        let placed = form.rect_at(anchor);
+        let class = form.occupancy();
         placed.cells().all(|cell| self.map.contains(cell))
             && self.takes_explored(anchor, shape, class)
             && !self.made_out.iter().any(|footprint| {
@@ -1830,14 +1820,14 @@ impl GhostView<'_> {
                         // A body claiming its cells needs them clear of every
                         // claim; one claiming none, of standing claims alone.
                         (Solidity::Solid, OccupancyClass::Static) => true,
-                        (Solidity::Solid, OccupancyClass::Claim) => match location_def.solidity() {
+                        (Solidity::Solid, OccupancyClass::Claim) => match form.solidity() {
                             Solidity::Solid => true,
                             Solidity::Underfoot | Solidity::Passable => false,
                         },
                         // A mover claiming nothing keeps solid standing
                         // footprints off.
                         (Solidity::Underfoot | Solidity::Passable, OccupancyClass::Claim) => {
-                            match (class, location_def.solidity()) {
+                            match (class, form.solidity()) {
                                 (OccupancyClass::Static, Solidity::Solid) => true,
                                 (
                                     OccupancyClass::Static,
@@ -1854,7 +1844,7 @@ impl GhostView<'_> {
                         (Solidity::Underfoot | Solidity::Passable, OccupancyClass::Static) => {
                             match class {
                                 OccupancyClass::Static => {
-                                    footprint.solidity.keeps_off(location_def.solidity())
+                                    footprint.solidity.keeps_off(form.solidity())
                                 }
                                 OccupancyClass::Claim => false,
                             }
@@ -1995,10 +1985,10 @@ pub fn made_out_footprints<'a>(
         })
         .filter_map(|(info, location, _, _, _)| {
             let def = registry.def(info.type_id());
-            let location_def = def.location?;
-            let class = OccupancyClass::of(def);
-            let placed = map.location(location.position, location_def.size());
-            let footprint = match (class, location_def.solidity()) {
+            let form = Form::checked(def, map.movement_model())?;
+            let class = form.occupancy();
+            let placed = map.location(location.position, form.extent());
+            let footprint = match (class, form.solidity()) {
                 (OccupancyClass::Claim, Solidity::Underfoot | Solidity::Passable) => {
                     body::standing_rect(placed)
                 }
@@ -2009,9 +1999,9 @@ pub fn made_out_footprints<'a>(
                 ) => placed.footprint(),
             };
             Some(render::MadeOutFootprint {
-                layers: location_def.occupies(),
+                layers: form.occupies(),
                 rect: footprint,
-                solidity: location_def.solidity(),
+                solidity: form.solidity(),
                 class,
             })
         })
@@ -2034,11 +2024,8 @@ pub fn snaps_to(
     if info.type_name() != over {
         return None;
     }
-    let size = standing
-        .location
-        .expect("validated content defines a location")
-        .size();
-    let footprint = map.location(location.position, size).footprint();
+    let extent = Form::of(standing, map.movement_model()).extent();
+    let footprint = map.location(location.position, extent).footprint();
     (footprint.contains(cursor) && render::made_out(visibility, sighted))
         .then_some(footprint.origin)
 }

@@ -38,7 +38,7 @@ pub const NO_THROTTLE: FixedU64 = FixedU64::ONE;
 ///
 /// Steady transit latency lowers every frame's lead by the same amount without
 /// ever threatening the loop — a frame that reliably lands a full tick before it
-/// is needed never blocks anything, however far it travelled. So the healthy
+/// is needed never blocks anything, however far it traveled. So the healthy
 /// range is not measured against the full send-ahead window: only a lead
 /// shrinking under one tick — frames arriving barely before the loop consumes
 /// them — means the sender (or its route) can no longer feed this node in time,

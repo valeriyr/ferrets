@@ -77,7 +77,9 @@ impl Watches {
 pub fn detects(world: &World, player: PlayerId, cell: CellPos, layers: LayerMask) -> bool {
     let session = world.resource::<GameSession>();
     world.resource::<Watches>().in_force().iter().any(|watch| {
-        session.are_allied(player, watch.player)
+        session
+            .relation(Some(player), Some(watch.player))
+            .is_friendly()
             && match watch.detection {
                 Detection::Blind => false,
                 Detection::Reveals(revealed) => revealed & layers != LayerMask::EMPTY,

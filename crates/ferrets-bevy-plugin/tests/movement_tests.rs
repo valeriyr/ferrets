@@ -7,10 +7,9 @@
 mod utils;
 
 use bevy::prelude::*;
-use ferrets_content::registry::ContentRegistry;
 use ferrets_geometry::cell_pos::CellPos;
 use ferrets_math::{facing::Facing, fixed_uvec2::FixedUVec2};
-use ferrets_physics::terrain;
+use ferrets_physics::ground;
 use ferrets_simulation::{
     command::PlayerCommand,
     components::{movement::MoveComponent, order_queue::OrderQueueComponent},
@@ -60,13 +59,7 @@ fn body_pressed_into_water_corner_rounds_it_on_land() {
     let (landlubber, _) = utils::create_owned(&mut app, "landlubber", 12, 5, 0);
     utils::move_body(&mut app, landlubber, utils::point("11.18", "5.58"));
     walk_to_spot(&mut app, landlubber, utils::pos(4, 5));
-    let shape = {
-        let world = app.world();
-        let location = entity_def::of(world, landlubber)
-            .location
-            .expect("a landlubber has a location");
-        entity_def::mover_shape(world.resource::<ContentRegistry>(), &location)
-    };
+    let shape = entity_def::mover_shape_of(app.world(), landlubber);
 
     // It starts clipping the water, as the keep test's runner clips the keep,
     // and still clips it after its first tick; its second squares it onto
@@ -76,7 +69,7 @@ fn body_pressed_into_water_corner_rounds_it_on_land() {
         utils::run_ticks(&mut app, 1);
         let body = entity_def::shape(app.world(), landlubber);
         assert!(
-            terrain::body_fits(app.world().resource::<Map>().nav_grid(), shape, body),
+            ground::body_fits(app.world().resource::<Map>().nav_grid(), shape, body),
             "on tick {tick} the landlubber's {body:?} reaches over water"
         );
     }
@@ -112,10 +105,10 @@ fn body_rounding_footprint_corner_looks_where_it_steps() {
         utils::run_ticks(&mut app, 1);
         let after = utils::position_of(app.world_mut(), runner);
         let step = utils::offset(before, after);
-        let travelled = before.distance(after);
+        let traveled = before.distance(after);
         before = after;
         let facing = utils::facing_of(app.world(), runner);
-        if travelled < crumb {
+        if traveled < crumb {
             crumbs += 1;
             assert_eq!(
                 facing, looked,
@@ -230,6 +223,37 @@ fn point_order_blocked_at_final_approach_accepts_by_cell() {
     );
 }
 
+/// A walled-off walk whose detour search finds nothing spends the
+/// blockage's detour all the same: the same runner, its waypoint the cell it
+/// stands on, escalates walled off against the keep with its detour marked
+/// spent.
+#[test]
+fn fruitless_walled_off_search_spends_detour() {
+    let mut app = utils::corner_app();
+    utils::create_owned(&mut app, "keep", 8, 6, 0);
+    let (runner, _) = utils::create_owned(&mut app, "runner", 7, 7, 0);
+    app.world_mut()
+        .entity_mut(runner)
+        .get_mut::<OrderQueueComponent>()
+        .unwrap()
+        .push(
+            Order::Move {
+                goal: MoveGoal::Position(utils::point("7.8", "7.5")),
+            },
+            None,
+        );
+
+    let escalated = (1..60).find_map(|_| {
+        utils::run_ticks(&mut app, 1);
+        let walk = app.world().get::<MoveComponent>(runner)?;
+        (walk.frustration > 0).then_some((walk.frustration, walk.detoured))
+    });
+
+    // The first escalation is the walled-off one: the detour from (7, 7) to
+    // its own cell is empty, and the search marks the detour spent.
+    assert_eq!(escalated, Some((1, true)));
+}
+
 #[test]
 fn body_clipped_into_footprint_walks_itself_free() {
     let mut app = utils::corner_app();
@@ -327,7 +351,7 @@ fn cell_walk_follows_corridor_past_its_first_leg() {
     // not arriving — the walk has to ask for the next one, or it stops at the
     // first crossing a couple of cells from where it started.
     let mut app = utils::orders_app();
-    utils::install_choke_point_map(&mut app);
+    utils::install_choke_point_map(&mut app, MovementModel::Cell);
     let (soldier, id) = utils::create_owned(&mut app, "soldier", 2, 2, 0);
 
     utils::select(&mut app, id);
@@ -422,6 +446,38 @@ fn ponderous_body_comes_round_before_it_walks() {
         utils::position_of(app.world_mut(), mover),
         start,
         "then the walk starts"
+    );
+}
+
+/// A walk comes around before it arrives too: a body looking south, ordered
+/// onto the spot of an idle body touching it on the north, turns where it
+/// stands before it takes the step that meets the holder and ends the walk,
+/// rather than ending it on a step taken facing away.
+#[test]
+fn walk_comes_around_before_arriving_on_held_spot() {
+    let mut app = utils::turning_app();
+    let (mover, _) = utils::create_owned(&mut app, "ponderous", 10, 10, 0);
+    utils::create_owned(&mut app, "ponderous", 10, 9, 0);
+    walk_to_spot(&mut app, mover, utils::pos(10, 9));
+
+    let start = utils::position_of(app.world_mut(), mover);
+
+    utils::run_ticks(&mut app, 10);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), mover));
+    assert_eq!(utils::position_of(app.world_mut(), mover), start);
+    let ended = (1..300).find(|_| {
+        utils::run_ticks(&mut app, 1);
+        utils::order_queue_is_empty(app.world_mut(), mover)
+    });
+    // A hundred and fifty-eight ticks turning — half a circle at a degree a
+    // tick, less the lean it is released at, as the ponderous body comes
+    // around before it walks — then the step that meets the holder: 158 + 1
+    // − the first 10 = 149. It looks 2,374 of 65,536 units a circle off
+    // north, ≈ 13°, within its lean.
+    assert_eq!(ended, Some(149));
+    assert_eq!(
+        utils::facing_of(app.world(), mover),
+        Facing::from_bits(2374)
     );
 }
 
@@ -585,7 +641,7 @@ fn walk_gives_up_when_cell_ahead_is_taken_each_time_it_turns() {
 //
 
 #[test]
-#[should_panic(expected = "a walker stands on an anchor in a region of its shape")]
+#[should_panic(expected = "a body stands on an anchor in a region of its shape")]
 fn walk_starting_where_its_shape_has_no_region_panics() {
     // A landlubber, its domain taking land alone, is moved onto the water at
     // the pool's edge, (10,9), where its shape has no region: no set-down puts

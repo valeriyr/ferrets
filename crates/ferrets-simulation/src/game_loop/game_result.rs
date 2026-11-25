@@ -94,7 +94,7 @@ pub fn check(world: &mut World) {
             EliminationScope::Player => with_building.contains(&player),
             EliminationScope::Side => with_building
                 .iter()
-                .any(|&holder| session.are_allied(player, holder)),
+                .any(|&holder| session.relation(Some(player), Some(holder)).is_friendly()),
         })
         .collect();
 
@@ -131,7 +131,7 @@ pub fn check(world: &mut World) {
                 && !session.is_player_dropped(local)
                 && !survivors
                     .iter()
-                    .any(|&survivor| session.are_allied(local, survivor))
+                    .any(|&survivor| session.relation(Some(local), Some(survivor)).is_friendly())
         }
     };
 
@@ -141,7 +141,11 @@ pub fn check(world: &mut World) {
         // All survivors allied with the first → one side left. It wins as a team,
         // or as the lone player when that survivor is on no team (a teamless
         // player is allied with no one, so there can be only the one).
-        [first, rest @ ..] if rest.iter().all(|p| session.are_allied(*first, *p)) => {
+        [first, rest @ ..]
+            if rest
+                .iter()
+                .all(|p| session.relation(Some(*first), Some(*p)).is_friendly()) =>
+        {
             let winner = match session.slot(*first).and_then(PlayerSlot::team) {
                 Some(team) => Winner::Team(team),
                 None => Winner::Player(*first),

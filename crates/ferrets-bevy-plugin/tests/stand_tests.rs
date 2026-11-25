@@ -211,6 +211,7 @@ fn building(name: &str, side: u32, rise_time: u32) -> EntityTypeDef {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::new(side, side),
+            None,
             Solidity::Solid,
             utils::GROUND,
         )

@@ -39,6 +39,7 @@ use ferrets_simulation::{
         pools::PoolsComponent,
         rally::RallyTarget,
         resource::ResourceSourceComponent,
+        stance::Stance,
         train::TrainQueueComponent,
     },
     entity_def,
@@ -46,7 +47,6 @@ use ferrets_simulation::{
     ground,
     map::Map,
     movement_model::MovementModel,
-    occupancy::OccupancyClass,
     order::{MoveGoal, Order},
     rally,
     session::{player_slot::PlayerSlot, player_type::PlayerType},
@@ -139,15 +139,16 @@ fn change_into_mover_form_asks_off_only_bodies_its_claims_meet() {
     // Under the continuous model the whelp grows into a giant on
     // (9..11, 9..11), a body on the claim plane. One idle whelp rests on
     // (11, 11), its claim on the ground; another with its middle at
-    // (12.2, 10.5) holds (12, 10), its body reaching 0.3 onto it. A
+    // (12.25, 10.5) holds (12, 10), its body reaching 0.25 onto it, its
+    // circle √(0.75² + 1²) − 1 = 0.25 from the first's, the idle spacing. A
     // placement on the claim plane measures bodies by their claims: the first
-    // is asked off on the first tick, the second never, and stays where it
-    // rests.
+    // is asked off on the first tick, the second never — it drifts only to
+    // keep the idle spacing from the first once that one rests.
     let mut app = utils::morph_app(MovementModel::Continuous);
     let (whelp, _) = utils::create_owned(&mut app, "whelp", 10, 10, 0);
     let (inside, _) = utils::create_owned(&mut app, "whelp", 11, 11, 0);
     let (lying, _) = utils::create_owned(&mut app, "whelp", 14, 10, 0);
-    utils::walk_onto(&mut app, lying, utils::point("12.2", "10.5"), 20);
+    utils::walk_onto(&mut app, lying, utils::point("12.25", "10.5"), 20);
 
     utils::order_morph(&mut app, whelp, "giant");
     utils::run_ticks(&mut app, 1);
@@ -157,9 +158,12 @@ fn change_into_mover_form_asks_off_only_bodies_its_claims_meet() {
     );
     assert_eq!(utils::move_goal(&app, lying), None);
     utils::run_ticks(&mut app, 3);
+    assert_eq!(utils::move_goal(&app, lying), None);
+    assert!(utils::order_queue_is_empty(app.world_mut(), lying));
+    // Drifted from (12.25, 10.5) away from the first whelp, to the bit.
     assert_eq!(
-        utils::position_of(app.world(), lying),
-        utils::point("12.2", "10.5")
+        utils::position_of(app.world_mut(), lying),
+        utils::position_bits(0xc_3931_bda4, 0xa_64c6_f693)
     );
 }
 
@@ -1117,6 +1121,7 @@ fn change_into_form_wider_than_map_is_refused() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(40, 40),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1338,21 +1343,8 @@ fn placement_on_ground_reserved_for_change_is_refused() {
         .cells()
         .find(|&cell| cell != own && grid.claim_holders(utils::GROUND, cell) == [keeper_id.0])
         .expect("the change reserves cells around the keeper's own");
-    let keeper_location = world
-        .resource::<ContentRegistry>()
-        .entity("keeper")
-        .and_then(|def| def.location)
-        .expect("the keeper stands somewhere");
-    let placed_on = |cell: CellPos| {
-        ground::can_place(
-            world,
-            cell,
-            keeper_location,
-            OccupancyClass::Claim,
-            &[],
-            &[],
-        )
-    };
+    let keeper_form = utils::form_named(world, "keeper");
+    let placed_on = |cell: CellPos| ground::can_place(world, cell, keeper_form, &[], &[]);
 
     assert!(!placed_on(reserved));
     assert!(placed_on(CellPos::new(own.x + 4, own.y)));
@@ -1373,16 +1365,10 @@ fn building_reserving_change_keeps_ground_only_by_its_reservation() {
     assert!(entity_def::reserving(app.world(), shrine));
 
     let world = app.world();
-    let shrine_location = world
-        .resource::<ContentRegistry>()
-        .entity("shrine")
-        .and_then(|def| def.location)
-        .expect("the shrine stands somewhere");
     assert!(ground::can_place(
         world,
         utils::cell(12, 10),
-        shrine_location,
-        OccupancyClass::Static,
+        utils::form_named(world, "shrine"),
         &[],
         &[],
     ));
@@ -1401,15 +1387,42 @@ fn body_changing_on_reserved_ground_stands_against_contact() {
     utils::move_body(&mut app, shover, utils::point("10.9", "10.5"));
     utils::run_ticks(&mut app, 1);
 
-    // Two radii of 0.5, 0.4 apart, overlap by 0.5 + 0.5 - 0.4 = 0.6; at equal
-    // weight each body's share is half, 0.3: the whelp's moves it on to
-    // 10.9 + 0.3 = 11.2, the keeper's is dropped. The whelp takes only its
-    // own share until a standing body is a wall to it (plan Q105), when it
-    // would take all 0.6, to 11.5.
+    // Two radii of 0.5, 0.4 apart, overlap by 0.5 + 0.5 - 0.4 = 0.6; the
+    // fixed keeper takes none of it and the whelp all, clamped to one pass's
+    // push of 0.5: 10.9 + 0.5 = 11.4.
     assert_eq!(utils::position_of(app.world(), keeper), utils::pos(10, 10));
     assert_eq!(
         utils::position_of(app.world(), shover),
-        utils::point("11.2", "10.5")
+        utils::point("11.4", "10.5")
+    );
+}
+
+/// A body changing form on ground it reserved outranks one standing its
+/// ground: a StandGround whelp set 0.4 into the keeper takes the whole
+/// overlap, 11.1 + 0.4 = 11.5, where two planted bodies would halve it.
+#[test]
+fn stand_ground_body_touching_reserving_mover_parts_fully() {
+    let mut app = titan_app();
+    let (keeper, _) = utils::create_owned(&mut app, "keeper", 10, 10, 0);
+    let (shover, shover_id) = utils::create_owned(&mut app, "whelp", 14, 10, 0);
+    utils::select(&mut app, shover_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::StandGround,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY);
+    utils::order_morph(&mut app, keeper, "titan");
+    utils::run_ticks(&mut app, 1);
+
+    utils::move_body(&mut app, shover, utils::point("11.1", "10.5"));
+    utils::run_ticks(&mut app, 1);
+
+    assert_eq!(utils::position_of(app.world(), keeper), utils::pos(10, 10));
+    assert_eq!(
+        utils::position_of(app.world(), shover),
+        utils::point("11.5", "10.5")
     );
 }
 
@@ -1546,6 +1559,7 @@ fn underfoot_app_on(model: MovementModel) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Underfoot,
                     utils::GROUND,
                 )
@@ -1560,6 +1574,7 @@ fn underfoot_app_on(model: MovementModel) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Underfoot,
                     utils::GROUND,
                 )
@@ -1570,6 +1585,7 @@ fn underfoot_app_on(model: MovementModel) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Underfoot,
                     utils::GROUND,
                 )
@@ -1590,6 +1606,7 @@ fn underfoot_app_on(model: MovementModel) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1601,6 +1618,7 @@ fn underfoot_app_on(model: MovementModel) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     solidity,
                     utils::GROUND,
                 )
@@ -1643,6 +1661,7 @@ fn rooting_app(model: MovementModel) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1701,6 +1720,7 @@ fn titan_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     LayerMask::from(utils::GROUND) | utils::AIR,
                 )
@@ -1764,7 +1784,7 @@ fn wading_app() -> App {
             }
             registry.register(
                 EntityTypeDef::new("hut")
-                    .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+                    .with_location(dry, CellSize::ONE, None, Solidity::Solid, utils::GROUND)
                     .with_pool(Pool::health(30)),
             );
         },

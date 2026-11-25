@@ -2239,6 +2239,7 @@ fn shot_following_broodling_hidden_by_same_batch_is_lost_with_it() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

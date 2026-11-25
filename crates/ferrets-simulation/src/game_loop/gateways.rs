@@ -22,7 +22,6 @@ use crate::{
     components::{
         gateway::GatewayComponent,
         order_queue::{CancelPolicy, OrderQueueComponent},
-        owner,
         rally::RallyTarget,
     },
     entity_def::{self, Operation},
@@ -78,12 +77,13 @@ pub(crate) fn would_enter(
             (tunnel.carries(), tunnel.boarding(), tunnel.passage())
         }
     };
-    let allowed = owner::admits(
-        world.resource::<GameSession>(),
-        boarding,
-        entity_def::owner(world, gateway),
-        entity_def::owner(world, entity),
-    );
+    let allowed = world
+        .resource::<GameSession>()
+        .relation(
+            entity_def::owner(world, gateway),
+            entity_def::owner(world, entity),
+        )
+        .fits(boarding);
     if !allowed || !carries.admits(entity_def::of(world, entity)) {
         return Err(Refusal::TargetUnfit);
     }

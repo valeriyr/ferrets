@@ -57,7 +57,7 @@ use ferrets_nav_grid::{
     slope::{Direction, Slope},
 };
 use ferrets_script::{content, engine::lua::LuaEngine};
-use ferrets_simulation::{entity_def, map::Map};
+use ferrets_simulation::{entity_def, form::Form, map::Map};
 
 #[test]
 fn content_loads_and_validates() {
@@ -446,7 +446,7 @@ fn swarm_structures_are_built_by_drone_they_consume() {
 }
 
 #[test]
-fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
+fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_overlords_and_tuskers() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let hatchery = registry.entity("hatchery").expect("hatchery is registered");
     let brood = hatchery.breeder.as_ref().expect("the hatchery breeds");
@@ -525,8 +525,8 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
     // 1.25 a tick over the 20 ticks of a second is the whole pool of 25.
     assert_eq!(drain, utils::signed_cells("1.25"));
     assert_eq!(max_health, FixedU64::from_num(25));
-    let [drone, swarmling, overlord] = larva.morphs.as_slice() else {
-        panic!("the larva grows into exactly three things");
+    let [drone, swarmling, overlord, tusker] = larva.morphs.as_slice() else {
+        panic!("the larva grows into exactly four things");
     };
     assert_eq!(drone.into_type(), "drone");
     assert_eq!(
@@ -545,8 +545,14 @@ fn hatchery_breeds_larvae_that_grow_into_drones_swarmlings_and_overlords() {
             .requires()
             .contains(&Requirement::EntityType("spawning_pit".to_string()))
     );
-    // Every growth passes through the egg and counts as production.
     assert_eq!(overlord.into_type(), "overlord");
+    assert_eq!(tusker.into_type(), "tusker");
+    assert!(
+        tusker
+            .requires()
+            .contains(&Requirement::EntityType("tusker_cavern".to_string()))
+    );
+    // Every growth passes through the egg and counts as production.
     assert!(larva.morphs.iter().all(|transition| {
         transition.via_type() == Some("egg") && transition.reason() == MorphReason::Production
     }));
@@ -705,9 +711,10 @@ fn swarmling_grows_into_ravager_inside_cocoon() {
     let swarmling = registry
         .entity("swarmling")
         .expect("swarmling is registered");
-    // Growing is the first of its changes of form; digging in is the other.
-    let [growth, _burrow] = swarmling.morphs.as_slice() else {
-        panic!("the swarmling has exactly two changes of form");
+    // Growing into a ravager is the first of its changes of form; growing
+    // into a burster and digging in are the others.
+    let [growth, _burster, _burrow] = swarmling.morphs.as_slice() else {
+        panic!("the swarmling has exactly three changes of form");
     };
 
     assert_eq!(growth.into_type(), "ravager");
@@ -731,6 +738,68 @@ fn swarmling_grows_into_ravager_inside_cocoon() {
     assert!(!cocoon.can_move() && !cocoon.can_attack());
     let ravager = registry.entity("ravager").expect("ravager is registered");
     assert!(ravager.can_move() && ravager.can_attack());
+}
+
+#[test]
+fn swarmling_grows_into_burster_once_acid_nest_stands() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let swarmling = registry
+        .entity("swarmling")
+        .expect("swarmling is registered");
+    let growth = swarmling
+        .morphs
+        .iter()
+        .find(|transition| transition.into_type() == "burster")
+        .expect("a swarmling grows into a burster");
+    assert_eq!(growth.via_type(), Some("cocoon"));
+    assert!(
+        growth
+            .requires()
+            .contains(&Requirement::EntityType("acid_nest".to_string()))
+    );
+    let nest = registry
+        .entity("acid_nest")
+        .expect("acid_nest is registered");
+    assert_eq!(
+        nest.requires,
+        [Requirement::EntityType("spawning_pit".to_string())]
+    );
+
+    // Drawn one cell wide on a body of radius 1: max(1, ⌈2 × 1⌉) = 2 cells a
+    // side on a continuous map.
+    let burster = registry.entity("burster").expect("burster is registered");
+    assert_eq!(
+        burster.location.map(|location| location.size()),
+        Some(CellSize::ONE)
+    );
+    assert_eq!(
+        burster.location.and_then(|location| location.radius()),
+        Some(FixedU64::ONE)
+    );
+}
+
+#[test]
+fn larva_grows_into_tusker_once_tusker_cavern_stands() {
+    let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
+    let cavern = registry
+        .entity("tusker_cavern")
+        .expect("tusker_cavern is registered");
+    assert_eq!(
+        cavern.requires,
+        [Requirement::EntityType("hive".to_string())]
+    );
+
+    // Drawn three cells wide on a body of radius 0.5: max(1, ⌈2 × 0.5⌉) = 1
+    // cell on a continuous map.
+    let tusker = registry.entity("tusker").expect("tusker is registered");
+    assert_eq!(
+        tusker.location.map(|location| location.size()),
+        Some(CellSize::new(3, 3))
+    );
+    assert_eq!(
+        tusker.location.and_then(|location| location.radius()),
+        Some(utils::fixed("0.5"))
+    );
 }
 
 #[test]
@@ -795,7 +864,7 @@ fn standing_stones_stand_on_land_map_places_them_on() {
         let anchor = CellPos::new(stone.cell.0, stone.cell.1);
         assert!(
             live.nav_grid()
-                .fits(anchor, shape_of(&registry, "standing_stone")),
+                .fits(anchor, shape_of(&registry, &live, "standing_stone")),
             "the stone at ({}, {}) stands on open land",
             anchor.x,
             anchor.y
@@ -1118,7 +1187,7 @@ fn cliff_bands_ring_plateaus_mountain_and_mesa() {
         .expect("the demo registers a ground");
 
     // A cliff cell has a neighbor at another level, and no walker stands on it.
-    let walker = shape_of(&registry, "grunt");
+    let walker = shape_of(&registry, &live, "grunt");
     let mut cliffs = 0;
     for y in 0..96 {
         for x in 0..96 {
@@ -1154,7 +1223,7 @@ fn soldiers_and_walkers_wade_rim_and_ships_keep_off_land() {
     let live = Map::from_data(&map::data(), &registry);
     let fits = |name: &str, x, y| {
         live.nav_grid()
-            .fits(CellPos::new(x, y), shape_of(&registry, name))
+            .fits(CellPos::new(x, y), shape_of(&registry, &live, name))
     };
     let (deep, rim, land) = ((10, 5), (10, 10), (10, 30));
 
@@ -1220,7 +1289,7 @@ fn only_naga_crosses_river_off_its_fords() {
     let live = Map::from_data(&map::data(), &registry);
     let fits = |name: &str, x, y| {
         live.nav_grid()
-            .fits(CellPos::new(x, y), shape_of(&registry, name))
+            .fits(CellPos::new(x, y), shape_of(&registry, &live, name))
     };
     // The vertical arm at row 30: banks at columns 46 and 50 either side of
     // the deep water, 47 to 49 about the axis, 48; row 19 is on the near ford.
@@ -1301,7 +1370,7 @@ fn river_runs_three_deep_between_shallow_banks_and_fords_five_across() {
 fn fliers_are_over_land_and_water_alike() {
     let registry = content::load(&LuaEngine, CONTENT).expect("demo content loads");
     let live = Map::from_data(&map::data(), &registry);
-    let zeppelin = shape_of(&registry, "zeppelin");
+    let zeppelin = shape_of(&registry, &live, "zeppelin");
 
     // Deep water refuses walkers, land refuses ships, and the air domain is
     // over both: this is the whole of what the air buys.
@@ -1381,7 +1450,7 @@ fn only_melee_shells_and_flat_guns_exclude_air() {
     // among them — the shells, the flat guns of the wagon and the tank, the
     // naga's spear, the stilt walker's gun, and the undead's flat gun and
     // raised blades cannot answer what flies. The swarm's spawn bites like the
-    // swarmling it is too young to be.
+    // swarmling it is too young to be, and so do the burster and the tusker.
     let grounded: Vec<&str> = registry
         .entities()
         .filter(|def| def.can_attack())
@@ -1394,6 +1463,7 @@ fn only_melee_shells_and_flat_guns_exclude_air() {
         [
             "ancient_of_war_uprooted",
             "ancient_protector_uprooted",
+            "burster",
             "dark_templar",
             "ghoul",
             "grunt",
@@ -1410,6 +1480,7 @@ fn only_melee_shells_and_flat_guns_exclude_air() {
             "swarmling",
             "tank",
             "tree_of_life_uprooted",
+            "tusker",
             "war_wagon",
             "zealot"
         ]
@@ -1647,7 +1718,7 @@ fn boss_placements_stand_on_water_their_domains_take() {
         let anchor = CellPos::new(placement.cell.0, placement.cell.1);
         assert!(
             live.nav_grid()
-                .fits(anchor, shape_of(&registry, &placement.type_name)),
+                .fits(anchor, shape_of(&registry, &live, &placement.type_name)),
             "boss '{}' at ({}, {}) is off the water its domain takes",
             placement.type_name,
             anchor.x,
@@ -2989,13 +3060,13 @@ fn berth(x: &str, y: &str) -> FixedVec2 {
     FixedVec2::new(utils::signed_cells(x), utils::signed_cells(y))
 }
 
-/// The shape the type named `name` plans with.
-fn shape_of(registry: &ContentRegistry, name: &str) -> MoverShape {
-    let location = registry
+/// The shape the type named `name` plans with on `map`.
+fn shape_of(registry: &ContentRegistry, map: &Map, name: &str) -> MoverShape {
+    let form = registry
         .entity(name)
-        .and_then(|def| def.location)
+        .and_then(|def| Form::checked(def, map.movement_model()))
         .unwrap_or_else(|| panic!("'{name}' has a location"));
-    entity_def::mover_shape(registry, &location)
+    entity_def::mover_shape(registry, form)
 }
 
 /// Whether `def` refuses to stand on the named field.

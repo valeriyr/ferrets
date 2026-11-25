@@ -116,10 +116,8 @@ fn fold(
                     }
                     // Downing your own or an ally's earns no kill; the victim
                     // already counted it as a loss.
-                    if !world
-                        .resource::<GameSession>()
-                        .owners_allied(Some(killer), *owner)
-                    {
+                    let session = world.resource::<GameSession>();
+                    if !session.relation(Some(killer), *owner).is_friendly() {
                         statistics.record_killed(killer, *entity_type);
                     }
                 }
@@ -142,10 +140,8 @@ fn fold(
             }
             if let Some(player) = attacker_owner {
                 // Damage to your own or an ally's is taken but never dealt.
-                if !world
-                    .resource::<GameSession>()
-                    .owners_allied(Some(*player), *target_owner)
-                {
+                let session = world.resource::<GameSession>();
+                if !session.relation(Some(*player), *target_owner).is_friendly() {
                     statistics.record_damage_dealt(*player, *amount);
                 }
             }

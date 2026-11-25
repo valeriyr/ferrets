@@ -14,7 +14,7 @@ use ferrets_geometry::{
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
-    components::{location::LocationComponent, owner},
+    components::location::LocationComponent,
     entity_def,
     entity_index::EntityIndex,
     fields::FieldGrid,
@@ -234,9 +234,7 @@ struct Obstruction {
 /// or its coverers.
 fn blocks(session: &GameSession, obstruction: &Obstruction, player: PlayerId) -> bool {
     match obstruction.blocker {
-        Blocker::Object { owner, .. } => {
-            owner::admits(session, obstruction.of, Some(player), owner)
-        }
+        Blocker::Object { owner, .. } => session.relation(Some(player), owner).fits(obstruction.of),
         Blocker::Field { coverers } => coverers.satisfies(session, obstruction.of, Some(player)),
     }
 }

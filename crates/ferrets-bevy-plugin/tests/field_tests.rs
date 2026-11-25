@@ -2641,6 +2641,7 @@ fn walker_disabled_mid_tick_takes_no_further_step() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2997,6 +2998,7 @@ fn building(name: &str, side: u32, rise_time: u32) -> EntityTypeDef {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::new(side, side),
+            None,
             Solidity::Solid,
             utils::GROUND,
         )
@@ -3470,6 +3472,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -3525,6 +3528,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -3537,6 +3541,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -3582,6 +3587,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -3612,6 +3618,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -3659,6 +3666,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -3669,6 +3677,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -3744,6 +3753,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -3766,6 +3776,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -4046,6 +4057,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -4101,6 +4113,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -4171,12 +4184,19 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         );
         registry.register(utils::walker("seeder", utils::GROUND_DOMAIN).with_skills([seed]));
         registry.register(
-            utils::walker("wide_seeder", utils::GROUND_DOMAIN)
+            EntityTypeDef::new("wide_seeder")
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    Some(FixedU64::ONE),
                     Solidity::Solid,
                     utils::GROUND,
+                )
+                .with_movement(
+                    utils::fixed("0.5"),
+                    FixedU64::ONE,
+                    FixedU64::from_num(360),
+                    FixedU64::from_num(360),
                 )
                 .with_skills([seed]),
         );
@@ -4203,6 +4223,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

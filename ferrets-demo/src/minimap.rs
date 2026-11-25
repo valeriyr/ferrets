@@ -401,7 +401,7 @@ pub fn spawn_minimap(
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
     // One texture pixel is one cell, blown up many times over: filtering it
-    // would smear neighbouring cells into each other.
+    // would smear neighboring cells into each other.
     image.sampler = ImageSampler::nearest();
 
     let size = widget_size(FRAME_PX, (width, height));
@@ -641,8 +641,14 @@ pub fn refresh_minimap(
     // building's real blip wins. A revealed map shows the real entities, so the
     // memory steps aside exactly as it does in the world view.
     if !reveal.reveals() {
-        for (origin, size) in ghosts.remembered() {
-            canvas.fill(origin.0, origin.1, size.width, size.height, GHOST);
+        for look in ghosts.remembered() {
+            canvas.fill(
+                look.origin.x,
+                look.origin.y,
+                look.size.width,
+                look.size.height,
+                GHOST,
+            );
         }
     }
 
@@ -661,11 +667,12 @@ pub fn refresh_minimap(
             }
             let def = registry.def(info.type_id());
             let size = def.location?.size();
-            let anchor = map.location(location.position, size).anchor();
+            // A blip is the declared look, held on the map.
+            let anchor = map.location_clamped(location.position, size).anchor();
             let (x, y) = (anchor.x, anchor.y);
-            let own = owner.is_some_and(|owner| Some(owner.player()) == local);
-            let team =
-                owner.is_some_and(|owner| render::allied_with_local(&session, owner.player()));
+            let relation = session.relation(local, owner.map(OwnerComponent::player));
+            let own = relation.is_own();
+            let team = relation.is_friendly();
 
             let color = if selected.contains(&info.id()) {
                 SELECTED

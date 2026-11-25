@@ -28,7 +28,7 @@ pub enum Sitting {
     Travelling {
         /// The berth left behind.
         from: usize,
-        /// Cells travelled since leaving it.
+        /// Cells traveled since leaving it.
         along: FixedU64,
         /// Which way round the loop a circling worker walks; a roaming one
         /// crosses straight and does not read it.

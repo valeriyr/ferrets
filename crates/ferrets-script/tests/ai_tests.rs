@@ -33,14 +33,14 @@ use ferrets_content::{
     terrains::Terrains,
     work::{CrewLimit, WorkPresence},
 };
-use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize};
+use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_script::{
     ai::{
         AiRuntime,
         view::{
             content::{AttackView, ContentView, EntityContentView, MorphView},
-            game::{EntityView, GameView, Glimpse, RemainsView},
+            game::{EntityView, GameView, RemainsView, Whereabouts},
         },
     },
     content,
@@ -816,9 +816,10 @@ fn identical_views_produce_identical_command_sequences() {
             state.round = (state.round or 0) + 1
             local commands = {}
             for _, e in ipairs(view.my_entities) do
-                if e.idle then
+                if e.footprint ~= nil then
+                    local at = e.footprint
                     commands[#commands + 1] = { kind = "select", id = e.id }
-                    commands[#commands + 1] = { kind = "move", x = e.x + state.round, y = e.y }
+                    commands[#commands + 1] = { kind = "move", x = at.x + state.round, y = at.y }
                 end
             end
             return commands
@@ -860,6 +861,28 @@ fn scripts_read_view_and_content_tables() {
                 error("glimpse size")
             end
             if view.glimpses[2] ~= nil then error("one glimpse") end
+            -- A listed entity reports the cells it is counted on, as a glimpse
+            -- does; one off the map reports none.
+            if hall.footprint.x ~= 8 or hall.footprint.y ~= 9
+                or hall.footprint.width ~= 3 or hall.footprint.height ~= 2 then
+                error("hall footprint")
+            end
+            if hall.inside ~= nil or hall.untracked ~= nil or hall.hidden then
+                error("hall whereabouts")
+            end
+            local away = view.ally_entities[1]
+            if away.untracked.x ~= 20 or away.untracked.y ~= 21
+                or away.untracked.width ~= 1 or away.untracked.height ~= 1 then
+                error("ally untracked")
+            end
+            if not away.hidden or away.footprint ~= nil or away.inside ~= nil then
+                error("ally whereabouts")
+            end
+            local worker_view = view.my_entities[2]
+            if worker_view.inside ~= 1 or worker_view.footprint ~= nil
+                or not worker_view.hidden then
+                error("worker inside")
+            end
             local mine = view.neutral_entities[1]
             if mine.resource_amount ~= 900 then error("resource_amount") end
             local worker = content.entities.peasant
@@ -876,7 +899,7 @@ fn scripts_read_view_and_content_tables() {
             if soldier.attack.attack_range ~= 1 then error("attack range") end
             if content.resources[1] ~= "gold" then error("resources") end
             local gold = view.resources.gold
-            return { { kind = "move", x = gold + worker.price[1].amount, y = hall.x } }
+            return { { kind = "move", x = gold + worker.price[1].amount, y = hall.footprint.x } }
         end"#,
     );
     let mut runtime = load_ai(&source, &demo_like_content()).expect("load ai");
@@ -924,13 +947,13 @@ fn content_view_reads_change_time_from_stat_at_base_rounded_up() {
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity_stat("change_time", 1)
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5", change_time = "2.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, change_time = "2.5" },
             morphs = { { into = "flier", time = { stat = "change_time" }, placement = "reserve", cancel = "committed" } },
         })
         define_entity("flier", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
         })
     "#;
     let registry = content::load(&LuaEngine, source).expect("content loads");
@@ -1097,6 +1120,7 @@ fn research_content() -> (ContentView, ResearchId) {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -1119,6 +1143,7 @@ fn research_content() -> (ContentView, ResearchId) {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -1138,6 +1163,7 @@ fn research_content() -> (ContentView, ResearchId) {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -1162,6 +1188,7 @@ fn research_content() -> (ContentView, ResearchId) {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -1308,14 +1335,15 @@ fn populated_view(tick: u32) -> GameView {
             EntityView {
                 id: 1,
                 type_name: "town_hall".to_string(),
-                x: 8,
-                y: 9,
+                whereabouts: Whereabouts::Standing(CellRect::new(
+                    CellPos::new(8, 9),
+                    CellSize::new(3, 2),
+                )),
                 health: Some(800),
                 energy: None,
                 damage: None,
                 armor: None,
                 idle: false,
-                hidden: false,
                 concealed: false,
                 buffs: Vec::new(),
                 carrying: None,
@@ -1324,7 +1352,6 @@ fn populated_view(tick: u32) -> GameView {
                 disabled: false,
                 stance: None,
                 resource_amount: None,
-                boarded: None,
                 passengers: Vec::new(),
                 broodlings: Vec::new(),
                 bred_by: None,
@@ -1333,14 +1360,12 @@ fn populated_view(tick: u32) -> GameView {
             EntityView {
                 id: 2,
                 type_name: "peasant".to_string(),
-                x: 10,
-                y: 9,
+                whereabouts: Whereabouts::Inside(1),
                 health: Some(30),
                 energy: None,
                 damage: None,
                 armor: None,
                 idle: true,
-                hidden: false,
                 concealed: true,
                 buffs: vec!["shadowmeld".to_string(), "on_fire".to_string()],
                 carrying: Some(("gold".to_string(), 3)),
@@ -1349,26 +1374,50 @@ fn populated_view(tick: u32) -> GameView {
                 disabled: false,
                 stance: Some("flee".to_string()),
                 resource_amount: None,
-                boarded: None,
                 passengers: Vec::new(),
                 broodlings: Vec::new(),
                 bred_by: None,
                 lifetime_left: None,
             },
         ],
-        ally_entities: Vec::new(),
+        ally_entities: vec![EntityView {
+            id: 5,
+            type_name: "peasant".to_string(),
+            whereabouts: Whereabouts::Untracked(CellRect::new(
+                CellPos::new(20, 21),
+                CellSize::new(1, 1),
+            )),
+            health: Some(30),
+            energy: None,
+            damage: None,
+            armor: None,
+            idle: true,
+            concealed: false,
+            buffs: Vec::new(),
+            carrying: None,
+            train_queue: Vec::new(),
+            rising: false,
+            disabled: false,
+            stance: None,
+            resource_amount: None,
+            passengers: Vec::new(),
+            broodlings: Vec::new(),
+            bred_by: None,
+            lifetime_left: None,
+        }],
         enemy_entities: Vec::new(),
         neutral_entities: vec![EntityView {
             id: 3,
             type_name: "gold_mine".to_string(),
-            x: 4,
-            y: 4,
+            whereabouts: Whereabouts::Standing(CellRect::new(
+                CellPos::new(4, 4),
+                CellSize::new(2, 2),
+            )),
             health: None,
             energy: None,
             damage: None,
             armor: None,
             idle: true,
-            hidden: false,
             concealed: false,
             buffs: Vec::new(),
             carrying: None,
@@ -1377,18 +1426,12 @@ fn populated_view(tick: u32) -> GameView {
             disabled: false,
             stance: None,
             resource_amount: Some(900),
-            boarded: None,
             passengers: Vec::new(),
             broodlings: Vec::new(),
             bred_by: None,
             lifetime_left: None,
         }],
-        glimpses: vec![Glimpse {
-            x: 12,
-            y: 9,
-            width: 2,
-            height: 2,
-        }],
+        glimpses: vec![CellRect::new(CellPos::new(12, 9), CellSize::new(2, 2))],
         remains: vec![RemainsView {
             id: 4,
             type_name: "soldier".to_string(),

@@ -3,12 +3,10 @@
 //! side's detection.
 
 use bevy_ecs::prelude::*;
-use ferrets_content::{
-    affiliation::Affiliation, entity_type_def::EntityTypeDef, registry::ContentRegistry,
-};
+use ferrets_content::{entity_type_def::EntityTypeDef, registry::ContentRegistry};
 
 use crate::{
-    components::{concealed::ConcealedComponent, hidden::HiddenComponent, owner},
+    components::{concealed::ConcealedComponent, hidden::HiddenComponent},
     entity_def,
     entity_index::EntityIndex,
     fields,
@@ -91,7 +89,7 @@ impl VisibilityGrid {
 
     /// `player`'s team-combined knowledge of `(x, y)` — the maximum over the
     /// player and its allies. Includes `player` itself, since
-    /// [`GameSession::are_allied`] treats a player as allied with itself.
+    /// [`GameSession::relation`] counts a player as one side with itself.
     pub fn visibility_to(
         &self,
         session: &GameSession,
@@ -101,7 +99,11 @@ impl VisibilityGrid {
     ) -> CellVisibility {
         let cell = self.index(x, y);
         (0..self.cells.len())
-            .filter(|&other| session.are_allied(player, other as PlayerId))
+            .filter(|&other| {
+                session
+                    .relation(Some(player), Some(other as PlayerId))
+                    .is_friendly()
+            })
             .map(|other| self.cells[other][cell])
             .max()
             .unwrap_or(CellVisibility::Unexplored)
@@ -239,12 +241,10 @@ pub fn sighting_of(
     if entity_ref.contains::<HiddenComponent>() {
         return Sighting::Unseen;
     }
-    if owner::admits(
-        session,
-        Affiliation::Allied,
-        Some(player),
-        entity_def::owner(world, entity),
-    ) {
+    if session
+        .relation(Some(player), entity_def::owner(world, entity))
+        .is_friendly()
+    {
         return Sighting::Seen;
     }
     // Every cell the entity stands on answers, not one of them: a hall is lit

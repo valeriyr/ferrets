@@ -45,7 +45,13 @@ pub fn world(pools: impl IntoIterator<Item = Pool>) -> World {
     let land = registry.register_terrain("land");
     let domain = registry.register_domain("ground", DomainDef::new(ground, Terrains::Any, None));
     let unit = pools.into_iter().fold(
-        EntityTypeDef::new("unit").with_location(domain, CellSize::ONE, Solidity::Solid, ground),
+        EntityTypeDef::new("unit").with_location(
+            domain,
+            CellSize::ONE,
+            None,
+            Solidity::Solid,
+            ground,
+        ),
         EntityTypeDef::with_pool,
     );
     registry.register(unit);

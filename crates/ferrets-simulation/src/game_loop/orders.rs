@@ -800,7 +800,7 @@ pub fn note_idleness(world: &mut World) {
 /// Panics if `walker` is not a simulation entity, its type declares no
 /// location, or its body is wider or taller than the map.
 pub fn move_onto_cell(world: &World, walker: Entity, cell: CellPos) -> Order {
-    let size = entity_def::size(world, walker);
+    let size = entity_def::extent(world, walker);
     move_to_point(
         world
             .resource::<Map>()

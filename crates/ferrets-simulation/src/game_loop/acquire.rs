@@ -4,7 +4,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::cell_rect::CellRect;
 
 use crate::{
-    components::{last_hit::LastHitComponent, owner},
+    components::last_hit::LastHitComponent,
     entity_def,
     entity_index::EntityIndex,
     reach::{self, Approach},
@@ -149,11 +149,7 @@ pub(super) fn qualifies(
     if !entity_def::has_pool(world, target, PoolId::HEALTH) {
         return false;
     }
-    if !owner::are_hostile(
-        world.resource::<GameSession>(),
-        entity_def::owner(world, seeker),
-        entity_def::owner(world, target),
-    ) {
+    if !entity_def::relation(world, seeker, target).is_enemy() {
         return false;
     }
 

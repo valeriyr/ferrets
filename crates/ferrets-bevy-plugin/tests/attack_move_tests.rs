@@ -145,13 +145,30 @@ fn unarmed_unit_attack_moves_like_plain_move() {
 }
 
 #[test]
-fn crowded_attack_move_ends_where_move_does() {
+fn crowded_attack_move_finishes_every_order() {
     // Four soldiers in a column, (6, 8)..(6, 11), sent under the continuous
     // model to one point, (10.5, 10.5): one takes it, the rest are pressed
-    // around it. Each attack-move ends where its walk ended, as the move
-    // does: the same places, every order done.
-    let mut ended = Vec::new();
-    for attack in [false, true] {
+    // around it — each walk ends on meeting a body that stands on its spot —
+    // and every order ends, under Move and AttackMove alike. Each crowd then
+    // drifts to the idle spacing, a body pushed from roughly opposite sides
+    // taking no drift; the two settle apart because an attack-move ends the
+    // tick after its walk, standing that tick at its order where a move is
+    // already idle (plan Q137).
+    let rests = [
+        [
+            utils::position_bits(0xa_37bc_d9aa, 0x9_8308_d4af),
+            utils::position_bits(0xa_4f89_46ba, 0xa_c225_f7ec),
+            utils::position_bits(0xb_891a_7584, 0xa_942d_93dc),
+            utils::position_bits(0x9_c177_1e84, 0xb_de74_843e),
+        ],
+        [
+            utils::position_bits(0xa_605e_0f88, 0x9_f4ac_25ca),
+            utils::position_bits(0xb_39e4_cfc0, 0xa_de5d_7fc9),
+            utils::position_bits(0x9_502d_325b, 0xa_9b8b_d6d6),
+            utils::position_bits(0xa_0c6c_64fb, 0xb_9e47_b732),
+        ],
+    ];
+    for (attack, rest) in [false, true].into_iter().zip(rests) {
         let mut app = utils::continuous_orders_app();
         let target = utils::point("10.5", "10.5");
         let mut soldiers = Vec::new();
@@ -183,14 +200,12 @@ fn crowded_attack_move_ends_where_move_does() {
                 "attack: {attack}"
             );
         }
-        ended.push(
-            soldiers
-                .iter()
-                .map(|&soldier| utils::position_of(world, soldier))
-                .collect::<Vec<_>>(),
-        );
+        let rested: Vec<_> = soldiers
+            .iter()
+            .map(|&soldier| utils::position_of(world, soldier))
+            .collect();
+        assert_eq!(rested, rest, "attack: {attack}");
     }
-    assert_eq!(ended[0], ended[1]);
 }
 
 #[test]

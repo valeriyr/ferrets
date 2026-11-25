@@ -531,6 +531,7 @@ fn register_bases_content(app: &mut App) {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -543,6 +544,7 @@ fn register_bases_content(app: &mut App) {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )

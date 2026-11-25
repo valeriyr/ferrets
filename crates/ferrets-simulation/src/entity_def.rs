@@ -4,8 +4,11 @@ use bevy_ecs::{entity::Entity, world::World};
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, location::Location, shape::Shape,
 };
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
-use ferrets_physics::body;
+use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
+use ferrets_physics::{
+    body::{self, Bearing, Heading},
+    contact::Meeting,
+};
 
 use crate::{
     annex,
@@ -27,19 +30,21 @@ use crate::{
         pools::PoolsComponent,
         resource::{HarvestingComponent, UnderHarvestComponent},
         rise::{RiseOrigin, RisingComponent},
+        stance::{Stance, StanceComponent},
         transport::BoardedComponent,
     },
     entity_index::EntityIndex,
     fields,
+    form::Form,
     map::Map,
     movement_model::MovementModel,
     occupancy::{GridMark, OccupancyClass},
-    order::Order,
+    order::{MoveGoal, Order},
     player_buffs::PlayerBuffs,
     player_stats::PlayerStats,
     regions,
     reservation::Reservation,
-    session::player_id::PlayerId,
+    session::{GameSession, player_id::PlayerId, relation::Relation},
     simulation_id::SimulationId,
 };
 use ferrets_content::{
@@ -53,7 +58,6 @@ use ferrets_content::{
     entity_modifiers::EntityModifiers,
     entity_stats::EntityStatId,
     entity_type_def::{EntityTypeDef, EntityTypeId},
-    location::LocationDef,
     morph::MorphTransition,
     pool_def::PoolId,
     quantity::Quantity,
@@ -109,13 +113,12 @@ pub fn owner(world: &World, entity: Entity) -> Option<PlayerId> {
         .map(OwnerComponent::player)
 }
 
-/// Whether `other` belongs to whoever owns `entity`; never for an ownerless
-/// entity or other.
-pub fn same_owner(world: &World, entity: Entity, other: Entity) -> bool {
-    match (owner(world, entity), owner(world, other)) {
-        (Some(entity_owner), Some(other_owner)) => entity_owner == other_owner,
-        (Some(_), None) | (None, _) => false,
-    }
+/// How the owners of `entity` and `other` stand toward each other
+/// ([`GameSession::relation`]).
+pub fn relation(world: &World, entity: Entity, other: Entity) -> Relation {
+    world
+        .resource::<GameSession>()
+        .relation(owner(world, entity), owner(world, other))
 }
 
 /// Returns the [`EntityTypeDef`] for `entity`, resolved through the type handle on
@@ -334,6 +337,152 @@ pub fn idle(world: &World, entity: Entity) -> bool {
         .entity(entity)
         .get::<OrderQueueComponent>()
         .is_some_and(|queue| queue.front().is_none())
+}
+
+/// What `entity` is doing as contact reads it: fixed while it is rising or
+/// changing form on ground it reserved; inert while it is not operating,
+/// whatever its stance or order; walking while it has a walk, toward where
+/// the walk aims ([`walk_aim`]), with no heading while it has no waypoint or
+/// stands on its aim; planted while it stands its ground; working while it
+/// runs an order; idle otherwise.
+///
+/// Panics if `entity` is not a simulation entity, or is off the map.
+pub(crate) fn bearing(world: &World, entity: Entity) -> Bearing {
+    if rising(world, entity) || reserving(world, entity) {
+        return Bearing::Fixed;
+    }
+    match operation(world, entity) {
+        Operation::Operating => {}
+        Operation::Disabled(_) | Operation::Stranded => return Bearing::Inert,
+        Operation::Rising => unreachable!("a rising body is fixed"),
+    }
+    if let Some(walk) = world.entity(entity).get::<MoveComponent>() {
+        let ordered = world
+            .entity(entity)
+            .get::<OrderQueueComponent>()
+            .and_then(|queue| queue.front())
+            .and_then(|entry| entry.order.move_goal());
+        let location = location(world, entity);
+        let heading = match walk_aim(world, walk, ordered, location.size()) {
+            Some(aim) => {
+                let position = location.middle();
+                Heading::toward(FixedVec2::new(
+                    aim.x.to_num::<FixedI64>() - position.x.to_num::<FixedI64>(),
+                    aim.y.to_num::<FixedI64>() - position.y.to_num::<FixedI64>(),
+                ))
+            }
+            None => Heading::Unaimed,
+        };
+        return Bearing::Walking(heading);
+    }
+    let stance = world
+        .entity(entity)
+        .get::<StanceComponent>()
+        .map(|StanceComponent(stance)| *stance);
+    match stance {
+        Some(Stance::StandGround) => return Bearing::Planted,
+        Some(Stance::Flee | Stance::HoldFire | Stance::Defend) | None => {}
+    }
+    if idle(world, entity) {
+        Bearing::Idle
+    } else {
+        Bearing::Working
+    }
+}
+
+/// Where a walk aims now, `walk` its progress and `size` the body's
+/// footprint: on a point order's final leg to its goal cell, the `ordered`
+/// spot itself; otherwise the middle of the pursued waypoint, anchored as
+/// `size`; `None` while the walk has no waypoint. `ordered` is the goal of
+/// the Move the walk runs, `None` when it runs none.
+pub(crate) fn walk_aim(
+    world: &World,
+    walk: &MoveComponent,
+    ordered: Option<MoveGoal>,
+    size: CellSize,
+) -> Option<FixedUVec2> {
+    let &waypoint = walk.path.last()?;
+    let final_waypoint = walk.path.len() == 1 && walk.corridor.is_empty();
+    let spot = match ordered {
+        Some(MoveGoal::Position(point)) => {
+            let spot = world.resource::<Map>().location_clamped(point, size);
+            (final_waypoint
+                && walk.plan.is_none_or(|plan| plan.cell == spot.anchor())
+                && waypoint == spot.anchor())
+            .then(|| spot.middle())
+        }
+        Some(MoveGoal::Within { .. }) | None => None,
+    };
+    Some(spot.unwrap_or_else(|| world.resource::<Map>().location_at(waypoint, size).middle()))
+}
+
+/// How the bodies of `first` and `second` treat each other in contact, from
+/// how their owners stand: enemies never shove each other aside by weight,
+/// and a body that is nobody's meets everyone as an ally does.
+pub(crate) fn meeting(world: &World, first: Entity, second: Entity) -> Meeting {
+    match relation(world, first, second) {
+        Relation::Own | Relation::Allied | Relation::Neutral => Meeting::Yielding,
+        Relation::Enemy => Meeting::Unyielding,
+    }
+}
+
+/// A body near another, as contact reads it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NearBody {
+    /// What it is doing.
+    pub(crate) bearing: Bearing,
+    /// How it and the body it is near meet.
+    pub(crate) meeting: Meeting,
+    /// Its circle.
+    pub(crate) shape: Shape,
+}
+
+/// The bodies near a move of `entity`'s `body` to `to`: those holding a claim
+/// on `layers` on a cell within one of the cells the body covers before or
+/// after the move, in simulation-id order. A body that is not a circle is
+/// left to the grid.
+///
+/// Panics if `entity` is not a simulation entity.
+pub(crate) fn bodies_near(
+    world: &World,
+    entity: Entity,
+    layers: LayerMask,
+    body: Shape,
+    to: FixedUVec2,
+) -> Vec<NearBody> {
+    let grid = world.resource::<Map>().nav_grid();
+    let covered = body.cell_bounds().union(body.moved_to(to).cell_bounds());
+    let near = CellRect::new(
+        CellPos::new(
+            covered.origin.x.saturating_sub(1),
+            covered.origin.y.saturating_sub(1),
+        ),
+        CellSize::new(covered.size.width + 2, covered.size.height + 2),
+    );
+    let own = simulation_id(world, entity).0;
+    let mut holders: Vec<u32> = layers
+        .layers()
+        .flat_map(|layer| {
+            near.cells()
+                .flat_map(move |cell| grid.claim_holders(layer, cell).iter().copied())
+        })
+        .filter(|&holder| holder != own)
+        .collect();
+    holders.sort_unstable();
+    holders.dedup();
+    let index = world.resource::<EntityIndex>();
+    holders
+        .into_iter()
+        .filter_map(|holder| index.alive(SimulationId(holder)))
+        .filter_map(|other| match shape(world, other) {
+            circle @ Shape::Circle { .. } => Some(NearBody {
+                bearing: bearing(world, other),
+                meeting: meeting(world, other, entity),
+                shape: circle,
+            }),
+            Shape::Box(_) => None,
+        })
+        .collect()
 }
 
 /// Whether `entity` bears the buff `id` now. An entity with no buffs bears
@@ -611,7 +760,7 @@ pub fn quantity_count(world: &World, entity: Entity, quantity: Quantity) -> u32 
         .expect("the capability pairs the entity with this stat")
 }
 
-/// What `entity`, standing on the grid, marks there (see [`grid_mark_of`]):
+/// What `entity`, standing on the grid, marks there (see [`Form::mark_at`]):
 /// on the cell model, a body mid-crossing marks the anchor its crossing
 /// claimed.
 ///
@@ -622,30 +771,7 @@ pub fn grid_mark(world: &World, entity: Entity) -> Option<GridMark> {
         stands_on_grid(world, entity),
         "a body read for its grid mark stands on the grid"
     );
-    let def = of(world, entity);
-    grid_mark_of(
-        simulation_id(world, entity),
-        grid_anchor(world, entity),
-        def.location
-            .expect("a body standing on the grid has a location"),
-        OccupancyClass::of(def),
-    )
-}
-
-/// What `holder`'s body anchored at `anchor` in `def` marks on the grid, on
-/// the plane `class` selects — or `None` for one whose solidity marks no cells.
-pub fn grid_mark_of(
-    holder: SimulationId,
-    anchor: CellPos,
-    def: LocationDef,
-    class: OccupancyClass,
-) -> Option<GridMark> {
-    def.solidity().claims_cells().then(|| GridMark {
-        holder,
-        footprint: CellRect::new(anchor, def.size()),
-        layers: def.occupies(),
-        class,
-    })
+    form_of(world, entity).mark_at(simulation_id(world, entity), grid_anchor(world, entity))
 }
 
 /// The cells `entity` marks on the grid on any of `layers` — its claim, or a
@@ -662,16 +788,55 @@ pub fn claim_on(world: &World, entity: Entity, layers: LayerMask) -> Option<Cell
         .map(|mark| mark.footprint)
 }
 
-/// The shape a body of `location_def` stands and routes with.
-pub fn mover_shape(registry: &ContentRegistry, location_def: &LocationDef) -> MoverShape {
-    let domain = registry.domain_def(location_def.domain());
+/// The shape a body of `form` stands and routes with.
+pub fn mover_shape(registry: &ContentRegistry, form: Form) -> MoverShape {
+    let location = form.location_def();
+    let domain = registry.domain_def(location.domain());
     MoverShape::new(
         domain.terrains().mask(registry),
         domain.layer(),
-        location_def.occupies(),
-        location_def.size(),
+        location.occupies(),
+        form.extent(),
         domain.cliff_crossing(),
     )
+}
+
+/// The shape `entity` stands and routes with in the form it has now.
+///
+/// Panics if `entity` is not a simulation entity, and as [`Form::of`] does.
+pub fn mover_shape_of(world: &World, entity: Entity) -> MoverShape {
+    mover_shape(world.resource::<ContentRegistry>(), form_of(world, entity))
+}
+
+/// `def`'s body on this game's map ([`Form::of`]).
+///
+/// Panics as [`Form::of`] does.
+pub fn form(world: &World, def: &EntityTypeDef) -> Form {
+    Form::of(def, world.resource::<Map>().movement_model())
+}
+
+/// `entity`'s body in the form it has now (see [`form`]).
+///
+/// Panics if `entity` is not a simulation entity, and as [`Form::of`] does.
+pub fn form_of(world: &World, entity: Entity) -> Form {
+    form(world, of(world, entity))
+}
+
+/// `def`'s body on this game's map, or `None` for a type that stands nowhere
+/// ([`Form::checked`]).
+///
+/// Panics as [`Form::checked`] does.
+pub fn checked_form(world: &World, def: &EntityTypeDef) -> Option<Form> {
+    Form::checked(def, world.resource::<Map>().movement_model())
+}
+
+/// `entity`'s body in the form it has now, or `None` for a type that stands
+/// nowhere (see [`checked_form`]).
+///
+/// Panics if `entity` is not a simulation entity, and as [`Form::checked`]
+/// does.
+pub fn checked_form_of(world: &World, entity: Entity) -> Option<Form> {
+    checked_form(world, of(world, entity))
 }
 
 /// Where `entity` stands: its body's middle.
@@ -710,7 +875,7 @@ pub fn whereabouts(world: &World, entity: Entity) -> FixedUVec2 {
         None => match waiting_beside(world, entity) {
             Some((Beside::Container(_), last)) => world
                 .resource::<Map>()
-                .location_at_clamped(last.origin, size(world, entity))
+                .location_at_clamped(last.origin, extent(world, entity))
                 .middle(),
             Some((Beside::WentIn | Beside::Footprint(_) | Beside::Berth { .. }, _)) | None => {
                 went_in(world, entity).position
@@ -728,7 +893,7 @@ pub fn whereabouts(world: &World, entity: Entity) -> FixedUVec2 {
 pub fn whereabouts_rect(world: &World, entity: Entity) -> CellRect {
     world
         .resource::<Map>()
-        .location_clamped(whereabouts(world, entity), size(world, entity))
+        .location_clamped(whereabouts(world, entity), extent(world, entity))
         .footprint()
 }
 
@@ -820,7 +985,7 @@ pub fn beside_rect(world: &World, entity: Entity, beside: Beside) -> CellRect {
 /// Panics if `entity` is not a simulation entity, is not hidden, or its type
 /// declares no location.
 pub fn went_in_rect(world: &World, entity: Entity) -> CellRect {
-    CellRect::new(went_in_anchor(world, entity), size(world, entity))
+    CellRect::new(went_in_anchor(world, entity), extent(world, entity))
 }
 
 /// The anchor a hidden `entity` went in at, held on the map for its size.
@@ -830,26 +995,19 @@ pub fn went_in_rect(world: &World, entity: Entity) -> CellRect {
 pub fn went_in_anchor(world: &World, entity: Entity) -> CellPos {
     world
         .resource::<Map>()
-        .location_clamped(went_in(world, entity).position, size(world, entity))
+        .location_clamped(went_in(world, entity).position, extent(world, entity))
         .anchor()
 }
 
-/// The body radius of a mover, from its radius stat, held to half its
-/// footprint's narrow side — the bound a continuous-model map validates the
-/// base stat against.
+/// The radius of a mover's body, as its type declares it.
 ///
-/// Panics if `entity` is not a simulation entity, or carries no radius stat
-/// — building a continuous-model map validates that every mover defines
-/// one, and only the continuous model reads it.
+/// Panics if `entity` is not a simulation entity, or its type declares no
+/// radius.
 pub fn radius(world: &World, entity: Entity) -> FixedU64 {
-    let size = size(world, entity);
-    let bound = FixedU64::from_num(size.width.min(size.height)) / 2;
-    world
-        .entity(entity)
-        .get::<StatsComponent>()
-        .and_then(|stats| stats.effective(EntityStatId::RADIUS))
-        .expect("movers define a radius stat")
-        .min(bound)
+    of(world, entity)
+        .location
+        .and_then(|location| location.radius())
+        .expect("movers declare a radius")
 }
 
 /// How strongly a mover resists displacement, from its weight stat.
@@ -925,15 +1083,12 @@ pub fn effective_ticks(world: &World, entity: Entity, stat: EntityStatId) -> u32
         .expect("the capability pairs the entity with this stat")
 }
 
-/// The size `entity`'s type declares, wherever it is.
+/// The cells `entity`'s body spans on each axis, wherever it is
+/// ([`Form::extent`]).
 ///
-/// Panics if `entity` is not a simulation entity, or its type declares no
-/// location.
-pub fn size(world: &World, entity: Entity) -> CellSize {
-    of(world, entity)
-        .location
-        .expect("only entities with LocationDef have a size")
-        .size()
+/// Panics if `entity` is not a simulation entity, and as [`Form::of`] does.
+pub fn extent(world: &World, entity: Entity) -> CellSize {
+    form_of(world, entity).extent()
 }
 
 /// Where `entity`'s body stands: its position, judged with its size to lie
@@ -944,7 +1099,7 @@ pub fn size(world: &World, entity: Entity) -> CellSize {
 pub fn location(world: &World, entity: Entity) -> Location {
     world
         .resource::<Map>()
-        .location(position(world, entity), size(world, entity))
+        .location(position(world, entity), extent(world, entity))
 }
 
 /// The cells `entity` would be counted on standing where it stands now in the
@@ -971,13 +1126,10 @@ pub fn settled(
     middle: FixedUVec2,
     toward: CellPos,
 ) -> Location {
-    let size = def
-        .location
-        .expect("a body that settles stands somewhere")
-        .size();
+    let form = form(world, def);
     let map = world.resource::<Map>();
-    let held = map.location_clamped(middle, size);
-    match (OccupancyClass::of(def), map.movement_model()) {
+    let held = map.location_clamped(middle, form.extent());
+    match (form.occupancy(), map.movement_model()) {
         // A standing footprint holds the cells it is anchored at, so a body
         // left between them would be drawn — and would reach — off its own
         // cells; a cell-model mover left there would read as mid-crossing.
@@ -1049,7 +1201,7 @@ pub fn standing_rect(world: &World, entity: Entity) -> CellRect {
 ///
 /// Panics if `entity` is not a simulation entity, is off the map (a hidden
 /// one stands nowhere), its type declares no location, or a continuous mover
-/// carries no radius stat.
+/// declares no radius.
 pub fn shape(world: &World, entity: Entity) -> Shape {
     shape_of(world, entity, location(world, entity))
 }
@@ -1062,7 +1214,7 @@ pub fn shape(world: &World, entity: Entity) -> Shape {
 pub fn shape_at(world: &World, entity: Entity, anchor: CellPos) -> Shape {
     let at = world
         .resource::<Map>()
-        .location_at(anchor, size(world, entity));
+        .location_at(anchor, extent(world, entity));
     shape_of(world, entity, at)
 }
 
@@ -1115,7 +1267,7 @@ pub fn measured_rect(world: &World, entity: Entity, occupancy: OccupancyClass) -
 pub(crate) fn set_location(world: &mut World, entity: Entity, location: Location) {
     assert_eq!(
         location.size(),
-        size(world, entity),
+        extent(world, entity),
         "a body moves to a place of its own size"
     );
     world
@@ -1132,7 +1284,7 @@ pub(crate) fn set_location(world: &mut World, entity: Entity, location: Location
 pub(crate) fn set_anchor(world: &mut World, entity: Entity, anchor: CellPos) {
     let location = world
         .resource::<Map>()
-        .location_at(anchor, size(world, entity));
+        .location_at(anchor, extent(world, entity));
     set_location(world, entity, location);
 }
 

@@ -210,7 +210,6 @@ fn empty_targetable_panics() {
 fn walker(name: &str, domain: DomainId) -> EntityTypeDef {
     utils::standing(name, domain).with_movement(
         FixedU64::ONE,
-        utils::fixed("0.5"),
         FixedU64::ONE,
         FixedU64::from_num(360),
         FixedU64::from_num(360),
@@ -232,6 +231,7 @@ fn keep() -> EntityTypeDef {
     EntityTypeDef::new("sea_fortress").with_location(
         utils::WATER_DOMAIN,
         CellSize::ONE,
+        None,
         Solidity::Solid,
         utils::WATER | utils::AIR,
     )

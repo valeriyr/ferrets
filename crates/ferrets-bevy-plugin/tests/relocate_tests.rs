@@ -1183,6 +1183,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1193,6 +1194,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1245,11 +1247,11 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    Some(utils::fixed("0.25")),
                     Solidity::Solid,
                     utils::GROUND,
                 )
                 .with_movement(
-                    utils::fixed("0.25"),
                     utils::fixed("0.25"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -1262,6 +1264,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Underfoot,
                     utils::GROUND,
                 )

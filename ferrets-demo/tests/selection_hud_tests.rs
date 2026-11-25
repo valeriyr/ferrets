@@ -1082,6 +1082,8 @@ fn hovered_build_buttons_name_their_price_and_time() {
     // A tunnel is 100 gold and 50 wood in 80 ticks, 4 Seconds; a warren 150 gold
     // and 150 wood in 100, 5 Seconds; a spawning pit 200 gold and 100 wood in 120,
     // 6 Seconds; a tumor 25 gold in 40, 2 Seconds; a hatchery 400 gold in 200, 10 Seconds.
+    // With no spawning pit or hive standing, the acid nest and the tusker cavern
+    // name what they need.
     assert_eq!(
         hover_each::<hud::BuildButton>(&mut app),
         vec![
@@ -1090,6 +1092,8 @@ fn hovered_build_buttons_name_their_price_and_time() {
             "200 Gold, 100 Wood, 6 Seconds".to_string(),
             "25 Gold, 2 Seconds".to_string(),
             "400 Gold, 10 Seconds".to_string(),
+            "Needs a Hive".to_string(),
+            "Needs a Spawning Pit".to_string(),
         ]
     );
 }
@@ -1586,7 +1590,7 @@ fn register_totem(app: &mut App) {
         .expect("the demo content defines the frenzy ritual");
     registry.register(
         EntityTypeDef::new("totem")
-            .with_location(land, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(land, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(100))
             .with_pool(Pool::energy(40))
             .with_stat(EntityStatId::SIGHT_RANGE, FixedU64::from_num(5))
@@ -1654,7 +1658,7 @@ fn register_diver(app: &mut App) {
     let mut registry = app.world_mut().resource_mut::<ContentRegistry>();
     registry.register(
         EntityTypeDef::new("diver")
-            .with_location(ground_domain, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(ground_domain, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(100))
             .with_morphs([MorphTransition::new(
                 "watch_tower",
@@ -1709,7 +1713,7 @@ fn register_diver(app: &mut App) {
     );
     registry.register(
         EntityTypeDef::new("dipper")
-            .with_location(ground_domain, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(ground_domain, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(100))
             .with_skills([dip]),
     );

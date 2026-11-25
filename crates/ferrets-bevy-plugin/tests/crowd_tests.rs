@@ -114,7 +114,13 @@ fn head_on_movers_swap_beneath_fliers() {
             .entity("soldier")
             .expect("the orders content declares a soldier")
             .clone()
-            .with_location(air, CellSize::ONE, Solidity::Solid, utils::AIR);
+            .with_location(
+                air,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                utils::AIR,
+            );
         drone.name = "drone".to_string();
         registry.register(drone);
     });
@@ -606,22 +612,49 @@ fn walk_onto_cell_held_by_enemy_ends_beside_it() {
     );
 
     // At half a cell a tick the walk stands at (9,10) on the twelfth tick, and
-    // from the thirteenth the step into the idle enemy wagon's cell is
-    // refused. No other cell is the point, so no route leads elsewhere: the
-    // walk waits as on any held step, five ticks, and the escalation after
-    // them grows its acceptance to one cell, which ends it beside the wagon
-    // on the nineteenth. It stays ended until the soldier turns on the wagon
-    // on the twenty-third.
-    // Still waiting on the fourteenth, where giving the walk up at once would
-    // have ended it.
-    utils::run_ticks(&mut app, 14);
-    assert!(!utils::order_queue_is_empty(app.world_mut(), walker));
-    utils::run_ticks(&mut app, 4);
+    // on the thirteenth the step into the idle enemy wagon's cell — the
+    // point's own — is refused: the goal is taken by a body that stays, so
+    // the point walk ends beside it at once.
+    utils::run_ticks(&mut app, 12);
     assert!(!utils::order_queue_is_empty(app.world_mut(), walker));
     utils::run_ticks(&mut app, 1);
     let world = app.world_mut();
     assert_eq!(utils::anchor_of(world, walker), CellPos::new(9, 10));
     assert!(utils::order_queue_is_empty(world, walker));
+}
+
+#[test]
+fn walk_onto_cell_held_by_unit_at_work_ends_beside_it() {
+    let mut app = utils::orders_app();
+    let (_, depot_id) = utils::create_owned(&mut app, "depot", 11, 10, 1);
+    let (worker, worker_id) = utils::create_owned(&mut app, "soldier", 10, 10, 0);
+    let (walker, walker_id) = utils::create_owned(&mut app, "soldier", 4, 10, 0);
+    utils::select(&mut app, worker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Attack {
+            target: AttackTarget::Entity(depot_id),
+            flush: true,
+        },
+    );
+    utils::select(&mut app, walker_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Move {
+            target: utils::pos(10, 10),
+            flush: true,
+        },
+    );
+
+    // The own soldier on the point's cell is at work on the enemy depot beside
+    // it: a body that stays, so the walk ends beside it as it reaches (9,10).
+    utils::run_ticks(&mut app, 12);
+    assert!(!utils::order_queue_is_empty(app.world_mut(), walker));
+    utils::run_ticks(&mut app, 1);
+    let world = app.world_mut();
+    assert_eq!(utils::anchor_of(world, walker), CellPos::new(9, 10));
+    assert!(utils::order_queue_is_empty(world, walker));
+    assert_eq!(utils::anchor_of(world, worker), CellPos::new(10, 10));
 }
 
 #[test]

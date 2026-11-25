@@ -3,6 +3,8 @@
 //! Entity lists are ordered by ascending simulation id so positional
 //! iteration stays deterministic.
 
+use ferrets_geometry::cell_rect::CellRect;
+
 /// Everything one AI player observes for one think step.
 pub struct GameView {
     pub tick: u32,
@@ -33,20 +35,22 @@ pub struct GameView {
     /// on: its sight reaches the entity, its detection does not. In ascending
     /// id order of the entity glimpsed; empty for a brain whose detection
     /// reaches everywhere.
-    pub glimpses: Vec<Glimpse>,
+    pub glimpses: Vec<CellRect>,
 }
 
-/// The footprint of one glimpsed entity, and nothing else about it.
+/// Where an entity is, as far as the brain knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Glimpse {
-    /// The x of its footprint's lowest corner.
-    pub x: u32,
-    /// The y of that corner.
-    pub y: u32,
-    /// How many cells across it stands.
-    pub width: u32,
-    /// How many cells deep it stands.
-    pub height: u32,
+pub enum Whereabouts {
+    /// On the map: the cells it is counted on.
+    Standing(CellRect),
+    /// Off the map inside a holder — a transporter or a job — the brain sides
+    /// with or sights: that holder's id.
+    Inside(u32),
+    /// Off the map with no holder the brain knows — inside one it neither
+    /// sides with nor sights, in a link, or inside nothing: the cells it is
+    /// known by, where it went in or, waiting to return, where its return
+    /// searches.
+    Untracked(CellRect),
 }
 
 /// One body lying on the map, for the casts that spend them.
@@ -63,14 +67,8 @@ pub struct RemainsView {
 pub struct EntityView {
     pub id: u32,
     pub type_name: String,
-    /// Cell coordinates of where the entity is: its anchor — the top-left cell
-    /// of its footprint — or, off the map, the cell of what it is inside — its
-    /// holder, its job, or the container a waiting return is set down beside —
-    /// when the brain sides with or sights that, else the cell it went in by;
-    /// waiting beside a container gone from the world, the footprint its return
-    /// last searched.
-    pub x: u32,
-    pub y: u32,
+    /// Where the entity is.
+    pub whereabouts: Whereabouts,
     /// `None` when the type has no health.
     pub health: Option<u32>,
     /// The current energy pool, floored to whole points. `None` when the
@@ -83,9 +81,6 @@ pub struct EntityView {
     pub armor: Option<u32>,
     /// `true` when the entity takes orders and runs none.
     pub idle: bool,
-    /// `true` when the entity is temporarily off the map (e.g. harvesting
-    /// inside a source).
-    pub hidden: bool,
     /// `true` while the entity is concealed: not seen by a side that is not
     /// its own unless that side's detection covers a cell it stands on.
     pub concealed: bool,
@@ -106,8 +101,6 @@ pub struct EntityView {
     pub stance: Option<String>,
     /// Remaining amount in a resource source. `None` when not a source.
     pub resource_amount: Option<u32>,
-    /// The holder this entity rides in. `None` when not aboard anything.
-    pub boarded: Option<u32>,
     /// The ids riding inside this entity, in ascending order. Empty when it
     /// carries nobody, or when it is another side's.
     pub passengers: Vec<u32>,

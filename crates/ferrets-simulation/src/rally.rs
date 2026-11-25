@@ -25,7 +25,7 @@ pub fn target_of(world: &World, holder: Entity) -> Option<RallyTarget> {
 /// point, if one is set and `unit` belongs to whoever owns `holder`: a holder
 /// sends on only its own owner's units.
 pub(crate) fn mark_rally_due(world: &mut World, holder: Entity, unit: Entity) {
-    if !entity_def::same_owner(world, holder, unit) {
+    if !entity_def::relation(world, holder, unit).is_own() {
         return;
     }
     if let Some(target) = target_of(world, holder) {
@@ -60,7 +60,8 @@ pub(crate) fn send_on_risen(world: &mut World, entity: Entity, founder: Option<S
     }
     let target = own.or_else(|| {
         let founder = world.resource::<EntityIndex>().alive(founder?)?;
-        entity_def::same_owner(world, founder, entity)
+        entity_def::relation(world, founder, entity)
+            .is_own()
             .then(|| target_of(world, founder))
             .flatten()
     });

@@ -1,6 +1,7 @@
 //! Content-defined location property struct and its footprint solidity.
 
 use ferrets_geometry::cell_size::CellSize;
+use ferrets_math::FixedU64;
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::domain::DomainId;
@@ -56,6 +57,9 @@ pub struct LocationDef {
     domain: DomainId,
     /// Footprint in whole grid cells.
     size: CellSize,
+    /// The radius of the body's circle in cells, where the continuous movement
+    /// model resolves contact; `None` for a body with no circle.
+    radius: Option<FixedU64>,
     /// Whether the footprint also claims the occupied layers.
     solidity: Solidity,
     /// The layers whose cells the footprint takes, and in which it blocks and
@@ -63,14 +67,19 @@ pub struct LocationDef {
     occupies: LayerMask,
 }
 
+/// The largest radius a body's circle may have, in cells.
+pub const MAX_RADIUS: FixedU64 = FixedU64::const_from_int(1024);
+
 impl LocationDef {
     /// Creates a new `LocationDef` with the given data.
     ///
-    /// Panics if `occupies` is empty or `size` has a zero dimension.
+    /// Panics if `occupies` is empty, `size` has a zero dimension, or a
+    /// declared `radius` is zero or above [`MAX_RADIUS`].
     #[inline]
     pub fn new(
         domain: DomainId,
         size: CellSize,
+        radius: Option<FixedU64>,
         solidity: Solidity,
         occupies: impl Into<LayerMask>,
     ) -> Self {
@@ -81,10 +90,19 @@ impl LocationDef {
             size.width > 0 && size.height > 0,
             "size dimensions must be greater than 0"
         );
+        assert!(
+            radius.is_none_or(|radius| radius > FixedU64::ZERO),
+            "radius must be greater than 0"
+        );
+        assert!(
+            radius.is_none_or(|radius| radius <= MAX_RADIUS),
+            "radius must be at most {MAX_RADIUS}"
+        );
 
         Self {
             domain,
             size,
+            radius,
             solidity,
             occupies,
         }
@@ -115,5 +133,12 @@ impl LocationDef {
     #[inline]
     pub fn size(&self) -> CellSize {
         self.size
+    }
+
+    /// Returns the radius of the body's circle in cells, or `None` for a body
+    /// with no circle.
+    #[inline]
+    pub fn radius(&self) -> Option<FixedU64> {
+        self.radius
     }
 }

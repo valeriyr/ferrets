@@ -20,10 +20,11 @@ use ferrets_pathfinder::{
     search,
 };
 
-use ferrets_math::{FixedU64, fixed_uvec2::FixedUVec2};
+use ferrets_math::fixed_uvec2::FixedUVec2;
 
 use crate::{
     entity_def,
+    form::Form,
     map_data::{MapData, MapSlot, Placement},
     movement_model::MovementModel,
     occupancy::{GridMark, OccupancyClass},
@@ -178,8 +179,8 @@ impl Map {
                 MapSlot::Environment => None,
             })
             .collect();
-        // A continuous game resolves contact between bodies, so every mover
-        // must author one; a cell game never reads the stat.
+        // A continuous game sizes and parts its movers by their radius, so
+        // every mover must declare one; a cell game never reads it.
         match data.movement_model() {
             MovementModel::Cell => {}
             MovementModel::Continuous => {
@@ -187,27 +188,11 @@ impl Map {
                     if !def.can_move() {
                         continue;
                     }
-                    let radius = def.base_stat(EntityStatId::RADIUS);
                     assert!(
-                        radius.is_some_and(|radius| radius > FixedU64::ZERO),
-                        "entity type '{}' moves but defines no positive radius, \
+                        def.location
+                            .is_some_and(|location| location.radius().is_some()),
+                        "entity type '{}' moves but declares no radius, \
                          which the continuous movement model requires",
-                        def.name
-                    );
-                    // The planner clears routes for the footprint; a body
-                    // circle wider than the footprint's inscribed circle
-                    // pokes into cells no plan ever cleared and walls
-                    // itself mid-corridor.
-                    let size = def
-                        .location
-                        .expect("validated content defines a location for movers")
-                        .size();
-                    let bound = FixedU64::from_num(size.width.min(size.height)) / 2;
-                    assert!(
-                        radius.is_some_and(|radius| radius <= bound),
-                        "entity type '{}' authors a radius beyond half its \
-                         footprint's narrow side ({bound}), which the \
-                         continuous movement model cannot route",
                         def.name
                     );
                     // Contact splits a penetration in proportion to what the two
@@ -262,7 +247,7 @@ impl Map {
         self.hierarchy = NavHierarchy::build(
             &self.nav_grid,
             DEFAULT_CLUSTER_SIZE,
-            &Self::mover_shapes(registry),
+            &self.mover_shapes(registry),
         );
     }
 
@@ -276,7 +261,7 @@ impl Map {
     /// hierarchy does not serve.
     pub fn assert_serves_movers(&self, registry: &ContentRegistry) {
         for def in registry.entities() {
-            if let Some(shape) = Self::planned_shape(registry, def) {
+            if let Some(shape) = self.planned_shape(registry, def) {
                 assert!(
                     self.hierarchy.serves(shape),
                     "map '{}' serves no hierarchy for mover '{}' (terrains {}, layers {} at {}x{}, cliff crossing {:?})",
@@ -584,11 +569,11 @@ impl Map {
 
     /// Every distinct mover shape the content declares, in name order:
     /// the abstractions a map must serve for each of its movers to plan.
-    fn mover_shapes(registry: &ContentRegistry) -> Vec<MoverShape> {
+    fn mover_shapes(&self, registry: &ContentRegistry) -> Vec<MoverShape> {
         let mut shapes: Vec<MoverShape> = Vec::new();
         for shape in registry
             .entities()
-            .filter_map(|def| Self::planned_shape(registry, def))
+            .filter_map(|def| self.planned_shape(registry, def))
         {
             if !shapes.contains(&shape) {
                 shapes.push(shape);
@@ -597,11 +582,13 @@ impl Map {
         shapes
     }
 
-    /// The shape a type plans with, or `None` for a type that does not move.
-    fn planned_shape(registry: &ContentRegistry, def: &EntityTypeDef) -> Option<MoverShape> {
-        def.location
-            .filter(|_| def.can_move())
-            .map(|location| entity_def::mover_shape(registry, &location))
+    /// The shape a type plans with on this map, or `None` for a type that
+    /// does not move.
+    fn planned_shape(&self, registry: &ContentRegistry, def: &EntityTypeDef) -> Option<MoverShape> {
+        if !def.can_move() {
+            return None;
+        }
+        Form::checked(def, self.movement_model).map(|form| entity_def::mover_shape(registry, form))
     }
 }
 

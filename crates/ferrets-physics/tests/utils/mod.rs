@@ -1,12 +1,16 @@
 #![allow(dead_code)]
 
-use ferrets_geometry::{cell_size::CellSize, location::Location};
+use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, location::Location};
 use ferrets_math::{FixedI64, FixedU64, fixed_uvec2::FixedUVec2, fixed_vec2::FixedVec2};
 use ferrets_nav_grid::{
-    layer_id::LayerId, layer_mask::LayerMask, mover_shape::MoverShape, terrain_id::TerrainId,
+    layer_id::LayerId, mover_shape::MoverShape, nav_grid::NavGrid, terrain_id::TerrainId,
     terrain_mask::TerrainMask,
 };
-use ferrets_physics::body::Body;
+use ferrets_physics::{
+    body::{Bearing, Body, Heading},
+    contact::Meeting,
+    resolve,
+};
 
 /// The layer every test body occupies unless a test says otherwise.
 pub const GROUND: LayerId = LayerId::new(1);
@@ -40,25 +44,64 @@ pub fn point(x: &str, y: &str) -> FixedUVec2 {
     FixedUVec2::new(cells(x), cells(y))
 }
 
+/// A point on the map given by its coordinates' raw bits, for a value no
+/// short decimal names.
+pub fn point_bits(x: u64, y: u64) -> FixedUVec2 {
+    FixedUVec2::new(FixedU64::from_bits(x), FixedU64::from_bits(y))
+}
+
 /// The place of a body of `size` with its middle at `(x, y)` on [`MAP_SIZE`].
 pub fn location(x: &str, y: &str, size: CellSize) -> Location {
     Location::new(point(x, y), size, MAP_SIZE)
 }
 
-pub fn heading(x: &str, y: &str) -> FixedVec2 {
-    FixedVec2::new(signed_cells(x), signed_cells(y))
+/// A walker's heading toward the offset written as decimals.
+pub fn heading(x: &str, y: &str) -> Heading {
+    Heading::Toward(FixedVec2::new(signed_cells(x), signed_cells(y)))
 }
 
-/// A half-cell-radius body at rest with its middle at `(x, y)`, filling a
-/// single cell, of the baseline weight every test body carries unless it says
-/// otherwise.
+/// A half-cell-radius body standing idle with its middle at `(x, y)`,
+/// filling a single cell, of the baseline weight every test body carries
+/// unless it says otherwise.
 pub fn resting(x: &str, y: &str) -> Body {
     Body {
         location: location(x, y, CellSize::ONE),
         radius: cells("0.5"),
         weight: FixedU64::ONE,
-        layers: LayerMask::from(GROUND),
-        heading: None,
+        mover: ground_shape(),
+        bearing: Bearing::Idle,
+    }
+}
+
+/// A half-cell-radius working body with its middle at `(x, y)`.
+pub fn working(x: &str, y: &str) -> Body {
+    Body {
+        bearing: Bearing::Working,
+        ..resting(x, y)
+    }
+}
+
+/// A half-cell-radius inert body with its middle at `(x, y)`.
+pub fn inert(x: &str, y: &str) -> Body {
+    Body {
+        bearing: Bearing::Inert,
+        ..resting(x, y)
+    }
+}
+
+/// A half-cell-radius planted body with its middle at `(x, y)`.
+pub fn planted(x: &str, y: &str) -> Body {
+    Body {
+        bearing: Bearing::Planted,
+        ..resting(x, y)
+    }
+}
+
+/// A half-cell-radius body unable to move, with its middle at `(x, y)`.
+pub fn fixed(x: &str, y: &str) -> Body {
+    Body {
+        bearing: Bearing::Fixed,
+        ..resting(x, y)
     }
 }
 
@@ -75,6 +118,13 @@ pub fn wide(x: &str, y: &str, size: u32) -> Body {
     Body {
         location: location(x, y, CellSize::new(size, size)),
         radius: FixedU64::from_num(size) / 2,
+        mover: MoverShape::new(
+            TerrainMask::from(LAND),
+            GROUND,
+            GROUND,
+            CellSize::new(size, size),
+            None,
+        ),
         ..resting(x, y)
     }
 }
@@ -82,7 +132,7 @@ pub fn wide(x: &str, y: &str, size: u32) -> Body {
 /// A half-cell-radius body walking toward the given heading.
 pub fn walking(x: &str, y: &str, toward_x: &str, toward_y: &str) -> Body {
     Body {
-        heading: Some(heading(toward_x, toward_y)),
+        bearing: Bearing::Walking(heading(toward_x, toward_y)),
         ..resting(x, y)
     }
 }
@@ -90,7 +140,7 @@ pub fn walking(x: &str, y: &str, toward_x: &str, toward_y: &str) -> Body {
 /// A half-cell-radius body at rest on the [`AIR`] layer.
 pub fn flying(x: &str, y: &str) -> Body {
     Body {
-        layers: LayerMask::from(AIR),
+        mover: MoverShape::point(TerrainMask::from(LAND), AIR, None),
         ..resting(x, y)
     }
 }
@@ -99,4 +149,48 @@ pub fn flying(x: &str, y: &str) -> Body {
 /// exact values, not signs — a changed magnitude is a changed contract.
 pub fn push(x: &str, y: &str) -> FixedVec2 {
     FixedVec2::new(signed_cells(x), signed_cells(y))
+}
+
+/// An open [`MAP_SIZE`] grid of land, flat on [`GROUND`] and [`AIR`].
+pub fn open_grid() -> NavGrid {
+    let mut grid = NavGrid::new(MAP_SIZE.width, MAP_SIZE.height, |_| LAND);
+    grid.add_flat_layer(GROUND, 1);
+    grid.add_flat_layer(AIR, 1);
+    grid
+}
+
+/// How far one contact pass over [`open_grid`] moves each of `bodies`, the
+/// pairs meeting as `meeting` says.
+pub fn pushes(bodies: &[Body], meeting: impl Fn(usize, usize) -> Meeting) -> Vec<FixedVec2> {
+    pushes_over(&open_grid(), bodies, meeting)
+}
+
+/// How far one contact pass over `grid` moves each of `bodies`.
+pub fn pushes_over(
+    grid: &NavGrid,
+    bodies: &[Body],
+    meeting: impl Fn(usize, usize) -> Meeting,
+) -> Vec<FixedVec2> {
+    resolve::settle(bodies, meeting, grid)
+        .into_iter()
+        .zip(bodies)
+        .map(|(location, body)| {
+            let (to, from) = (location.middle(), body.location.middle());
+            FixedVec2::new(
+                to.x.to_num::<FixedI64>() - from.x.to_num::<FixedI64>(),
+                to.y.to_num::<FixedI64>() - from.y.to_num::<FixedI64>(),
+            )
+        })
+        .collect()
+}
+
+/// An open grid with rows 4 and 6 walled from column 0 to 12: a corridor one
+/// cell high along row 5.
+pub fn corridor_grid() -> NavGrid {
+    let mut grid = open_grid();
+    for x in 0..13 {
+        grid.set_occupied(GROUND, CellPos::new(x, 4), true);
+        grid.set_occupied(GROUND, CellPos::new(x, 6), true);
+    }
+    grid
 }

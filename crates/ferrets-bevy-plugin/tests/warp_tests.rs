@@ -837,6 +837,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )

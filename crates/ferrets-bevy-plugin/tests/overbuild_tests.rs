@@ -421,7 +421,7 @@ fn uncovered_source_comes_back_where_it_was_covered() {
     // Three ticks for the command, then six cells at half a cell a tick.
     utils::run_ticks(&mut app, utils::APPLY + 12);
 
-    // Uprooted, the pump house is a 3x3 walker centred on the cell it stood on,
+    // Uprooted, the pump house is a 3x3 walker centered on the cell it stood on,
     // so its own anchor is (9, 9) — one cell short of the geyser's on both axes.
     app.world_mut()
         .entity_mut(house)

@@ -1537,11 +1537,11 @@ impl ContentRegistry {
             "entity type '{}' has no location",
             def.name
         );
-        // A mover's footprint must be square. Clearance is one number per
-        // mover, its body is a circle inscribed in the footprint, and the crowd
-        // ladder compares footprints as interchangeable — all of which hold for
-        // a square and none of which hold for an oblong, which would additionally
-        // need a rule for whether the footprint turns with the mover.
+        // A mover's footprint must be square. Under the cell model the
+        // footprint is the body: clearance is one number per mover and the
+        // crowd ladder compares footprints as interchangeable — both hold for
+        // a square and neither for an oblong, which would additionally need a
+        // rule for whether the footprint turns with the mover.
         assert!(
             !def.can_move()
                 || def
@@ -2821,7 +2821,6 @@ impl ContentRegistry {
         let bears_on_its_own = !def.turrets.is_empty();
         for (stat, governs, missing) in [
             (EntityStatId::DAMAGE, def.can_attack(), "has no weapon"),
-            (EntityStatId::RADIUS, def.can_move(), "cannot move"),
             (EntityStatId::TURN_RATE, def.can_move(), "cannot move"),
             (EntityStatId::PIVOT_ANGLE, def.can_move(), "cannot move"),
             (EntityStatId::ATTACK_ARC, def.can_attack(), "has no weapon"),
@@ -2838,6 +2837,14 @@ impl ContentRegistry {
                 ENTITY_BUILTIN_STATS[stat.index()].name,
             );
         }
+        assert!(
+            def.can_move()
+                || def
+                    .location
+                    .is_none_or(|location| location.radius().is_none()),
+            "entity type '{}' declares radius but cannot move",
+            def.name,
+        );
 
         // A gun sits on the body that carries it, so it has to fit on it — and the
         // stats it reads have to be there to read.

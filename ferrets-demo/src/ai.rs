@@ -86,6 +86,29 @@ const COMMON_AI: &str = r#"
         return dx * dx + dy * dy <= cells * cells
     end
 
+    -- Gives every listed entity the corner of where this AI takes it to be,
+    -- as `x` and `y`: its own cells while on the map, its holder's while
+    -- inside a holder the view names, otherwise the cells it is known by.
+    -- The order the entities are visited in sets nothing apart.
+    local function place(view)
+        local by_id = {}
+        for _, list in ipairs({
+            view.my_entities, view.ally_entities, view.enemy_entities, view.neutral_entities,
+        }) do
+            for _, e in ipairs(list) do by_id[e.id] = e end
+        end
+        local function corner(e)
+            local at = e.footprint or e.untracked
+            if at ~= nil then return at.x, at.y end
+            local holder = by_id[e.inside]
+            if holder == nil then error("a holder the view names is listed") end
+            return corner(holder)
+        end
+        for _, e in pairs(by_id) do
+            e.x, e.y = corner(e)
+        end
+    end
+
     -- My entities split by type name; `group` reads a split with a default.
     local function muster(view)
         local groups = {}
@@ -412,6 +435,7 @@ const HUMAN_AI: &str = r#"
         vision = "filtered",
         detection = "detectors",
         think = function(state, view)
+            place(view)
             local commands = {}
             local budget = budget_of(view)
             local groups = muster(view)
@@ -521,6 +545,7 @@ const ORC_AI: &str = r#"
         vision = "filtered",
         detection = "detectors",
         think = function(state, view)
+            place(view)
             local commands = {}
             local budget = budget_of(view)
             local groups = muster(view)
@@ -703,6 +728,7 @@ const SWARM_AI: &str = r#"
         vision = "filtered",
         detection = "detectors",
         think = function(state, view)
+            place(view)
             local commands = {}
             local budget = budget_of(view)
             local groups = muster(view)
@@ -821,6 +847,7 @@ const CONCLAVE_AI: &str = r#"
         vision = "filtered",
         detection = "detectors",
         think = function(state, view)
+            place(view)
             local commands = {}
             local budget = budget_of(view)
             local groups = muster(view)
@@ -879,6 +906,7 @@ const ELVES_AI: &str = r#"
         vision = "filtered",
         detection = "detectors",
         think = function(state, view)
+            place(view)
             local commands = {}
             local budget = budget_of(view)
             local groups = muster(view)
@@ -990,6 +1018,7 @@ const TERRAN_AI: &str = r#"
         vision = "filtered",
         detection = "detectors",
         think = function(state, view)
+            place(view)
             local commands = {}
             local budget = budget_of(view)
             local groups = muster(view)
@@ -1167,6 +1196,7 @@ const UNDEAD_AI: &str = r#"
         vision = "filtered",
         detection = "detectors",
         think = function(state, view)
+            place(view)
             local commands = {}
             local budget = budget_of(view)
             local groups = muster(view)
@@ -1461,10 +1491,11 @@ pub const BOSS_AI_SCRIPT: &str = r#"
 
             -- Each idle ship shells the nearest enemy within aggro range.
             for _, s in ipairs(ships) do
-                if s.idle then
+                if s.idle and s.footprint ~= nil then
                     local best, best_distance = nil, nil
                     for _, e in ipairs(view.enemy_entities) do
-                        local dx, dy = e.x - s.x, e.y - s.y
+                        local dx = e.footprint.x - s.footprint.x
+                        local dy = e.footprint.y - s.footprint.y
                         local distance = dx * dx + dy * dy
                         if distance <= AGGRO_SQ
                             and (best == nil or distance < best_distance) then

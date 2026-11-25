@@ -10,7 +10,7 @@ pub enum BerthStance {
     /// Works a berth for a while, then walks the group's loop — its berths in
     /// declared order, either way round — to a free berth and works there.
     Circling {
-        /// Cells travelled per tick between berths.
+        /// Cells traveled per tick between berths.
         speed: FixedU64,
         /// Ticks worked at a berth before moving on.
         dwell: u32,
@@ -18,7 +18,7 @@ pub enum BerthStance {
     /// Works a berth for a while, then crosses straight to a free berth of the
     /// group and works there.
     Roaming {
-        /// Cells travelled per tick between berths.
+        /// Cells traveled per tick between berths.
         speed: FixedU64,
         /// Ticks worked at a berth before moving on.
         dwell: u32,

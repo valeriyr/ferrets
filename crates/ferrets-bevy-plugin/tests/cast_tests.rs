@@ -405,6 +405,7 @@ fn summon_around_caster_lands_beside_its_footprint() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1930,6 +1931,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -1941,6 +1943,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1952,6 +1955,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1964,6 +1968,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1975,6 +1980,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1986,6 +1992,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1996,6 +2003,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2007,6 +2015,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(40, 40),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2028,6 +2037,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2039,6 +2049,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2480,6 +2491,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2536,6 +2548,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2555,6 +2568,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2565,6 +2579,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2609,6 +2624,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2619,6 +2635,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2646,6 +2663,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -2656,6 +2674,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2704,6 +2723,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2936,6 +2956,7 @@ fn pool_caller_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2959,6 +2980,7 @@ fn pool_caller_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2970,11 +2992,11 @@ fn pool_caller_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    Some(utils::fixed("0.5")),
                     Solidity::Solid,
                     utils::GROUND,
                 )
                 .with_movement(
-                    utils::fixed("0.5"),
                     utils::fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -3209,6 +3231,7 @@ fn shore_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -3223,6 +3246,7 @@ fn shore_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

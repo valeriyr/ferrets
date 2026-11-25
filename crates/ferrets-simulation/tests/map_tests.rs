@@ -29,6 +29,8 @@ use ferrets_nav_grid::{
     terrain_mask::TerrainMask,
 };
 use ferrets_simulation::{
+    entity_def,
+    form::Form,
     ground,
     map::Map,
     map_data::{MapData, Placement},
@@ -101,9 +103,14 @@ fn map_serves_each_mover_shape_once() {
     let mut registry = walker_registry();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -115,11 +122,11 @@ fn map_serves_each_mover_shape_once() {
             .with_location(
                 WALKER_DOMAIN,
                 CellSize::new(2, 2),
+                Some(utils::fixed("0.5")),
                 Solidity::Solid,
                 GROUND_LAYER,
             )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -129,6 +136,7 @@ fn map_serves_each_mover_shape_once() {
     registry.register(EntityTypeDef::new("hut").with_location(
         WALKER_DOMAIN,
         CellSize::new(3, 3),
+        None,
         Solidity::Solid,
         GROUND_LAYER,
     ));
@@ -169,9 +177,14 @@ fn map_serves_mover_shape_per_terrains_and_occupied_layers() {
     ] {
         registry.register(
             EntityTypeDef::new(name)
-                .with_location(domain, CellSize::ONE, Solidity::Solid, occupies)
+                .with_location(
+                    domain,
+                    CellSize::ONE,
+                    Some(utils::fixed("0.5")),
+                    Solidity::Solid,
+                    occupies,
+                )
                 .with_movement(
-                    utils::fixed("0.5"),
                     utils::fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -348,12 +361,18 @@ fn claimed_footprint_never_reaches_hierarchy() {
 //
 
 #[test]
-#[should_panic(expected = "entity type 'runner' moves but defines no positive radius")]
+#[should_panic(expected = "entity type 'runner' moves but declares no radius")]
 fn continuous_map_rejects_mover_without_radius() {
     let mut registry = lake_registry();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                None,
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_stat(EntityStatId::SPEED, utils::fixed("0.5"))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
@@ -366,37 +385,18 @@ fn continuous_map_rejects_mover_without_radius() {
 }
 
 #[test]
-#[should_panic(
-    expected = "entity type 'runner' authors a radius beyond half its footprint's narrow side"
-)]
-fn continuous_map_rejects_radius_beyond_footprint() {
+fn continuous_map_plans_radius_beyond_footprint_as_its_square() {
     let mut registry = lake_registry();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                Some(utils::fixed("0.75")),
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_movement(
-                utils::fixed("0.5"),
-                utils::fixed("0.75"),
-                FixedU64::ONE,
-                FixedU64::from_num(360),
-                FixedU64::from_num(360),
-            ),
-    );
-
-    let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
-    data.set_movement_model(MovementModel::Continuous);
-
-    Map::from_data(&data, &registry);
-}
-
-#[test]
-fn continuous_map_accepts_radius_at_half_footprint() {
-    let mut registry = lake_registry();
-    registry.register(
-        EntityTypeDef::new("runner")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
-            .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -406,8 +406,17 @@ fn continuous_map_accepts_radius_at_half_footprint() {
 
     let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
     data.set_movement_model(MovementModel::Continuous);
+    let map = Map::from_data(&data, &registry);
 
-    Map::from_data(&data, &registry);
+    // A radius of 0.75 on a 1×1 footprint is a body max(1, ⌈2 × 0.75⌉) = 2
+    // cells a side, the square the map serves for it.
+    let runner = registry.entity("runner").expect("the runner is registered");
+    let form = Form::of(runner, MovementModel::Continuous);
+    assert_eq!(form.extent(), CellSize::new(2, 2));
+    assert!(
+        map.hierarchy()
+            .serves(entity_def::mover_shape(&registry, form))
+    );
 }
 
 #[test]
@@ -418,11 +427,16 @@ fn continuous_map_rejects_mover_without_weight() {
     // builder cannot express a mover missing one of the three.
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_stat(EntityStatId::SPEED, utils::fixed("0.5"))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
-            .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360))
-            .with_stat(EntityStatId::RADIUS, utils::fixed("0.5")),
+            .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
     );
 
     let mut data = MapData::new("pond", Projection::Isometric, 4, 4, "land");
@@ -438,9 +452,14 @@ fn continuous_map_accepts_weightless_mover() {
     let mut registry = lake_registry();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ZERO,
                 FixedU64::from_num(360),
@@ -459,7 +478,13 @@ fn cell_map_accepts_mover_without_weight() {
     let mut registry = lake_registry();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                None,
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_stat(EntityStatId::SPEED, utils::fixed("0.5"))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
@@ -475,7 +500,13 @@ fn cell_map_accepts_mover_without_radius() {
     let mut registry = lake_registry();
     registry.register(
         EntityTypeDef::new("runner")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                None,
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_stat(EntityStatId::SPEED, utils::fixed("0.5"))
             .with_stat(EntityStatId::TURN_RATE, FixedU64::from_num(360))
             .with_stat(EntityStatId::PIVOT_RATE, FixedU64::from_num(360)),
@@ -552,7 +583,13 @@ fn placement_of_remains_panics() {
     registry.register_tag("remains");
     registry.register(
         EntityTypeDef::new("corpse")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                None,
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_tags(["remains"])
             .with_stat(EntityStatId::LIFETIME, FixedU64::from_num(600)),
     );
@@ -1233,9 +1270,14 @@ fn walker_registry() -> ContentRegistry {
     let mut registry = land_registry();
     registry.register(
         EntityTypeDef::new("walker")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                Some(utils::fixed("0.5")),
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -1294,7 +1336,13 @@ fn place_post_with(pools: Vec<(String, PoolInitial)>) -> Map {
     let mut registry = land_registry();
     registry.register(
         EntityTypeDef::new("post")
-            .with_location(WALKER_DOMAIN, CellSize::ONE, Solidity::Solid, GROUND_LAYER)
+            .with_location(
+                WALKER_DOMAIN,
+                CellSize::ONE,
+                None,
+                Solidity::Solid,
+                GROUND_LAYER,
+            )
             .with_pool(Pool::health(100)),
     );
     let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");

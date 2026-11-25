@@ -29,6 +29,7 @@ use ferrets_simulation::{
         pools,
         rally::{RallyPointComponent, RallyTarget},
         rise::{self, RiseAttendance, RisingComponent},
+        stance::Stance,
     },
     entity_def,
     entity_index::EntityIndex,
@@ -289,6 +290,7 @@ fn rising_entity_starts_under_maximum_its_passives_leave() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -321,6 +323,7 @@ fn rising_entity_holds_pool_from_its_own_initial() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -369,6 +372,7 @@ fn risen_pools_settle_under_risen_passives_at_next_fold() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -599,6 +603,8 @@ fn captured_rising_mover_loses_rally_old_owner_set() {
 // ─── Contact ──────────────────────────────────────────────────────────────────
 //
 
+/// A rising mover is fixed under contact: a soldier walked onto its cell
+/// stops against it and the mover keeps the place it was set down on.
 #[test]
 fn rising_mover_stands_where_set_down_under_contact() {
     let mut app = utils::orders_app();
@@ -620,8 +626,8 @@ fn rising_mover_stands_where_set_down_under_contact() {
 
     assert!(entity_def::rising(app.world(), ark));
     assert_eq!(utils::position_of(app.world_mut(), ark), utils::pos(5, 5));
-    // The soldier rests against it, a full body apart (radius 0.5 each), on
-    // its far side: x = 6.5 less the contact pass's rounding.
+    // The fixed ark holds the spot, so the soldier's walk ends on meeting it:
+    // it stops where it first touches the ark, (4.5, 5.5), 1 from its middle.
     let soldier_entity = app
         .world()
         .resource::<EntityIndex>()
@@ -629,7 +635,61 @@ fn rising_mover_stands_where_set_down_under_contact() {
         .expect("the soldier stands");
     assert_eq!(
         utils::position_of(app.world_mut(), soldier_entity),
-        utils::position_bits(0x6_7fff_ffff, 0x5_8000_0000)
+        utils::point("4.5", "5.5")
+    );
+    assert!(utils::order_queue_is_empty(app.world_mut(), soldier_entity));
+}
+
+/// A rising mover is fixed: an enemy soldier set half a cell into a halted
+/// ark takes the whole overlap and rests touching it, 0.5 + 0.5 = 1 apart,
+/// the ark where it was set down.
+#[test]
+fn enemy_inside_rising_mover_parts_fully() {
+    let mut app = utils::orders_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    register_rising_trainers(&mut app);
+    let (ark, _) = utils::create_rising(&mut app, "ark", 5, 5, 0, RiseAttendance::Halted);
+    let (rival, _) = utils::create_owned(&mut app, "soldier", 9, 9, 1);
+    utils::move_body(&mut app, rival, utils::point("6", "5.5"));
+
+    utils::run_ticks(&mut app, 3);
+
+    assert!(entity_def::rising(app.world(), ark));
+    assert_eq!(utils::position_of(app.world_mut(), ark), utils::pos(5, 5));
+    // 6 + 0.5, the whole half-cell overlap.
+    assert_eq!(
+        utils::position_of(app.world_mut(), rival),
+        utils::point("6.5", "5.5")
+    );
+}
+
+/// A rising mover outranks one standing its ground: an own StandGround
+/// soldier set half a cell into a halted ark takes the whole overlap and
+/// rests touching it.
+#[test]
+fn stand_ground_body_touching_rising_mover_parts_fully() {
+    let mut app = utils::orders_app();
+    utils::install_map(&mut app, Projection::Isometric, MovementModel::Continuous);
+    register_rising_trainers(&mut app);
+    let (ark, _) = utils::create_rising(&mut app, "ark", 5, 5, 0, RiseAttendance::Halted);
+    let (soldier, soldier_id) = utils::create_owned(&mut app, "soldier", 9, 9, 0);
+    utils::select(&mut app, soldier_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::SetStance {
+            stance: Stance::StandGround,
+        },
+    );
+    utils::run_ticks(&mut app, 5);
+    utils::move_body(&mut app, soldier, utils::point("6", "5.5"));
+
+    utils::run_ticks(&mut app, 3);
+
+    assert_eq!(utils::position_of(app.world_mut(), ark), utils::pos(5, 5));
+    // 6 + 0.5, the whole half-cell overlap.
+    assert_eq!(
+        utils::position_of(app.world_mut(), soldier),
+        utils::point("6.5", "5.5")
     );
 }
 
@@ -692,6 +752,7 @@ fn register_rising_trainers(app: &mut App) {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )

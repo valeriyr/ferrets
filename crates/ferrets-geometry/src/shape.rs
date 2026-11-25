@@ -37,6 +37,14 @@ impl Shape {
         }
     }
 
+    /// The radius of a circle; `None` for a box.
+    pub fn radius(self) -> Option<FixedU64> {
+        match self {
+            Shape::Circle { radius, .. } => Some(radius),
+            Shape::Box(_) => None,
+        }
+    }
+
     /// The same shape with its middle on `middle`: a box keeps its size, and
     /// a circle its radius.
     ///

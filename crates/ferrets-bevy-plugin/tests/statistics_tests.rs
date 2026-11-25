@@ -1137,6 +1137,7 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1151,6 +1152,7 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1200,6 +1202,7 @@ fn ground_skill_app() -> (App, ferrets_content::skills::SkillId) {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1233,6 +1236,7 @@ fn repair_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

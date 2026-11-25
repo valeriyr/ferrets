@@ -585,6 +585,7 @@ fn wide_carrier_waiting_beside_removed_source_at_far_edge_is_held_on_map() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::new(2, 2),
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             );
@@ -1917,7 +1918,7 @@ fn orbiting_carrier_circles_its_berth_without_leaving_it() {
 fn circling_crew_spreads_round_loop() {
     // Two circlers sit down next to each other, at the north-west and
     // north-east spots nearest their approaches. Each, when it moves on,
-    // skips the spot beside its neighbour for the one farthest from it.
+    // skips the spot beside its neighbor for the one farthest from it.
     let mut app = utils::orders_app();
     let (first, first_id) = utils::create_owned(&mut app, "circler", 7, 5, 0);
     let (second, second_id) = utils::create_owned(&mut app, "circler", 10, 5, 0);
@@ -1941,7 +1942,7 @@ fn circling_crew_spreads_round_loop() {
 
     // The first's stay is a tick along already and its mix is odd, so it
     // leaves that tick backward round the loop: the south-west spot, one leg
-    // away and two steps from its neighbour, reached on the seventh tick. The
+    // away and two steps from its neighbor, reached on the seventh tick. The
     // second's mix, 821347078, is even: it leaves on the fourth tick forward,
     // and of the free spots — the north-west the first vacated and the
     // south-east — both a step from the first's new spot, takes the nearer
@@ -2650,6 +2651,7 @@ fn wide_sylph_app(points: &[(&str, &str)]) -> App {
         let mut wide = sylph.with_location(
             location.domain(),
             CellSize::new(2, 2),
+            None,
             location.solidity(),
             location.occupies(),
         );
@@ -2660,6 +2662,7 @@ fn wide_sylph_app(points: &[(&str, &str)]) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

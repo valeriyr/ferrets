@@ -446,6 +446,7 @@ fn kept_pool_carried_as_initial_starts_at_new_forms_initial() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -576,6 +577,7 @@ fn amount_initial_held_under_maximum_its_passives_lower() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1491,6 +1493,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1516,6 +1519,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1545,6 +1549,7 @@ fn app() -> App {
                     .with_location(
                         utils::GROUND_DOMAIN,
                         CellSize::ONE,
+                        None,
                         Solidity::Solid,
                         utils::GROUND,
                     )
@@ -1570,6 +1575,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1725,6 +1731,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1744,6 +1751,7 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1766,6 +1774,7 @@ fn app() -> App {
                     .with_location(
                         utils::GROUND_DOMAIN,
                         CellSize::ONE,
+                        None,
                         Solidity::Solid,
                         utils::GROUND,
                     )
@@ -1950,6 +1959,7 @@ fn carry_initial_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

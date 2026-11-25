@@ -139,7 +139,7 @@ fn frames_arriving_with_headroom_do_not_throttle() {
     // Any lead of a tick or more is what keeping up looks like — steady transit
     // latency lowers the lead without threatening the loop, so a frame that
     // reliably lands a full tick early constrains nothing however far it
-    // travelled.
+    // traveled.
     for margin in ["1", "1.5", "2"] {
         assert_eq!(
             ferrets_bevy_plugin::throttle_for(

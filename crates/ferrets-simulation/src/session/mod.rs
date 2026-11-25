@@ -14,6 +14,7 @@ pub mod player_id;
 pub mod player_mask;
 pub mod player_slot;
 pub mod player_type;
+pub mod relation;
 
 use crate::ruleset::{RemainsLimit, Ruleset};
 use crate::session::{
@@ -28,6 +29,7 @@ use crate::session::{
     player_id::PlayerId,
     player_slot::{Participation, PlayerSlot, TeamId},
     player_type::PlayerType,
+    relation::Relation,
 };
 use bevy_ecs::prelude::*;
 
@@ -445,28 +447,23 @@ impl GameSession {
         }
     }
 
-    /// Whether owners `a` and `b` are allies (see [`Self::are_allied`]); an
-    /// unowned side is nobody's ally.
-    pub fn owners_allied(&self, a: Option<PlayerId>, b: Option<PlayerId>) -> bool {
-        match (a, b) {
-            (Some(a), Some(b)) => self.are_allied(a, b),
-            (None, _) | (_, None) => false,
-        }
-    }
-
-    /// Returns `true` when `a` and `b` are allies: the same player, or two
-    /// players sharing a team. Players on no team (and unknown slot ids) are
-    /// allied with no one but themselves.
-    pub fn are_allied(&self, a: PlayerId, b: PlayerId) -> bool {
+    /// How owners `a` and `b` stand toward each other: neutral when either is
+    /// nobody's, own for one player, allied for two players sharing a team,
+    /// otherwise enemies. A player on no team (or an unknown slot id) is
+    /// allied with no one.
+    pub fn relation(&self, a: Option<PlayerId>, b: Option<PlayerId>) -> Relation {
+        let (Some(a), Some(b)) = (a, b) else {
+            return Relation::Neutral;
+        };
         if a == b {
-            return true;
+            return Relation::Own;
         }
         match (
             self.slot(a).and_then(PlayerSlot::team),
             self.slot(b).and_then(PlayerSlot::team),
         ) {
-            (Some(team_a), Some(team_b)) => team_a == team_b,
-            _ => false,
+            (Some(team_a), Some(team_b)) if team_a == team_b => Relation::Allied,
+            (Some(_), Some(_)) | (None, _) | (_, None) => Relation::Enemy,
         }
     }
 

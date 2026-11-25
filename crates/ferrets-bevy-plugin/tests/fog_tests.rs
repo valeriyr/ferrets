@@ -1213,6 +1213,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(3, 3),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1225,6 +1226,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1239,6 +1241,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1273,6 +1276,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1304,6 +1308,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(4, 4),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1339,6 +1344,7 @@ fn fog_app(slots: Vec<PlayerSlot>) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -1394,7 +1400,7 @@ fn relief_app(ground_relief_blocks: &[&str]) -> App {
     ] {
         registry.register(
             EntityTypeDef::new(name)
-                .with_location(domain, CellSize::ONE, Solidity::Solid, layer)
+                .with_location(domain, CellSize::ONE, None, Solidity::Solid, layer)
                 .with_pool(Pool::health(20))
                 .with_sight_range(8)
                 .with_stat(EntityStatId::SEES_UP, sees_up),
@@ -1402,10 +1408,15 @@ fn relief_app(ground_relief_blocks: &[&str]) -> App {
     }
     registry.register(
         EntityTypeDef::new("wide_strider")
-            .with_location(striding, CellSize::new(2, 2), Solidity::Solid, ground)
+            .with_location(
+                striding,
+                CellSize::new(2, 2),
+                Some(FixedU64::from_num(1)),
+                Solidity::Solid,
+                ground,
+            )
             .with_movement(
                 utils::fixed("0.5"),
-                FixedU64::from_num(1),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -1415,7 +1426,7 @@ fn relief_app(ground_relief_blocks: &[&str]) -> App {
     );
     registry.register(
         EntityTypeDef::new("rock")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(20))
             .with_blocks_sight(SightBlock::new(1, Affiliation::Anyone)),
     );
@@ -1432,7 +1443,7 @@ fn relief_app(ground_relief_blocks: &[&str]) -> App {
     );
     registry.register(
         EntityTypeDef::new("smoke_pot")
-            .with_location(walking, CellSize::ONE, Solidity::Solid, ground)
+            .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(20))
             .with_field_sources([FieldSourceDef::new(
                 smoke,
@@ -1501,7 +1512,13 @@ fn shadow_app() -> App {
         utils::register_air(&mut registry);
         let body = |name: &str, domain, layer, side| {
             EntityTypeDef::new(name)
-                .with_location(domain, CellSize::new(side, side), Solidity::Solid, layer)
+                .with_location(
+                    domain,
+                    CellSize::new(side, side),
+                    None,
+                    Solidity::Solid,
+                    layer,
+                )
                 .with_pool(Pool::health(50))
         };
         for (name, side, sees_up) in [
@@ -1520,6 +1537,7 @@ fn shadow_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(1, 4),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

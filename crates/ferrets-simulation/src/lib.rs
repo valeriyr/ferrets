@@ -16,6 +16,7 @@ pub mod entity_index;
 pub mod events;
 pub mod field_cover;
 pub mod fields;
+pub mod form;
 pub mod game_loop;
 pub mod ground;
 pub mod impacts;

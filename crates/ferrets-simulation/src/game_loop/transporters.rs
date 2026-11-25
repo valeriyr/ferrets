@@ -15,7 +15,6 @@ use crate::{
     beside::Lean,
     components::{
         order_queue::{CancelPolicy, OrderQueueComponent},
-        owner,
         transport::{BoardedComponent, GarrisonFireComponent, TransporterComponent},
     },
     entity_def,
@@ -37,12 +36,13 @@ pub(crate) fn would_take(
     let def = transporter_def(world, transporter);
 
     // Read from the holder: whom it admits is its own rule about its riders.
-    let allowed = owner::admits(
-        world.resource::<GameSession>(),
-        def.boarding(),
-        entity_def::owner(world, transporter),
-        entity_def::owner(world, entity),
-    );
+    let allowed = world
+        .resource::<GameSession>()
+        .relation(
+            entity_def::owner(world, transporter),
+            entity_def::owner(world, entity),
+        )
+        .fits(def.boarding());
     if !allowed || !def.carries().admits(entity_def::of(world, entity)) {
         return Err(Refusal::TargetUnfit);
     }

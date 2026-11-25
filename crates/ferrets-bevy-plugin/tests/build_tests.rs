@@ -48,7 +48,6 @@ use ferrets_simulation::{
     ground,
     map::Map,
     movement_model::MovementModel,
-    occupancy::OccupancyClass,
     order::{AttackTarget, BuildTask, MoveGoal, Order},
     resources::PlayerResources,
     session::{GameSession, player_id::PlayerId, player_slot::PlayerSlot, player_type::PlayerType},
@@ -888,18 +887,30 @@ fn ally_lying_onto_site_steps_back_onto_cell_it_holds() {
 fn site_of_mover_form_asks_off_only_bodies_its_claims_meet() {
     // Under the continuous model a rolling depot — the depot with a walk of
     // its own, so a body on the claim plane — is founded on
-    // (10..11, 10..11). One own soldier rests on (11, 11), its claim on the
-    // site; another at (10.5, 9.85) holds (10, 9), its body reaching 0.35 onto
-    // the site. A placement on the claim plane measures bodies by their
-    // claims: the first is asked off on the eleventh tick, the second never,
-    // and the site goes up on the twelfth.
+    // (10..=11, 10..=11), its circle of radius 1 centered at (11, 11). One own
+    // soldier rests on (11, 11), its claim on the site; another at
+    // (10.5, 9.55) holds (10, 9), its body reaching 0.05 onto the site, its
+    // middle √(0.5² + 1.45²) ≈ 1.53 from the depot's, past the 1 + 0.5 = 1.5
+    // the circles touch at. A placement on the claim plane measures bodies by
+    // their claims: the first is asked off on the eleventh tick, the second
+    // never, and the site goes up on the twelfth. The second keeps its place
+    // while the depot rises (a rising body takes no spacing), then drifts to
+    // the idle spacing once it stands.
     let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |registry, _| {
-        let mut rolling = registry
+        let depot = registry
             .entity("depot")
             .expect("the orders content declares a depot")
-            .clone()
+            .clone();
+        let location = depot.location.expect("a depot stands somewhere");
+        let mut rolling = depot
+            .with_location(
+                location.domain(),
+                location.size(),
+                Some(FixedU64::ONE),
+                location.solidity(),
+                location.occupies(),
+            )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -923,7 +934,7 @@ fn site_of_mover_form_asks_off_only_bodies_its_claims_meet() {
     let (_, builder_id) = utils::create_owned(&mut app, "wheelwright", 15, 10, 0);
     let (inside, _) = utils::create_owned(&mut app, "soldier", 11, 11, 0);
     let (lying, _) = utils::create_owned(&mut app, "soldier", 10, 8, 0);
-    utils::walk_onto(&mut app, lying, utils::point("10.5", "9.85"), 10);
+    utils::walk_onto(&mut app, lying, utils::point("10.5", "9.55"), 10);
     utils::grant_gold(&mut app, 80);
 
     utils::push_command(
@@ -943,9 +954,19 @@ fn site_of_mover_form_asks_off_only_bodies_its_claims_meet() {
     assert_eq!(utils::move_goal(&app, lying), None);
     utils::run_ticks(&mut app, 1);
     assert_eq!(utils::count_of_type(app.world_mut(), "rolling_depot"), 1);
+    assert_eq!(utils::move_goal(&app, lying), None);
+    assert!(utils::order_queue_is_empty(app.world_mut(), lying));
     assert_eq!(
         utils::position_of(app.world(), lying),
-        utils::point("10.5", "9.85")
+        utils::point("10.5", "9.55")
+    );
+    // Fifty ticks on, the depot standing: middles √(0.5661² + 1.6416²)
+    // ≈ 1.7365 apart, the 1.5 the circles touch at plus the 0.25 spacing,
+    // within its 1/64 slack.
+    utils::run_ticks(&mut app, 50);
+    assert_eq!(
+        utils::position_of(app.world(), lying),
+        utils::position_bits(0xa_6f15_7b53, 0x9_5bbe_4c0a)
     );
 }
 
@@ -2451,6 +2472,7 @@ fn static_footprint_is_not_raised_over_underfoot_walker_lying_past_its_cell() {
         registry.register(utils::walker("scuttler", dry).with_location(
             dry,
             CellSize::ONE,
+            Some(utils::fixed("0.5")),
             Solidity::Underfoot,
             utils::GROUND,
         ));
@@ -2458,21 +2480,8 @@ fn static_footprint_is_not_raised_over_underfoot_walker_lying_past_its_cell() {
     let (scuttler, _) = utils::create_owned(&mut app, "scuttler", 9, 10, 0);
     utils::walk_onto(&mut app, scuttler, utils::point("9.8", "10.5"), 10);
     let world = app.world();
-    let depot = world
-        .resource::<ContentRegistry>()
-        .entity("depot")
-        .and_then(|def| def.location)
-        .expect("the depot stands somewhere");
-    let raised_at = |x| {
-        ground::can_place(
-            world,
-            utils::cell(x, 10),
-            depot,
-            OccupancyClass::Static,
-            &[],
-            &[],
-        )
-    };
+    let depot = utils::form_named(world, "depot");
+    let raised_at = |x| ground::can_place(world, utils::cell(x, 10), depot, &[], &[]);
 
     assert!(!raised_at(10));
     assert!(raised_at(11));
@@ -2480,38 +2489,28 @@ fn static_footprint_is_not_raised_over_underfoot_walker_lying_past_its_cell() {
 
 #[test]
 fn static_footprint_measures_wide_mover_by_its_circle() {
-    // Under the continuous model a 3×3 hulk with a half-cell radius rests at
-    // (5, 5), claiming (5..7, 5..7). Its body is its circle, centered at
-    // (6.5, 6.5), spanning (6, 6) alone: a depot on (7..8, 7..8) goes up over
-    // the corner of its claim, one on (6..7, 6..7) would go up over its body.
+    // Under the continuous model a hulk declaring a 3×3 footprint with a
+    // half-cell radius rests at (5, 5) as its circle's square,
+    // max(1, ⌈2 × 0.5⌉) = 1 cell a side: it claims (5, 5) alone, its circle
+    // centered at (5.5, 5.5). A 2×2 depot on (6..=7, 6..=7), inside the
+    // footprint it declares, goes up; one on (4..=5, 4..=5) would go up over
+    // its body.
     let mut app = utils::dry_orders_app(MovementModel::Continuous, &[], |registry, dry| {
         registry.register(utils::walker("hulk", dry).with_location(
             dry,
             CellSize::new(3, 3),
+            Some(utils::fixed("0.5")),
             Solidity::Solid,
             utils::GROUND,
         ));
     });
     utils::create_owned(&mut app, "hulk", 5, 5, 0);
     let world = app.world();
-    let depot = world
-        .resource::<ContentRegistry>()
-        .entity("depot")
-        .and_then(|def| def.location)
-        .expect("the depot stands somewhere");
-    let raised_at = |x, y| {
-        ground::can_place(
-            world,
-            utils::cell(x, y),
-            depot,
-            OccupancyClass::Static,
-            &[],
-            &[],
-        )
-    };
+    let depot = utils::form_named(world, "depot");
+    let raised_at = |x, y| ground::can_place(world, utils::cell(x, y), depot, &[], &[]);
 
-    assert!(raised_at(7, 7));
-    assert!(!raised_at(6, 6));
+    assert!(raised_at(6, 6));
+    assert!(!raised_at(4, 4));
 }
 
 #[test]
@@ -2632,6 +2631,7 @@ fn build_off_map_or_wider_than_map_is_refused() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2643,6 +2643,7 @@ fn build_off_map_or_wider_than_map_is_refused() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(40, 40),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -2846,10 +2847,9 @@ fn builders_app() -> App {
                 BerthStance::Still,
             )))
         };
-        let walking = |def: EntityTypeDef, size: u32| {
+        let walking = |def: EntityTypeDef| {
             def.with_movement(
                 utils::fixed("0.5"),
-                utils::fixed("0.5") * FixedU64::from_num(size),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -2860,6 +2860,7 @@ fn builders_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(size, size),
+                    None,
                     solidity,
                     utils::GROUND,
                 )
@@ -2868,7 +2869,7 @@ fn builders_app() -> App {
                 .with_stat(EntityStatId::BUILD_RANGE, FixedU64::ONE)
         };
         registry.register(
-            walking(builder("wisp_roofer", 1, Solidity::Passable), 1)
+            walking(builder("wisp_roofer", 1, Solidity::Passable))
                 .with_builder(["depot"], roofing()),
         );
         registry.register(
@@ -2886,7 +2887,7 @@ fn builders_app() -> App {
             ),
         );
         registry.register(
-            walking(builder("warded_mason", 1, Solidity::Solid), 1)
+            walking(builder("warded_mason", 1, Solidity::Solid))
                 .with_field_placement([FieldPlacement::Requires {
                     field: ward,
                     of: Affiliation::Anyone,
@@ -2904,6 +2905,7 @@ fn builders_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Underfoot,
                     utils::GROUND,
                 )
@@ -2912,7 +2914,7 @@ fn builders_app() -> App {
                 .with_rise(6, utils::rise_initial_pools(&[PoolId::HEALTH])),
         );
         registry.register(
-            walking(builder("rug_layer", 1, Solidity::Solid), 1).with_builder(
+            walking(builder("rug_layer", 1, Solidity::Solid)).with_builder(
                 ["rug"],
                 BuilderAttendance::Crew(WorkPresence::Present {
                     crew: CrewLimit::ONE,
@@ -2926,7 +2928,7 @@ fn builders_app() -> App {
             }),
         ));
         registry.register(
-            walking(builder("giant_mason", 2, Solidity::Solid), 2).with_builder(
+            walking(builder("giant_mason", 2, Solidity::Solid)).with_builder(
                 ["depot"],
                 BuilderAttendance::Crew(WorkPresence::Present {
                     crew: CrewLimit::ONE,
@@ -3018,6 +3020,7 @@ fn solidity_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Underfoot,
                     utils::GROUND,
                 )
@@ -3028,6 +3031,7 @@ fn solidity_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Passable,
                     utils::GROUND,
                 )
@@ -3040,6 +3044,7 @@ fn solidity_app() -> App {
                 .with_location(
                     utils::AIR_DOMAIN,
                     CellSize::ONE,
+                    None,
                     Solidity::Underfoot,
                     utils::AIR,
                 )

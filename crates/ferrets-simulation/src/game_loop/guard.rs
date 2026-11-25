@@ -10,7 +10,6 @@ use super::{
     orders::{Processing, Refusal},
 };
 use crate::{
-    components::owner,
     components::{
         guard::GuardComponent,
         order_queue::{CancelPolicy, OrderState},
@@ -35,11 +34,7 @@ pub fn can_start(world: &World, entity: Entity, order: &Order) -> Result<(), Ref
     let Some(ward) = world.resource::<EntityIndex>().interactable(world, ward) else {
         return Err(Refusal::TargetGone);
     };
-    if owner::are_hostile(
-        world.resource::<GameSession>(),
-        entity_def::owner(world, entity),
-        entity_def::owner(world, ward),
-    ) {
+    if entity_def::relation(world, entity, ward).is_enemy() {
         return Err(Refusal::TargetUnfit);
     }
     Ok(())

@@ -703,11 +703,11 @@ fn app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::ONE,
+                    Some(utils::fixed("0.5")),
                     Solidity::Solid,
                     utils::GROUND,
                 )
                 .with_movement(
-                    utils::fixed("0.5"),
                     utils::fixed("0.5"),
                     FixedU64::ONE,
                     FixedU64::from_num(360),
@@ -723,6 +723,7 @@ fn app() -> App {
                     .with_location(
                         utils::GROUND_DOMAIN,
                         CellSize::ONE,
+                        None,
                         Solidity::Solid,
                         utils::GROUND,
                     )
@@ -785,6 +786,7 @@ fn coast_app() -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

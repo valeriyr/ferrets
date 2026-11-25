@@ -244,6 +244,7 @@ fn train_of_type_wider_than_map_is_refused_without_payment() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(40, 40),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )
@@ -255,6 +256,7 @@ fn train_of_type_wider_than_map_is_refused_without_payment() {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

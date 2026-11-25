@@ -2,10 +2,74 @@
 
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, location::Location, shape::Shape};
 use ferrets_math::{FixedU64, fixed_vec2::FixedVec2};
-use ferrets_nav_grid::layer_mask::LayerMask;
+use ferrets_nav_grid::mover_shape::MoverShape;
 
-/// One body during a contact-resolution pass: a circle around its position —
-/// where it is rendered — with a radius in cells.
+/// What a body is doing, as contact reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bearing {
+    /// Walking, the way its walk heads.
+    Walking(Heading),
+    /// At work in place.
+    Working,
+    /// Holding its place.
+    Planted,
+    /// Unable to move at all.
+    Fixed,
+    /// Displaced as an idle body is, keeping no spacing.
+    Inert,
+    /// At rest.
+    Idle,
+}
+
+/// The way a walking body's walk heads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Heading {
+    /// The offset toward where the walk aims.
+    Toward(FixedVec2),
+    /// The walk aims nowhere: no plan yet, or its aim is where it stands.
+    Unaimed,
+}
+
+impl Heading {
+    /// The heading toward a point at `offset` from the walker: nowhere for a
+    /// zero offset.
+    pub fn toward(offset: FixedVec2) -> Self {
+        if offset == FixedVec2::ZERO {
+            Heading::Unaimed
+        } else {
+            Heading::Toward(offset)
+        }
+    }
+}
+
+/// How far contact may displace a body, lowest rank first: a body of a lower
+/// rank gives way to one of a higher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Rank {
+    /// Displaced as its meeting and weight say.
+    Free,
+    /// Displaced by nothing but another working, a planted or a fixed body.
+    Working,
+    /// Displaced by nothing but another planted or a fixed body.
+    Planted,
+    /// Displaced by nothing.
+    Fixed,
+}
+
+impl Bearing {
+    /// The rank of a body of this bearing.
+    pub fn rank(self) -> Rank {
+        match self {
+            Bearing::Fixed => Rank::Fixed,
+            Bearing::Working => Rank::Working,
+            Bearing::Planted => Rank::Planted,
+            Bearing::Walking(_) | Bearing::Inert | Bearing::Idle => Rank::Free,
+        }
+    }
+}
+
+/// One body in contact: a circle around its position — where it is rendered —
+/// with a radius in cells.
 #[derive(Debug, Clone, Copy)]
 pub struct Body {
     /// The body's place: its middle, in cells with sub-cell precision, is
@@ -16,13 +80,12 @@ pub struct Body {
     /// How strongly the body resists displacement, relative to what it meets.
     /// Only the ratio between two bodies' weights matters, never the scale.
     pub weight: FixedU64,
-    /// The layers the body occupies; bodies on disjoint layers pass through
-    /// each other — including one on no layer, which touches nothing at all.
-    pub layers: LayerMask,
-    /// Where the body is walking this tick — the offset toward its current
-    /// waypoint — or `None` at rest. Contacts consult it for the swerving
-    /// traffic rule.
-    pub heading: Option<FixedVec2>,
+    /// The shape it moves as on the grid: the terrain it may cover, the
+    /// layers it occupies — bodies on disjoint layers pass through each
+    /// other — and how it crosses cliffs.
+    pub mover: MoverShape,
+    /// What the body is doing, as contact reads it.
+    pub bearing: Bearing,
 }
 
 impl Body {

@@ -33,7 +33,6 @@ fn fully_loaded_definition_is_valid() {
     let def = utils::standing("factotum", utils::GROUND_DOMAIN)
         .with_movement(
             utils::fixed("0.5"),
-            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -133,6 +132,7 @@ fn empty_occupies_panics() {
     EntityTypeDef::new("footman").with_location(
         utils::GROUND_DOMAIN,
         CellSize::ONE,
+        None,
         Solidity::Solid,
         LayerMask::EMPTY,
     );
@@ -144,6 +144,47 @@ fn zero_footprint_panics() {
     EntityTypeDef::new("footman").with_location(
         utils::GROUND_DOMAIN,
         CellSize::new(0, 2),
+        None,
+        Solidity::Solid,
+        utils::GROUND,
+    );
+}
+
+#[test]
+#[should_panic(expected = "radius must be greater than 0")]
+fn zero_radius_panics() {
+    EntityTypeDef::new("footman").with_location(
+        utils::GROUND_DOMAIN,
+        CellSize::ONE,
+        Some(FixedU64::ZERO),
+        Solidity::Solid,
+        utils::GROUND,
+    );
+}
+
+#[test]
+fn radius_at_bound_is_accepted() {
+    let def = EntityTypeDef::new("footman").with_location(
+        utils::GROUND_DOMAIN,
+        CellSize::ONE,
+        Some(FixedU64::from_num(1024)),
+        Solidity::Solid,
+        utils::GROUND,
+    );
+
+    assert_eq!(
+        def.location.as_ref().and_then(|location| location.radius()),
+        Some(FixedU64::from_num(1024))
+    );
+}
+
+#[test]
+#[should_panic(expected = "radius must be at most 1024")]
+fn radius_above_bound_panics() {
+    EntityTypeDef::new("footman").with_location(
+        utils::GROUND_DOMAIN,
+        CellSize::ONE,
+        Some(FixedU64::from_num(1025)),
         Solidity::Solid,
         utils::GROUND,
     );
@@ -550,6 +591,7 @@ fn rising_blade() -> EntityTypeDef {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::ONE,
+            None,
             Solidity::Solid,
             utils::GROUND,
         )

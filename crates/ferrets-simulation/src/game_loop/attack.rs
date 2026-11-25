@@ -187,7 +187,7 @@ pub fn process(entity: Entity, order: &Order, world: &mut World) -> Processing {
     let reached = aimed.reached(world);
     let target_bounds = aimed.bounds(world);
 
-    let size = entity_def::size(world, entity);
+    let size = entity_def::extent(world, entity);
     // How far the body must be walked is the longest reach it has among the
     // weapons that can serve this target, wherever each is fitted: an order is
     // given to the entity, and a keep's guns are as much a reason to stop walking

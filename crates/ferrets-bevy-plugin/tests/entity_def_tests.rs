@@ -258,10 +258,15 @@ fn body_app(model: MovementModel) -> App {
         for (name, solidity) in [("walker", Solidity::Solid), ("slider", Solidity::Underfoot)] {
             registry.register(
                 EntityTypeDef::new(name)
-                    .with_location(utils::GROUND_DOMAIN, CellSize::ONE, solidity, utils::GROUND)
+                    .with_location(
+                        utils::GROUND_DOMAIN,
+                        CellSize::ONE,
+                        Some(utils::fixed("0.5")),
+                        solidity,
+                        utils::GROUND,
+                    )
                     .with_movement(
                         utils::fixed("0.25"),
-                        utils::fixed("0.5"),
                         FixedU64::ONE,
                         FixedU64::from_num(360),
                         FixedU64::from_num(360),
@@ -273,6 +278,7 @@ fn body_app(model: MovementModel) -> App {
                 .with_location(
                     utils::GROUND_DOMAIN,
                     CellSize::new(2, 2),
+                    None,
                     Solidity::Solid,
                     utils::GROUND,
                 )

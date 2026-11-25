@@ -1,10 +1,11 @@
 //! Encoding the AI view snapshots as the Lua tables a think call receives.
 
+use ferrets_geometry::cell_rect::CellRect;
 use mlua::{Lua, Table, Value};
 
 use crate::ai::view::{
     content::{BoundView, ContentView, EntityContentView, RequirementView},
-    game::{EntityView, GameView, RemainsView},
+    game::{EntityView, GameView, RemainsView, Whereabouts},
 };
 
 /// Encodes a game view as the `view` table a think call receives.
@@ -43,14 +44,19 @@ pub(super) fn game_table(lua: &Lua, view: &GameView) -> mlua::Result<Table> {
     table.set("remains", remains_table(lua, &view.remains)?)?;
     let glimpses = lua.create_table()?;
     for (index, glimpse) in view.glimpses.iter().enumerate() {
-        let ground = lua.create_table()?;
-        ground.set("x", glimpse.x)?;
-        ground.set("y", glimpse.y)?;
-        ground.set("width", glimpse.width)?;
-        ground.set("height", glimpse.height)?;
-        glimpses.set(index + 1, ground)?;
+        glimpses.set(index + 1, footprint_table(lua, glimpse)?)?;
     }
     table.set("glimpses", glimpses)?;
+    Ok(table)
+}
+
+/// Encodes a rectangle of cells as a table of its corner and size.
+fn footprint_table(lua: &Lua, footprint: &CellRect) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    table.set("x", footprint.origin.x)?;
+    table.set("y", footprint.origin.y)?;
+    table.set("width", footprint.size.width)?;
+    table.set("height", footprint.size.height)?;
     Ok(table)
 }
 
@@ -81,14 +87,27 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     table.set("id", entity.id)?;
     table.set("type_name", entity.type_name.as_str())?;
-    table.set("x", entity.x)?;
-    table.set("y", entity.y)?;
+    // `hidden` is the simulation's word: off the map, inside a known holder
+    // or not.
+    match &entity.whereabouts {
+        Whereabouts::Standing(footprint) => {
+            table.set("footprint", footprint_table(lua, footprint)?)?;
+            table.set("hidden", false)?;
+        }
+        Whereabouts::Inside(holder) => {
+            table.set("inside", *holder)?;
+            table.set("hidden", true)?;
+        }
+        Whereabouts::Untracked(footprint) => {
+            table.set("untracked", footprint_table(lua, footprint)?)?;
+            table.set("hidden", true)?;
+        }
+    }
     table.set("health", entity.health)?;
     table.set("energy", entity.energy)?;
     table.set("damage", entity.damage)?;
     table.set("armor", entity.armor)?;
     table.set("idle", entity.idle)?;
-    table.set("hidden", entity.hidden)?;
     table.set("concealed", entity.concealed)?;
     table.set("buffs", strings_table(lua, &entity.buffs)?)?;
     if let Some((kind, amount)) = &entity.carrying {
@@ -102,7 +121,6 @@ fn entity_table(lua: &Lua, entity: &EntityView) -> mlua::Result<Table> {
     table.set("disabled", entity.disabled)?;
     table.set("stance", entity.stance.as_deref())?;
     table.set("resource_amount", entity.resource_amount)?;
-    table.set("boarded", entity.boarded)?;
     let passengers = lua.create_table()?;
     for (index, id) in entity.passengers.iter().enumerate() {
         passengers.set(index + 1, *id)?;

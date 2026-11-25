@@ -1,218 +1,332 @@
-//! Pairwise contact resolution: how touching bodies push each other apart.
+//! The rules of one pair of bodies in contact.
 
 use std::cmp::Ordering;
 
 use ferrets_math::{FixedI64, fixed_vec2::FixedVec2};
-use ferrets_nav_grid::layer_mask::LayerMask;
 
-use crate::body::Body;
+use crate::{
+    body::{Bearing, Body, Heading, Rank},
+    motion,
+};
 
-/// The farthest one pass may displace a body, in cells per axis — high
-/// enough that contact is rigid against full-speed movement, bounded so
-/// dense piles cannot explode.
-fn max_push() -> FixedI64 {
-    FixedI64::from_num(0.5)
-}
+/// The gap two idle bodies keep between their circles, in cells.
+const IDLE_SPACING: FixedI64 = FixedI64::lit("0.25");
 
-/// How far per pass two separated bodies sharing a cell creep apart.
-fn cell_share_creep() -> FixedI64 {
-    FixedI64::from_num(0.1)
-}
+/// The farthest one pass drifts two idle bodies apart, together, toward
+/// [`IDLE_SPACING`].
+pub(crate) const IDLE_DRIFT: FixedI64 = FixedI64::lit("0.25");
+
+/// How far short of [`IDLE_SPACING`] two idle bodies may stand and still
+/// count as spaced.
+pub(crate) const IDLE_SLACK: FixedI64 = FixedI64::lit("0.015625");
+
+/// The sine of the widest angle off a walker's heading at which a body it
+/// presses is nudged aside: 30°.
+const ASIDE_SINE: FixedI64 = FixedI64::lit("0.5");
 
 /// How much harder a body pressing into a contact is to displace than the same
 /// body at rest — the momentum a walker carries into whatever it meets. A body
 /// needs more than this much of a weight advantage to hold its ground against
-/// one walking into it.
-///
-/// Nothing bounds that advantage, deliberately. Past the threshold the contest
-/// inverts and the walker becomes the one carried off, which is what lets a
-/// heavy body read as a rock in the road rather than a weight that stops
-/// meaning anything the moment it clears three times its neighbours. Capping
-/// the pressing share at half would also split the rule in two, since bodies
-/// meeting head-on or settled in a pile already contest on weight alone with no
-/// ceiling. A walker is not left stalled nose-first against a heavy body
-/// either: the sideways share rides on the radial one, so the heavier the thing
-/// met, the harder the walker is turned aside rather than merely held.
-fn press_stiffening() -> FixedI64 {
-    FixedI64::from_num(3)
+/// one walking into it; past it the walker is the one carried off.
+const PRESS_STIFFENING: FixedI64 = FixedI64::const_from_int(3);
+
+/// How two bodies in contact treat each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Meeting {
+    /// They shove each other by weight, and two idle ones keep the idle
+    /// spacing.
+    Yielding,
+    /// Neither shoves the other by weight: an idle or inert body is a wall to
+    /// a walker, which takes the whole separation; two walkers, two idle or
+    /// inert bodies, or two of one rank above them halve it. No spacing.
+    Unyielding,
 }
 
-/// One pass of pairwise separation: the displacement each body takes from
-/// every contact it is in, clamped per axis to [`max_push`].
-///
-/// Overlapping bodies shove each other apart along their offset, each carrying
-/// the share of the overlap the other's resistance earns it — half each between
-/// equals, less to the heavier of unequals, and less again to a body pressing
-/// into the contact. A contact that needs to pass (see [`needs_swerve`]) also
-/// gets a clockwise sideways share — the traffic rule that keeps exactly
-/// aligned meetings moving: lattice walking aligns positions bit for bit, so
-/// dead-straight head-on contacts are the common case, and a purely radial
-/// push would stall them nose to nose; each body swerving consistently to
-/// its own side parts the pair deterministically. Every other contact parts
-/// along the straight line between the bodies — under sustained contact, a
-/// sideways share is a torque that would roll companions around each other
-/// and mill a settled pile forever. A dead-on overlap breaks the symmetry
-/// along the x axis by pair order.
-///
-/// Separated bodies anchored at the same cell drift apart the same way:
-/// circles pack tighter than one per cell (two can rest a full diameter
-/// apart inside one cell diagonally), but a cell claims as one boolean —
-/// ten units on nine cells is uncountable occupancy. The creep continues
-/// until every settled body stands on its own cell, so at rest occupancy is
-/// exact: one body, one cell.
-pub fn separations(bodies: &[Body]) -> Vec<FixedVec2> {
-    let mut pushes = vec![FixedVec2::ZERO; bodies.len()];
-    for first in 0..bodies.len() {
-        for second in (first + 1)..bodies.len() {
-            if bodies[first].layers & bodies[second].layers == LayerMask::EMPTY {
-                continue;
-            }
-            let first_position = bodies[first].location.middle();
-            let second_position = bodies[second].location.middle();
-            let dx = second_position.x.to_num::<FixedI64>() - first_position.x.to_num::<FixedI64>();
-            let dy = second_position.y.to_num::<FixedI64>() - first_position.y.to_num::<FixedI64>();
-            let distance = first_position
-                .distance(second_position)
-                .to_num::<FixedI64>();
-            let reach = (bodies[first].radius + bodies[second].radius).to_num::<FixedI64>();
-            let share_cell = bodies[first].location.anchor() == bodies[second].location.anchor();
-            if distance >= reach && !share_cell {
-                continue;
-            }
+/// Whether a body of bearing `body` gives way to one of bearing `to` they
+/// meet as `meeting` says: its rank is below; or the ranks are equal, below
+/// fixed, and it walks or the meeting is yielding.
+pub fn gives_way(body: Bearing, to: Bearing, meeting: Meeting) -> bool {
+    match body.rank().cmp(&to.rank()) {
+        Ordering::Less => true,
+        Ordering::Greater => false,
+        Ordering::Equal => match body {
+            Bearing::Fixed => false,
+            Bearing::Walking(_) => true,
+            Bearing::Working | Bearing::Planted | Bearing::Inert | Bearing::Idle => match meeting {
+                Meeting::Yielding => true,
+                Meeting::Unyielding => false,
+            },
+        },
+    }
+}
 
-            let overlap = reach - distance;
-            let total = if overlap > FixedI64::ZERO {
-                overlap
-            } else {
-                // Cell-sharing without body overlap: a steady creep apart.
-                cell_share_creep() * FixedI64::from_num(2)
-            };
-            // Contact is a contest of resistance: each body takes the share of
-            // the separation the other's resistance earns it, so equals part
-            // evenly and a heavier body yields less than what it meets.
-            // Pressing into a contact resists as three times the same body at
-            // rest — the momentum a walker carries — so against a resting equal
-            // a walker mostly keeps its line and the contest ends instead of
-            // trading equal shoves forever, the churn that pinned workers at
-            // crowded drop-offs. Not the whole of it: a walker that loses
-            // nothing to contact rams arriving crowds into piles packed too
-            // tight for the rest-creep to relax back to one body per cell. The
-            // stiffening cancels wherever both bodies are in the same state, so
-            // mutual presses and settled piles are pure weight contests.
-            let presses_second = presses_toward(&bodies[first], dx, dy);
-            let presses_first = presses_toward(&bodies[second], -dx, -dy);
-            let first_stiffness = stiffness(&bodies[first], presses_second);
-            let second_stiffness = stiffness(&bodies[second], presses_first);
-            // The stiffer body's share is the measured one and the yielding body
-            // takes what is left, so the pair parts by the whole separation and
-            // the rounding lands on the side already giving the most ground.
-            // Equals have no stiffer side to measure from and halve it instead.
-            //
-            // The two cases have to round differently, however tempting one rule
-            // for both looks: measuring both shares everywhere, or taking one as
-            // the remainder everywhere, moves a settled crowd by a single bit a
-            // pass, and that is enough to leave it circling a small orbit
-            // forever instead of coming to rest. Reading the comparison rather
-            // than the pair position also keeps the split the same whichever
-            // order the bodies are walked in.
-            //
-            // Only the unequal cases divide, and only they can: one side
-            // outweighing the other puts the greater above nothing and the two
-            // together above nothing with it. Equal resistances are the sole way
-            // the contest comes to nothing at all — both bodies weightless — and
-            // that case never reaches a division.
-            let (first_share, second_share) = match first_stiffness.cmp(&second_stiffness) {
-                Ordering::Equal => {
-                    let half = total / FixedI64::from_num(2);
-                    (half, half)
+/// The gap `first` and `second` keep between their circles: the idle
+/// spacing between two idle bodies that meet yielding, none otherwise.
+pub(crate) fn spacing(meeting: Meeting, first: &Body, second: &Body) -> FixedI64 {
+    match (meeting, first.bearing, second.bearing) {
+        (Meeting::Yielding, Bearing::Idle, Bearing::Idle) => IDLE_SPACING,
+        (
+            Meeting::Yielding,
+            Bearing::Walking(_)
+            | Bearing::Working
+            | Bearing::Planted
+            | Bearing::Fixed
+            | Bearing::Inert,
+            _,
+        )
+        | (
+            Meeting::Yielding,
+            Bearing::Idle,
+            Bearing::Walking(_)
+            | Bearing::Working
+            | Bearing::Planted
+            | Bearing::Fixed
+            | Bearing::Inert,
+        )
+        | (Meeting::Unyielding, _, _) => FixedI64::ZERO,
+    }
+}
+
+/// The shares of `total` that `first` and `second` take, `(dx, dy)` the
+/// offset from `first` to `second`: the lower rank takes the whole; two fixed
+/// bodies take nothing; two of another rank part as `meeting` says — by
+/// weight when yielding, a body pressing into the contact resisting
+/// [`PRESS_STIFFENING`] times as hard; when unyielding a walker against an
+/// idle or inert body takes the whole, and two walkers, two idle or inert
+/// bodies, or two of one rank above them halve it.
+pub(crate) fn shares(
+    meeting: Meeting,
+    total: FixedI64,
+    first: &Body,
+    second: &Body,
+    dx: FixedI64,
+    dy: FixedI64,
+) -> (FixedI64, FixedI64) {
+    match first.bearing.rank().cmp(&second.bearing.rank()) {
+        Ordering::Greater => (FixedI64::ZERO, total),
+        Ordering::Less => (total, FixedI64::ZERO),
+        Ordering::Equal => match (first.bearing.rank(), meeting) {
+            (Rank::Fixed, Meeting::Yielding | Meeting::Unyielding) => {
+                (FixedI64::ZERO, FixedI64::ZERO)
+            }
+            (Rank::Planted | Rank::Working | Rank::Free, Meeting::Yielding) => contest(
+                total,
+                stiffness(first, presses_toward(first, dx, dy)),
+                stiffness(second, presses_toward(second, -dx, -dy)),
+            ),
+            (Rank::Planted | Rank::Working | Rank::Free, Meeting::Unyielding) => {
+                match (first.bearing, second.bearing) {
+                    (Bearing::Walking(_), Bearing::Inert | Bearing::Idle) => {
+                        (total, FixedI64::ZERO)
+                    }
+                    (Bearing::Inert | Bearing::Idle, Bearing::Walking(_)) => {
+                        (FixedI64::ZERO, total)
+                    }
+                    (Bearing::Walking(_), Bearing::Walking(_))
+                    | (Bearing::Inert | Bearing::Idle, Bearing::Inert | Bearing::Idle)
+                    | (Bearing::Working, Bearing::Working)
+                    | (Bearing::Planted, Bearing::Planted) => {
+                        let half = total / FixedI64::from_num(2);
+                        (half, half)
+                    }
+                    (Bearing::Fixed, _)
+                    | (_, Bearing::Fixed)
+                    | (
+                        Bearing::Walking(_) | Bearing::Inert | Bearing::Idle,
+                        Bearing::Working | Bearing::Planted,
+                    )
+                    | (
+                        Bearing::Working | Bearing::Planted,
+                        Bearing::Walking(_) | Bearing::Inert | Bearing::Idle,
+                    )
+                    | (Bearing::Working, Bearing::Planted)
+                    | (Bearing::Planted, Bearing::Working) => unreachable!(
+                        "unyielding shares are asked of two bodies of one rank below fixed"
+                    ),
                 }
-                Ordering::Greater => {
-                    let contested = first_stiffness.saturating_add(second_stiffness);
-                    let first_share = total * second_stiffness / contested;
-                    (first_share, total - first_share)
-                }
-                Ordering::Less => {
-                    let contested = first_stiffness.saturating_add(second_stiffness);
-                    let second_share = total * first_stiffness / contested;
-                    (total - second_share, second_share)
-                }
-            };
-            let swerve = needs_swerve(&bodies[first], &bodies[second], dx, dy);
-            let lateral = |share: FixedI64| {
-                if swerve {
-                    share / FixedI64::from_num(4)
-                } else {
-                    FixedI64::ZERO
-                }
-            };
-            let (first_lateral, second_lateral) = (lateral(first_share), lateral(second_share));
-            let (unit_x, unit_y) = if distance > FixedI64::ZERO {
-                (dx / distance, dy / distance)
-            } else {
-                (FixedI64::ONE, FixedI64::ZERO)
-            };
-            // Each side's swerve is the clockwise perpendicular of its own
-            // outward direction, so the two swerves point apart.
-            pushes[first].x -= unit_x * first_share + unit_y * first_lateral;
-            pushes[first].y -= unit_y * first_share - unit_x * first_lateral;
-            pushes[second].x += unit_x * second_share + unit_y * second_lateral;
-            pushes[second].y += unit_y * second_share - unit_x * second_lateral;
+            }
+        },
+    }
+}
+
+/// Whether two walkers pressing into each other must swerve past each other:
+/// each heads toward a point beyond the other body, `(dx, dy)` the offset
+/// from `first` to `second`. Two bodies stepping onto one point are pressed
+/// apart by any walker among them.
+pub(crate) fn swerves(first: &Body, second: &Body, dx: FixedI64, dy: FixedI64) -> bool {
+    let coincident = dx == FixedI64::ZERO && dy == FixedI64::ZERO;
+    match (first.bearing, second.bearing) {
+        (
+            Bearing::Walking(Heading::Toward(first_heading)),
+            Bearing::Walking(Heading::Toward(second_heading)),
+        ) => {
+            let squared = dx * dx + dy * dy;
+            coincident
+                || first_heading.x * dx + first_heading.y * dy > squared
+                    && -(second_heading.x * dx + second_heading.y * dy) > squared
         }
-    }
-    for push in &mut pushes {
-        push.x = push.x.clamp(-max_push(), max_push());
-        push.y = push.y.clamp(-max_push(), max_push());
-    }
-    pushes
-}
-
-/// Whether a contact plays the swerving traffic rule or parts radially.
-///
-/// Swerving is for contacts that must pass one another and would stall on
-/// their own: bodies pressing into each other — a head-on meeting, a crowd
-/// converging on one spot — and a walker pressing into a parked body. A
-/// body presses when its heading has a component toward the other body.
-/// Everything else parts radially, because a sideways share under sustained
-/// contact is a torque: companions marching the same way press one-sidedly
-/// at most (the swerve would roll them around each other all the way), and
-/// a settled pile presses not at all (it would mill forever instead of
-/// relaxing). `dx`/`dy` is the offset from `first` to `second`.
-fn needs_swerve(first: &Body, second: &Body, dx: FixedI64, dy: FixedI64) -> bool {
-    // Coincident bodies — opposing walks stepping onto the same point in
-    // the same tick — give the press test no direction; any walker in the
-    // stack must swerve out, or the pair re-converges every tick.
-    if dx == FixedI64::ZERO && dy == FixedI64::ZERO {
-        return first.heading.is_some() || second.heading.is_some();
-    }
-    let toward_second = presses_toward(first, dx, dy);
-    let toward_first = presses_toward(second, -dx, -dy);
-    match (first.heading, second.heading) {
-        (None, None) => false,
-        (Some(_), None) => toward_second,
-        (None, Some(_)) => toward_first,
-        (Some(_), Some(_)) => toward_second && toward_first,
+        (Bearing::Walking(Heading::Unaimed), Bearing::Walking(_))
+        | (Bearing::Walking(_), Bearing::Walking(Heading::Unaimed))
+        | (
+            Bearing::Walking(_),
+            Bearing::Working | Bearing::Planted | Bearing::Fixed | Bearing::Inert | Bearing::Idle,
+        )
+        | (
+            Bearing::Working | Bearing::Planted | Bearing::Fixed | Bearing::Inert | Bearing::Idle,
+            Bearing::Walking(_),
+        ) => coincident,
+        (
+            Bearing::Working | Bearing::Planted | Bearing::Fixed | Bearing::Inert | Bearing::Idle,
+            Bearing::Working | Bearing::Planted | Bearing::Fixed | Bearing::Inert | Bearing::Idle,
+        ) => false,
     }
 }
 
-/// How strongly `body` resists this contact: what it weighs, stiffened while it
-/// presses into the contact.
-fn stiffness(body: &Body, presses: bool) -> FixedI64 {
-    // Saturating, because nothing bounds an authored weight and this runs in
-    // lockstep: wrapping arithmetic would turn an absurd one negative, which
-    // both inverts the contest and breaks the one thing the split relies on —
-    // that resistance is never below nothing. Saturating also keeps a debug
-    // peer, which would otherwise panic, in step with a release one.
-    let weight = body.weight.saturating_to_num::<FixedI64>();
-    if presses {
-        weight.saturating_mul(press_stiffening())
-    } else {
-        weight
+/// The sideways share `body` takes with `share`, taken back from a body at
+/// offset `(dx, dy)` from it, `distance` away, positive clockwise of its way
+/// out: the part of its heading across the line between them, never less
+/// than a quarter of `share`, the side its heading points — clockwise when it
+/// points along the line exactly; none when it does not walk or aims
+/// nowhere.
+pub(crate) fn lean(
+    body: &Body,
+    share: FixedI64,
+    dx: FixedI64,
+    dy: FixedI64,
+    distance: FixedI64,
+) -> FixedI64 {
+    match body.bearing {
+        Bearing::Walking(Heading::Toward(heading)) => {
+            // The way out from the other body is (−dx, −dy); its clockwise
+            // perpendicular is (−dy, dx).
+            let across = heading.y * dx - heading.x * dy;
+            let least = share / FixedI64::from_num(4);
+            let sideways = share * sine(heading, across, distance);
+            let sideways = sideways.max(least);
+            match across.cmp(&FixedI64::ZERO) {
+                Ordering::Less => -sideways,
+                Ordering::Equal | Ordering::Greater => sideways,
+            }
+        }
+        Bearing::Walking(Heading::Unaimed)
+        | Bearing::Working
+        | Bearing::Planted
+        | Bearing::Fixed
+        | Bearing::Inert
+        | Bearing::Idle => FixedI64::ZERO,
+    }
+}
+
+/// The sideways share an idle or inert `body` pressed by `walker` takes
+/// with `share`, the walker at offset `(dx, dy)` from it, `distance` away,
+/// positive clockwise of its way out: toward the side it lies off the
+/// walker's heading, clockwise when it lies on it exactly, a quarter of
+/// `share` dead-on, tapering to none as the heading's angle off it reaches
+/// the one whose sine is [`ASIDE_SINE`]; none beyond.
+pub(crate) fn aside(
+    body: &Body,
+    walker: &Body,
+    share: FixedI64,
+    dx: FixedI64,
+    dy: FixedI64,
+    distance: FixedI64,
+) -> FixedI64 {
+    let heading = match (body.bearing, walker.bearing) {
+        (Bearing::Idle | Bearing::Inert, Bearing::Walking(Heading::Toward(heading))) => heading,
+        (
+            Bearing::Idle | Bearing::Inert,
+            Bearing::Walking(Heading::Unaimed)
+            | Bearing::Working
+            | Bearing::Planted
+            | Bearing::Fixed
+            | Bearing::Inert
+            | Bearing::Idle,
+        )
+        | (Bearing::Walking(_) | Bearing::Working | Bearing::Planted | Bearing::Fixed, _) => {
+            return FixedI64::ZERO;
+        }
+    };
+    // From the walker to this body is (−dx, −dy), this body's way out; the
+    // heading pressing toward it has a positive part along that way.
+    let along = -(heading.x * dx + heading.y * dy);
+    if along <= FixedI64::ZERO {
+        return FixedI64::ZERO;
+    }
+    // The way out's clockwise perpendicular is (−dy, dx); the heading's part
+    // across it says which side of the walker's line this body lies.
+    let across = heading.y * dx - heading.x * dy;
+    let sine = sine(heading, across, distance);
+    if sine >= ASIDE_SINE {
+        return FixedI64::ZERO;
+    }
+    let nudge = share / FixedI64::from_num(4) * (FixedI64::ONE - sine / ASIDE_SINE);
+    match across.cmp(&FixedI64::ZERO) {
+        Ordering::Greater => -nudge,
+        Ordering::Equal | Ordering::Less => nudge,
     }
 }
 
 /// Whether `body`'s heading has a component along the offset `(dx, dy)` —
 /// it is pressing toward whatever stands there.
 fn presses_toward(body: &Body, dx: FixedI64, dy: FixedI64) -> bool {
-    body.heading
-        .is_some_and(|heading| heading.x * dx + heading.y * dy > FixedI64::ZERO)
+    match body.bearing {
+        Bearing::Walking(Heading::Toward(heading)) => {
+            heading.x * dx + heading.y * dy > FixedI64::ZERO
+        }
+        Bearing::Walking(Heading::Unaimed)
+        | Bearing::Working
+        | Bearing::Planted
+        | Bearing::Fixed
+        | Bearing::Inert
+        | Bearing::Idle => false,
+    }
+}
+
+/// How strongly `body` resists this contact: what it weighs, stiffened while it
+/// presses into the contact, saturating at the type's bound.
+fn stiffness(body: &Body, presses: bool) -> FixedI64 {
+    let weight = body.weight.saturating_to_num::<FixedI64>();
+    if presses {
+        weight.saturating_mul(PRESS_STIFFENING)
+    } else {
+        weight
+    }
+}
+
+/// The shares of `total` two contesting bodies take, each the share the
+/// other's resistance earns it, the rounding left to the less stiff.
+fn contest(
+    total: FixedI64,
+    first_stiffness: FixedI64,
+    second_stiffness: FixedI64,
+) -> (FixedI64, FixedI64) {
+    // The stiffer body's share is measured and the other takes what is left;
+    // equals halve. The ratio is never above one and is taken first.
+    match first_stiffness.cmp(&second_stiffness) {
+        Ordering::Equal => {
+            let half = total / FixedI64::from_num(2);
+            (half, half)
+        }
+        Ordering::Greater => {
+            let contested = first_stiffness.saturating_add(second_stiffness);
+            let first_share = total * (second_stiffness / contested);
+            (first_share, total - first_share)
+        }
+        Ordering::Less => {
+            let contested = first_stiffness.saturating_add(second_stiffness);
+            let second_share = total * (first_stiffness / contested);
+            (total - second_share, second_share)
+        }
+    }
+}
+
+/// The sine of the angle between `heading` and a line `distance` long whose
+/// cross product with it is `across`, held to one: zero for a heading or a
+/// line of no length.
+fn sine(heading: FixedVec2, across: FixedI64, distance: FixedI64) -> FixedI64 {
+    let heading_length = motion::length((heading.x, heading.y));
+    if heading_length == FixedI64::ZERO || distance == FixedI64::ZERO {
+        return FixedI64::ZERO;
+    }
+    (across.abs() / heading_length).min(distance) / distance
 }

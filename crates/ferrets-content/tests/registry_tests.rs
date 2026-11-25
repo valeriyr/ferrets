@@ -106,7 +106,6 @@ fn register_accepts_square_multi_cell_mover() {
         utils::sized("gryphon", utils::GROUND_DOMAIN, CellSize::new(2, 2)).with_movement(
             FixedU64::ONE,
             FixedU64::ONE,
-            FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
         ),
@@ -116,13 +115,11 @@ fn register_accepts_square_multi_cell_mover() {
 #[test]
 #[should_panic(expected = "entity type 'wagon' moves but has a non-square footprint")]
 fn register_rejects_oblong_mover() {
-    // Clearance is one number per mover and its body is a circle inscribed in
-    // the footprint, so an oblong would need per-axis clearance and a rule for
-    // whether the footprint turns with the mover.
+    // Clearance is one number per mover, so an oblong would need per-axis
+    // clearance and a rule for whether the footprint turns with the mover.
     let mut registry = utils::ground_registry();
     registry.register(
         utils::sized("wagon", utils::GROUND_DOMAIN, CellSize::new(2, 3)).with_movement(
-            FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::from_num(360),
@@ -598,7 +595,7 @@ fn validate_rejects_overbuilding_source_on_other_layers() {
     );
     registry.register(
         EntityTypeDef::new("shaft_house")
-            .with_location(aloft, CellSize::ONE, Solidity::Solid, air)
+            .with_location(aloft, CellSize::ONE, None, Solidity::Solid, air)
             .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
@@ -626,7 +623,7 @@ fn validate_rejects_overbuilding_source_on_terrain_overbuilder_refuses() {
     );
     registry.register(
         EntityTypeDef::new("shaft_house")
-            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_location(dry, CellSize::ONE, None, Solidity::Solid, utils::GROUND)
             .with_rise(6, [])
             .with_resource_source("gold", DepletionPolicy::Destroy)
             .with_overbuilds("mine"),
@@ -647,7 +644,7 @@ fn validate_accepts_overbuilding_source_on_fewer_terrains() {
     );
     registry.register(
         EntityTypeDef::new("mine")
-            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_location(dry, CellSize::ONE, None, Solidity::Solid, utils::GROUND)
             .with_resource_source("gold", DepletionPolicy::Destroy),
     );
     registry.register(
@@ -669,6 +666,7 @@ fn validate_rejects_overbuilding_source_standing_underfoot() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Underfoot,
                 utils::GROUND,
             )
@@ -1018,6 +1016,7 @@ fn validate_rejects_untrainable_trained_type() {
     registry.register(EntityTypeDef::new("statue").with_location(
         utils::GROUND_DOMAIN,
         CellSize::ONE,
+        None,
         Solidity::Solid,
         utils::GROUND,
     ));
@@ -1054,6 +1053,7 @@ fn validate_rejects_built_type_that_never_rises() {
     registry.register(EntityTypeDef::new("statue").with_location(
         utils::GROUND_DOMAIN,
         CellSize::ONE,
+        None,
         Solidity::Solid,
         utils::GROUND,
     ));
@@ -1464,6 +1464,7 @@ fn register_rejects_occupied_mask_mixing_in_unregistered_layer() {
     registry.register(EntityTypeDef::new("griffon_rider").with_location(
         utils::GROUND_DOMAIN,
         CellSize::ONE,
+        None,
         Solidity::Solid,
         utils::GROUND | LayerId::new(2),
     ));
@@ -1479,6 +1480,7 @@ fn register_rejects_occupied_mask_leaving_out_domain_layer() {
     registry.register(EntityTypeDef::new("gryphon").with_location(
         utils::GROUND_DOMAIN,
         CellSize::ONE,
+        None,
         Solidity::Solid,
         air,
     ));
@@ -1623,7 +1625,6 @@ fn register_rejects_non_positive_speed() {
     registry.register(
         utils::standing("worker", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ZERO,
-            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -1678,10 +1679,13 @@ fn register_rejects_attack_arc_without_weapon() {
 #[should_panic(expected = "entity type 'keep' declares radius but cannot move")]
 fn register_rejects_radius_without_movement() {
     let mut registry = utils::ground_registry();
-    registry.register(
-        utils::standing("keep", utils::GROUND_DOMAIN)
-            .with_stat(EntityStatId::RADIUS, FixedU64::from_num(1)),
-    );
+    registry.register(EntityTypeDef::new("keep").with_location(
+        utils::GROUND_DOMAIN,
+        CellSize::ONE,
+        Some(FixedU64::ONE),
+        Solidity::Solid,
+        utils::GROUND,
+    ));
 }
 
 #[test]
@@ -3306,6 +3310,7 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::new(2, 2),
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -3324,6 +3329,7 @@ fn validate_rejects_primary_that_goes_inside_its_annex_site() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -3350,6 +3356,7 @@ fn validate_rejects_fading_annex_without_health_pool() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::new(2, 2),
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -3368,6 +3375,7 @@ fn validate_rejects_fading_annex_without_health_pool() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -3473,7 +3481,6 @@ fn validate_rejects_annex_that_moves() {
     let mut registry = utils::ground_registry();
     registry.register(primary(["lookout"]));
     registry.register(annex("lookout", CellSize::ONE).with_movement(
-        utils::fixed("0.5"),
         utils::fixed("0.5"),
         FixedU64::ONE,
         FixedU64::from_num(360),
@@ -3693,6 +3700,7 @@ fn validate_rejects_annex_that_does_not_claim_its_cells() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Passable,
                 utils::GROUND,
             )
@@ -3748,11 +3756,11 @@ fn validate_rejects_docks_on_type_that_moves() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::new(2, 2),
+                Some(utils::fixed("0.5")),
                 Solidity::Solid,
                 utils::GROUND,
             )
             .with_movement(
-                utils::fixed("0.5"),
                 utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -3773,6 +3781,7 @@ fn validate_rejects_docks_on_type_that_moves() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -3849,6 +3858,7 @@ fn validate_rejects_ambiguous_requirement() {
     registry.register(EntityTypeDef::new("forge").with_location(
         utils::GROUND_DOMAIN,
         CellSize::ONE,
+        None,
         Solidity::Solid,
         utils::GROUND,
     ));
@@ -5433,6 +5443,7 @@ fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::new(2, 2),
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -5452,6 +5463,7 @@ fn validate_rejects_annex_requirement_that_can_never_be_unlocked() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Solid,
                 utils::GROUND,
             )
@@ -5552,7 +5564,6 @@ fn validate_accepts_transitions_naming_each_other() {
             .with_movement(
                 FixedU64::ONE,
                 FixedU64::ONE,
-                FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
             )
@@ -5561,7 +5572,6 @@ fn validate_accepts_transitions_naming_each_other() {
     registry.register(
         utils::sized("flier", utils::GROUND_DOMAIN, CellSize::new(2, 2))
             .with_movement(
-                FixedU64::ONE,
                 FixedU64::ONE,
                 FixedU64::ONE,
                 FixedU64::from_num(360),
@@ -5580,7 +5590,6 @@ fn validate_accepts_one_way_transition() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5590,7 +5599,6 @@ fn validate_accepts_one_way_transition() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -5729,7 +5737,6 @@ fn validate_rejects_transition_into_unregistered_type() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5751,7 +5758,6 @@ fn validate_rejects_nearby_landing_into_form_that_cannot_move() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5781,7 +5787,6 @@ fn validate_accepts_transition_with_odd_footprint_difference() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5790,7 +5795,6 @@ fn validate_accepts_transition_with_odd_footprint_difference() {
     );
     registry.register(
         utils::sized("giant", utils::GROUND_DOMAIN, CellSize::new(2, 2)).with_movement(
-            FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::from_num(360),
@@ -5809,7 +5813,6 @@ fn validate_accepts_transition_with_even_footprint_difference() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5818,7 +5821,6 @@ fn validate_accepts_transition_with_even_footprint_difference() {
     );
     registry.register(
         utils::sized("giant", utils::GROUND_DOMAIN, CellSize::new(3, 3)).with_movement(
-            FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::ONE,
             FixedU64::from_num(360),
@@ -5840,7 +5842,6 @@ fn validate_rejects_transition_with_unresolved_requirement() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5860,7 +5861,6 @@ fn validate_rejects_transition_with_unresolved_requirement() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -5882,7 +5882,6 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5902,7 +5901,6 @@ fn validate_rejects_transition_timed_by_undeclared_stat() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -5923,7 +5921,6 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5943,7 +5940,6 @@ fn validate_rejects_transition_with_energy_cost_but_no_energy_pool() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -5964,7 +5960,6 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -5984,7 +5979,6 @@ fn validate_rejects_transition_with_unregistered_resource_cost() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -6051,7 +6045,7 @@ fn validate_rejects_transition_through_form_on_fewer_terrains() {
     );
     registry.register(
         EntityTypeDef::new("egg")
-            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_location(dry, CellSize::ONE, None, Solidity::Solid, utils::GROUND)
             .with_pool(Pool::health(60)),
     );
     registry
@@ -6077,14 +6071,14 @@ fn validate_accepts_transition_through_form_on_more_terrains() {
     );
     registry.register(
         EntityTypeDef::new("larva")
-            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_location(dry, CellSize::ONE, None, Solidity::Solid, utils::GROUND)
             .with_pool(Pool::health(20))
             .with_morphs([morph_through("egg", "hatchling")]),
     );
     registry.register(utils::standing("egg", utils::GROUND_DOMAIN).with_pool(Pool::health(60)));
     registry.register(
         EntityTypeDef::new("hatchling")
-            .with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+            .with_location(dry, CellSize::ONE, None, Solidity::Solid, utils::GROUND)
             .with_pool(Pool::health(30)),
     );
 
@@ -6114,7 +6108,6 @@ fn validate_accepts_transition_with_payable_costs() {
         utils::standing("walker", utils::GROUND_DOMAIN)
             .with_movement(
                 FixedU64::ONE,
-                utils::fixed("0.5"),
                 FixedU64::ONE,
                 FixedU64::from_num(360),
                 FixedU64::from_num(360),
@@ -6144,7 +6137,6 @@ fn validate_accepts_transition_with_payable_costs() {
     registry.register(
         utils::standing("flier", utils::GROUND_DOMAIN).with_movement(
             FixedU64::ONE,
-            utils::fixed("0.5"),
             FixedU64::ONE,
             FixedU64::from_num(360),
             FixedU64::from_num(360),
@@ -7876,6 +7868,7 @@ fn validate_rejects_breeder_seating_broodling_off_its_layer() {
             .with_location(
                 utils::WATER_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Passable,
                 utils::WATER,
             )
@@ -7939,7 +7932,6 @@ fn validate_rejects_bred_type_that_can_move() {
     registry.register(hatch("hatch", 3, 2));
     registry.register(grub("grub").with_movement(
         utils::fixed("0.5"),
-        utils::fixed("0.5"),
         FixedU64::ONE,
         FixedU64::from_num(360),
         FixedU64::from_num(360),
@@ -7981,6 +7973,7 @@ fn validate_accepts_interim_form_of_other_solidity() {
             .with_location(
                 utils::GROUND_DOMAIN,
                 CellSize::ONE,
+                None,
                 Solidity::Passable,
                 utils::GROUND,
             )
@@ -8714,6 +8707,7 @@ fn grub(name: &str) -> EntityTypeDef {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::ONE,
+            None,
             Solidity::Passable,
             utils::GROUND,
         )
@@ -9202,7 +9196,13 @@ fn dry_registry() -> (ContentRegistry, DomainId, TerrainId) {
 
 /// A one-cell solid `knight` in the `dry` domain, on the ground layer.
 fn dry_knight(dry: DomainId) -> EntityTypeDef {
-    EntityTypeDef::new("knight").with_location(dry, CellSize::ONE, Solidity::Solid, utils::GROUND)
+    EntityTypeDef::new("knight").with_location(
+        dry,
+        CellSize::ONE,
+        None,
+        Solidity::Solid,
+        utils::GROUND,
+    )
 }
 
 /// Standing on the ground layer with every cell on `water`.

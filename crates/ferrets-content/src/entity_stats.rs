@@ -63,28 +63,24 @@ impl EntityStatId {
     /// Supply instances occupy in their owner's pool, from the moment they are
     /// queued for training.
     pub const SUPPLY_COST: EntityStatId = EntityStatId(18);
-    /// The radius of an instance's circular body in cells, where the
-    /// continuous movement model resolves contact. Every mover defines one;
-    /// half a cell makes resting neighbors touch at one-cell spacing.
-    pub const RADIUS: EntityStatId = EntityStatId(19);
     /// Slots one instance takes in what holds it. Declaring it is what makes a
     /// type able to board.
-    pub const CARGO_SIZE: EntityStatId = EntityStatId(20);
+    pub const CARGO_SIZE: EntityStatId = EntityStatId(19);
     /// How close a boarder must be to its holder, in cells.
-    pub const LOAD_RANGE: EntityStatId = EntityStatId(21);
+    pub const LOAD_RANGE: EntityStatId = EntityStatId(20);
     /// How close a holder must be to an unload destination before it starts
     /// letting bodies out, in cells; how far from itself it sets one down,
     /// and a gateway one crossing to it.
-    pub const UNLOAD_RANGE: EntityStatId = EntityStatId(22);
+    pub const UNLOAD_RANGE: EntityStatId = EntityStatId(21);
     /// Minimum ticks between successive boardings into one holder. Zero
     /// admits passengers as fast as they arrive.
-    pub const LOAD_PERIOD: EntityStatId = EntityStatId(23);
+    pub const LOAD_PERIOD: EntityStatId = EntityStatId(22);
     /// Minimum ticks between successive exits from one holder.
     /// Zero lets everyone out at once.
-    pub const UNLOAD_PERIOD: EntityStatId = EntityStatId(24);
+    pub const UNLOAD_PERIOD: EntityStatId = EntityStatId(23);
     /// Total transporter slots aboard one instance. Each passenger consumes
     /// its [`CARGO_SIZE`](Self::CARGO_SIZE) of them.
-    pub const CARGO_CAPACITY: EntityStatId = EntityStatId(25);
+    pub const CARGO_CAPACITY: EntityStatId = EntityStatId(24);
     /// How strongly an instance resists displacement where the continuous
     /// movement model resolves contact, relative to what it meets. Every mover
     /// defines one; equals part evenly, and a body twice as heavy as the one it
@@ -94,42 +90,42 @@ impl EntityStatId {
     /// times that, since walking counts for weight of its own. Zero is the far
     /// end of the same scale rather than an absence — a body nothing weighs
     /// against, which yields to everything and shoves nothing.
-    pub const WEIGHT: EntityStatId = EntityStatId(26);
+    pub const WEIGHT: EntityStatId = EntityStatId(25);
     /// How far a walking body's look comes round toward the way it is walking, in
     /// degrees a tick. Every mover defines one. Zero locks the look where it is;
     /// an omitted rate is no limit at all, and the look snaps.
-    pub const TURN_RATE: EntityStatId = EntityStatId(27);
+    pub const TURN_RATE: EntityStatId = EntityStatId(26);
     /// How far a body standing still comes round, in degrees a tick. Every mover
     /// defines one, and ordinarily at least its
     /// [`TURN_RATE`](Self::TURN_RATE): planting the feet is how a body turns
     /// faster than it can while walking.
-    pub const PIVOT_RATE: EntityStatId = EntityStatId(28);
+    pub const PIVOT_RATE: EntityStatId = EntityStatId(27);
     /// How far off its way a body may be looking before it plants its feet and
     /// comes round rather than walking on, in degrees. Zero holds it until it
     /// looks exactly where it is going; an omitted angle never holds it at all,
     /// so it walks while the look catches up.
-    pub const PIVOT_ANGLE: EntityStatId = EntityStatId(29);
+    pub const PIVOT_ANGLE: EntityStatId = EntityStatId(28);
     /// How far a weapon's own bearing comes round toward what it aims at, in
     /// degrees a tick. Only a weapon mounted to bear independently reads it;
     /// omitted, the bearing snaps.
-    pub const AIM_RATE: EntityStatId = EntityStatId(30);
+    pub const AIM_RATE: EntityStatId = EntityStatId(29);
     /// The span a weapon fires through without coming round first, in degrees,
-    /// centred on where it points — ninety shoots forty-five either side. Zero
+    /// centered on where it points — ninety shoots forty-five either side. Zero
     /// fires only along the bearing itself; omitted, the span is the whole circle.
-    pub const ATTACK_ARC: EntityStatId = EntityStatId(31);
+    pub const ATTACK_ARC: EntityStatId = EntityStatId(30);
     /// Health points removed each tick, net of regeneration, while the entity
     /// stands. Fractional and zero by default.
-    pub const HEALTH_DRAIN: EntityStatId = EntityStatId(32);
+    pub const HEALTH_DRAIN: EntityStatId = EntityStatId(31);
     /// Ticks an instance stands before its time runs out. Declaring it is what
     /// gives a type a timed life; without it an instance stands until something
     /// ends it.
-    pub const LIFETIME: EntityStatId = EntityStatId(33);
+    pub const LIFETIME: EntityStatId = EntityStatId(32);
     /// Energy points removed each tick, net of regeneration, while the entity
     /// stands. Fractional and zero by default.
-    pub const ENERGY_DRAIN: EntityStatId = EntityStatId(34);
+    pub const ENERGY_DRAIN: EntityStatId = EntityStatId(33);
     /// Levels the eyes stand above the level the entity stands at. Whole
     /// levels, zero by default.
-    pub const SEES_UP: EntityStatId = EntityStatId(35);
+    pub const SEES_UP: EntityStatId = EntityStatId(34);
 
     /// Creates an entity stat id for the given registration index.
     pub(crate) fn from_index(index: usize) -> Self {
@@ -145,7 +141,7 @@ impl EntityStatId {
 
 /// The built-in entity stats, registered first and in this order, so their
 /// assigned ids equal the [`EntityStatId`] constants above.
-pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 36] = [
+pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 35] = [
     // Current health settles under this ceiling, so a zero would turn any debuff
     // that reached it into an instant kill.
     stats::builtin(EntityStatId::MAX_HEALTH, "max_health", FixedU64::ONE),
@@ -183,9 +179,6 @@ pub(crate) const ENTITY_BUILTIN_STATS: [BuiltinStat<EntityStatId>; 36] = [
         FixedU64::ZERO,
     ),
     stats::builtin(EntityStatId::SUPPLY_COST, "supply_cost", FixedU64::ZERO),
-    // Fractional cells, authored below 1 — a whole-number floor would raise
-    // the values rather than guard them.
-    stats::builtin(EntityStatId::RADIUS, "radius", FixedU64::ZERO),
     // A passenger occupying zero slots would ride for free past any capacity.
     stats::builtin(EntityStatId::CARGO_SIZE, "cargo_size", FixedU64::ONE),
     // Zero range can only be satisfied by standing inside the target's footprint.

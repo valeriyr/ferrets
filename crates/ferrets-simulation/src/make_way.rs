@@ -15,6 +15,7 @@ use crate::{
     },
     entity_def::{self, Operation},
     entity_index::EntityIndex,
+    form::Form,
     game_loop::orders,
     landing::{self, Bound, ComesFrom, Lander},
     map::Map,
@@ -106,19 +107,19 @@ pub fn clears(world: &World, mover: Entity, side: Option<PlayerId>) -> bool {
     allied(world, mover, side) && (gives_way(world, mover) || walks_off(world, mover))
 }
 
-/// What stands between a placement on `footprint`, on `layers` of the plane
-/// `occupancy` selects, and its ground, for `side`: [`Clearance::Clear`] when
-/// `takes` judges the ground to take it as it stands; [`Clearance::Clears`]
-/// when it takes it with the movers standing there set aside — their marks
-/// lifted and the bodies ignored — every one of them either yielding to
-/// `side` or an own or allied walker already on its way; [`Clearance::Held`]
-/// otherwise. The movers are read in id order, none of `except`.
+/// What stands between a body of `form` placed at `anchor`, on the layers it
+/// occupies of the plane its form marks, and its ground, for `side`:
+/// [`Clearance::Clear`] when `takes` judges the ground to take it as it stands;
+/// [`Clearance::Clears`] when it takes it with the movers standing there set
+/// aside — their marks lifted and the bodies ignored — every one of them either
+/// yielding to `side` or an own or allied walker already on its way;
+/// [`Clearance::Held`] otherwise. The movers are read in id order, none of
+/// `except`.
 pub(crate) fn clearance(
     world: &World,
     side: Option<PlayerId>,
-    footprint: CellRect,
-    layers: LayerMask,
-    occupancy: OccupancyClass,
+    form: Form,
+    anchor: CellPos,
     except: &[Entity],
     takes: impl Fn(&[GridMark], &[Entity]) -> bool,
 ) -> Clearance {
@@ -127,7 +128,8 @@ pub(crate) fn clearance(
     }
     let mut marks: Vec<GridMark> = Vec::new();
     let mut bodies: Vec<Entity> = Vec::new();
-    for (mover, _) in movers_on(world, footprint, layers, occupancy, except) {
+    let footprint = form.rect_at(anchor);
+    for (mover, _) in movers_on(world, footprint, form.occupies(), form.occupancy(), except) {
         if !clears(world, mover, side) {
             return Clearance::Held;
         }
@@ -161,28 +163,29 @@ pub(crate) fn ask(
     }
 }
 
-/// Sets every mover standing over `footprint`, on any of `layers` of the
-/// plane `occupancy` selects, but `except`, down at once off it, each on the
-/// nearest cell the set-down search gives it clear of the footprint and of
-/// the cells the others are given: [`Shoved::Cleared`] when every one of them
-/// clears for `side` (see [`clears`]), `takes` judges the ground to take what
-/// needs it with them set aside — their marks lifted and the bodies ignored —
-/// and each finds such a cell; [`Shoved::Held`] otherwise, and nobody is
-/// moved. A walker is settled off any crossing first, and its walk plans again
-/// from where it is set down.
+/// Sets every mover standing over the cells a body of `form` placed at `anchor`
+/// covers, on any of the layers it occupies of the plane its form marks, but
+/// `except`, down at once off them, each on the nearest cell the set-down
+/// search gives it clear of the footprint and of the cells the others are
+/// given: [`Shoved::Cleared`] when every one of them clears for `side` (see
+/// [`clears`]), `takes` judges the ground to take what needs it with them set
+/// aside — their marks lifted and the bodies ignored — and each finds such a
+/// cell; [`Shoved::Held`] otherwise, and nobody is moved. A walker is settled
+/// off any crossing first, and its walk plans again from where it is set down.
 pub(crate) fn shove_off(
     world: &mut World,
     side: Option<PlayerId>,
-    footprint: CellRect,
-    layers: LayerMask,
-    occupancy: OccupancyClass,
+    form: Form,
+    anchor: CellPos,
     except: &[Entity],
     takes: impl Fn(&World, &[GridMark], &[Entity]) -> bool,
 ) -> Shoved {
-    let movers: Vec<Entity> = movers_on(world, footprint, layers, occupancy, except)
-        .into_iter()
-        .map(|(mover, _)| mover)
-        .collect();
+    let footprint = form.rect_at(anchor);
+    let movers: Vec<Entity> =
+        movers_on(world, footprint, form.occupies(), form.occupancy(), except)
+            .into_iter()
+            .map(|(mover, _)| mover)
+            .collect();
     if movers.is_empty() || !movers.iter().all(|&mover| clears(world, mover, side)) {
         return Shoved::Held;
     }
@@ -212,7 +215,7 @@ pub(crate) fn shove_off(
         }) else {
             return Shoved::Held;
         };
-        given.push(CellRect::new(cell, entity_def::size(world, mover)));
+        given.push(CellRect::new(cell, entity_def::extent(world, mover)));
         moves.push((mover, cell));
     }
     // A walker caught mid-step settles first; once set down, its walk plans
@@ -287,17 +290,14 @@ fn blocking_landing(
     lifted: &[GridMark],
     ignored: &[Entity],
 ) -> Option<(CellRect, Vec<Entity>)> {
-    let location = lander
-        .def
-        .location
-        .expect("only a type that stands somewhere lands");
-    let layers = location.occupies();
+    let form = entity_def::form(world, lander.def);
+    let layers = form.occupies();
     let map = world.resource::<Map>();
     let whole = CellRect::new(
         CellPos::new(0, 0),
         CellSize::new(map.nav_grid().width(), map.nav_grid().height()),
     );
-    let occupancy = OccupancyClass::of(lander.def);
+    let occupancy = form.occupancy();
     let clearing: Vec<(Entity, CellRect, Option<GridMark>)> =
         movers_on(world, whole, layers, occupancy, ignored)
             .into_iter()
@@ -322,7 +322,7 @@ fn blocking_landing(
             .iter()
             .any(|(_, measured, _)| measured.intersects(footprint))
     })?;
-    let footprint = CellRect::new(cell, location.size());
+    let footprint = form.rect_at(cell);
     // Every mover in `clearing` is `side`'s own or allied already.
     let on_it = clearing
         .into_iter()
@@ -451,14 +451,15 @@ fn send_off(
     let operation = entity_def::operation(world, occupant);
     orders::prepare_front(occupant, operation, &mut queue, world);
     world.entity_mut(occupant).insert(queue);
-    Some(CellRect::new(cell, entity_def::size(world, occupant)))
+    Some(CellRect::new(cell, entity_def::extent(world, occupant)))
 }
 
 /// Whether `body` is `side`'s own or allied.
 fn allied(world: &World, body: Entity, side: Option<PlayerId>) -> bool {
     world
         .resource::<GameSession>()
-        .owners_allied(side, entity_def::owner(world, body))
+        .relation(side, entity_def::owner(world, body))
+        .is_friendly()
 }
 
 /// Whether `occupant`, whoever's side it is on, gives up its cells when

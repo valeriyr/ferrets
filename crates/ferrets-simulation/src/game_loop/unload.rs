@@ -216,7 +216,7 @@ fn let_out(
 fn dispatch(world: &mut World, holder: Entity, passenger: Entity, at: Option<CellPos>) {
     match at {
         // A holder sends on only its own owner's units.
-        Some(_) if !entity_def::same_owner(world, holder, passenger) => {}
+        Some(_) if !entity_def::relation(world, holder, passenger).is_own() => {}
         Some(cell) => {
             // Walked on as a move to the cell is: its middle on the cell's.
             let walk = orders::move_to_point(cell.middle());

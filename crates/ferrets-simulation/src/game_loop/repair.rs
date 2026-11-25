@@ -27,7 +27,6 @@ use crate::{
     events::SpendCause,
     order::Order,
     resources::{self, PlayerResources},
-    session::GameSession,
     simulation_id::SimulationId,
 };
 use ferrets_content::{
@@ -255,10 +254,7 @@ fn accepts(world: &World, entity: Entity, target: Entity) -> bool {
         return false;
     }
     // Mending an enemy is never the intent, and a neutral belongs to nobody.
-    world.resource::<GameSession>().owners_allied(
-        entity_def::owner(world, entity),
-        entity_def::owner(world, target),
-    )
+    entity_def::relation(world, entity, target).is_friendly()
 }
 
 /// Whether `entity` is shut out of mending `target`: by the crew already on it,

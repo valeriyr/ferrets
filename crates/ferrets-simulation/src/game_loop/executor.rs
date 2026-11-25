@@ -19,7 +19,6 @@ use crate::{
         entity_info::EntityInfoComponent,
         field_source::FieldReach,
         order_queue::{CancelPolicy, OrderQueueComponent},
-        owner,
         rally::{RallyPointComponent, RallyTarget},
         rise::RiseOrigin,
         stance::StanceComponent,
@@ -30,6 +29,7 @@ use crate::{
     entity_def,
     entity_index::EntityIndex,
     events::SpendCause,
+    form::Form,
     input::InputFrames,
     map::Map,
     order::{AttackTarget, BuildTask, Order},
@@ -470,11 +470,8 @@ pub(super) fn resolve_send_to_entity(
     // An explicit Attack command honours any target; the smart click attacks
     // only a hostile one, and a weapon that cannot reach it falls through to
     // following, which is the honest reading of the click.
-    if owner::are_hostile(
-        world.resource::<GameSession>(),
-        entity_def::owner(world, entity),
-        entity_def::owner(world, target),
-    ) && entity_def::has_pool(world, target, PoolId::HEALTH)
+    if entity_def::relation(world, entity, target).is_enemy()
+        && entity_def::has_pool(world, target, PoolId::HEALTH)
     {
         candidates.push(Order::Attack {
             target: AttackTarget::Entity(target_id),
@@ -496,7 +493,7 @@ fn assist_construction(world: &World, entity: Entity, target: Entity) -> Option<
         Some(RiseOrigin::Founded { .. }) => {}
         Some(RiseOrigin::Warped { .. } | RiseOrigin::Summoned { .. }) | None => return None,
     }
-    if !entity_def::same_owner(world, entity, target) {
+    if !entity_def::relation(world, entity, target).is_own() {
         return None;
     }
     Some(Order::Build {
@@ -1042,8 +1039,8 @@ fn body_fits(world: &World, map: &Map, type_name: &str) -> bool {
     world
         .resource::<ContentRegistry>()
         .entity(type_name)
-        .and_then(|def| def.location)
-        .is_none_or(|location| map.fits(location.size()))
+        .and_then(|def| Form::checked(def, map.movement_model()))
+        .is_none_or(|form| map.fits(form.extent()))
 }
 
 /// Whether a selection box `rect` holds `entity`: its middle lies in the box,

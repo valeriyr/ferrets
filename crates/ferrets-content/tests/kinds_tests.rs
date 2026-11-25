@@ -111,6 +111,7 @@ fn standing(name: &str, tags: impl IntoIterator<Item = &'static str>) -> EntityT
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::ONE,
+            None,
             Solidity::Solid,
             utils::GROUND,
         )

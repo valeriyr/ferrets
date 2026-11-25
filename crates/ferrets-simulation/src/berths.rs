@@ -196,7 +196,7 @@ pub fn reseat(world: &mut World, job: Entity) -> Vec<Entity> {
 pub fn seated_location(world: &World, worker: Entity, point: FixedUVec2) -> Location {
     world
         .resource::<Map>()
-        .location_clamped(point, entity_def::size(world, worker))
+        .location_clamped(point, entity_def::extent(world, worker))
 }
 
 /// What the seated `worker` is set down beside: the berth it holds on its job,
@@ -300,7 +300,7 @@ pub fn advance(world: &mut World) {
                 } else {
                     // The berth to move to, if any is free: the next round the
                     // loop for a circling worker, one picked by the worker's
-                    // own mix for a roaming one, so neighbours who sat down
+                    // own mix for a roaming one, so neighbors who sat down
                     // together part ways. The berth held passes to whoever
                     // comes next as this worker leaves.
                     // A seated worker moving on keeps its slot, so only the
@@ -447,7 +447,7 @@ fn spread_pick(
         .map(|step| step_round(seat, step, count, way))
         .filter(|point| free.contains(point))
         .min_by_key(|&point| {
-            // The nearest neighbour decides; a loop with nobody else on it
+            // The nearest neighbor decides; a loop with nobody else on it
             // makes every point as good.
             Reverse(
                 others

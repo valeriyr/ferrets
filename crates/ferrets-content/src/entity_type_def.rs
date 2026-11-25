@@ -399,21 +399,19 @@ impl EntityTypeDef {
     }
 
     /// Enables movement for this entity type at the given speed (grid units per
-    /// tick), with a body of `radius` that resists displacement as `weight`
-    /// against what it meets, whose look comes round at `turn_rate` while walking
-    /// and at `pivot_rate` while standing (both degrees a tick).
+    /// tick), with a body that resists displacement as `weight` against what it
+    /// meets, whose look comes around at `turn_rate` while walking and at
+    /// `pivot_rate` while standing (both degrees a tick).
     ///
     /// Panics if `speed` is `0`.
     pub fn with_movement(
         mut self,
         speed: FixedU64,
-        radius: FixedU64,
         weight: FixedU64,
         turn_rate: FixedU64,
         pivot_rate: FixedU64,
     ) -> Self {
         self.base_stats.insert_own(EntityStatId::SPEED, speed);
-        self.base_stats.insert_own(EntityStatId::RADIUS, radius);
         self.base_stats.insert_own(EntityStatId::WEIGHT, weight);
         self.base_stats
             .insert_own(EntityStatId::TURN_RATE, turn_rate);
@@ -513,18 +511,20 @@ impl EntityTypeDef {
     }
 
     /// Sets the navigation and footprint properties: the domain, the footprint
-    /// size in grid cells, whether instances claim the cells they stand on,
-    /// and the layers the footprint occupies.
+    /// size in grid cells, the radius of the body's circle, whether instances
+    /// claim the cells they stand on, and the layers the footprint occupies.
     ///
-    /// Panics if `occupies` is empty or `size` has a zero dimension.
+    /// Panics if `occupies` is empty, `size` has a zero dimension, or a
+    /// declared `radius` is zero or above [`crate::location::MAX_RADIUS`].
     pub fn with_location(
         mut self,
         domain: DomainId,
         size: CellSize,
+        radius: Option<FixedU64>,
         solidity: Solidity,
         occupies: impl Into<LayerMask>,
     ) -> Self {
-        self.location = Some(LocationDef::new(domain, size, solidity, occupies));
+        self.location = Some(LocationDef::new(domain, size, radius, solidity, occupies));
         self
     }
 

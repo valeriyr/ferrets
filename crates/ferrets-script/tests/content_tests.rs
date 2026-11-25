@@ -96,12 +96,12 @@ fn loads_races_resources_and_entities() {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::ONE,
+            Some(FixedU64::from_str("0.5").unwrap()),
             Solidity::Solid,
             utils::GROUND,
         )
         .with_movement(
             FixedU64::from_str("0.3").unwrap(),
-            FixedU64::from_str("0.5").unwrap(),
             FixedU64::from_str("2").unwrap(),
             FixedU64::from_num(30),
             FixedU64::from_num(30),
@@ -149,6 +149,7 @@ fn declared_acquire_range_overrides_weapon_range_default() {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::ONE,
+            None,
             Solidity::Solid,
             utils::GROUND,
         )
@@ -292,6 +293,7 @@ fn parses_armor_bonus_damage_vs_and_energy() {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::ONE,
+            None,
             Solidity::Solid,
             utils::GROUND,
         )
@@ -634,15 +636,15 @@ fn parses_transporter() {
         define_tag("infantry")
 
         define_entity("footman", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_size = 1 },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, cargo_size = 1 },
             pools = { health = { maximum = 60 } },
             tags = { "infantry" },
         })
 
         define_entity("wagon", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = "0.25", turn_rate = 30, pivot_rate = 30, radius = "0.5", cargo_capacity = 6,
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = "0.25", turn_rate = 30, pivot_rate = 30, cargo_capacity = 6,
                 load_range = 2, unload_range = 3, load_period = 4, unload_period = 8,
             },
             pools = { health = { maximum = 150 } },
@@ -1531,6 +1533,7 @@ fn parses_projectile_and_splash() {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::ONE,
+            None,
             Solidity::Solid,
             utils::GROUND,
         )
@@ -1682,6 +1685,7 @@ fn parses_selection_priority_and_class() {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::ONE,
+            None,
             Solidity::Solid,
             utils::GROUND,
         )
@@ -2463,6 +2467,7 @@ fn loads_occupies_mask_combined_with_bitwise_or() {
     let expected = EntityTypeDef::new("gryphon").with_location(
         utils::GROUND_DOMAIN,
         CellSize::ONE,
+        None,
         Solidity::Solid,
         utils::GROUND | utils::AIR,
     );
@@ -4801,9 +4806,9 @@ fn unknown_morph_reason_errors() {
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
             tags = { "winged" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "committed", reason = "growth" },
             },
@@ -4864,8 +4869,8 @@ fn morph_interrupted_and_reason_read_and_default() {
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_resource("gold")
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             pools = { health = { maximum = 40 } },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "full" }, time = 20, placement = "nearby", cancel = "refundable",
@@ -4874,8 +4879,8 @@ fn morph_interrupted_and_reason_read_and_default() {
             },
         })
         define_entity("flier", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             pools = { health = { maximum = 40 } },
         })
         define_entity("statue", {
@@ -4913,13 +4918,13 @@ fn morph_without_pool_carry_names_no_pool() {
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             morphs = { { into = "flier", time = 20, placement = "reserve", cancel = "committed" } },
         })
         define_entity("flier", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -4983,13 +4988,13 @@ fn unknown_pool_carry_errors() {
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             morphs = { { into = "flier", land_pool_carry = { health = "half" }, time = 20, placement = "reserve", cancel = "committed" } },
         })
         define_entity("flier", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
         })
     "#;
     let Err(error) = content::load(&engine(), source) else {
@@ -5382,8 +5387,8 @@ fn unknown_morph_interrupted_errors() {
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "committed", interrupted = "vanishes" },
             },
@@ -6398,9 +6403,9 @@ const ARCHER: &str = r#"
 
     define_entity("archer", {
         race = "human",
-        location = { domain = "ground", size = 1, solidity = "solid" },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
         stats = {
-            speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 2,
+            speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 2,
             damage = 6, attack_range = 4, attack_period = 7, damage_point = 3,
         },
         pools = { health = { maximum = 40 } },
@@ -6424,8 +6429,8 @@ const BASE: &str = r#"
 
     define_entity("peasant", {
         race = "human",
-        location = { domain = "ground", size = 1, solidity = "solid" },
-        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", build_range = 1, harvest_range = 1 },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, build_range = 1, harvest_range = 1 },
         pools = { health = { maximum = 30 } },
         dying = { time = 2 },
         price = { gold = 50 },
@@ -6492,8 +6497,8 @@ const FIELDS: &str = r#"
     })
 
     define_entity("zergling", {
-        location = { domain = "ground", size = 1, solidity = "solid" },
-        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, radius = "0.5", weight = 1 },
+        location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+        stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1 },
         pools = { health = { maximum = 20 } },
         field_effects = {
             { field = "creep", of = "anyone", coverage = "any", inside = { {
@@ -6542,8 +6547,8 @@ fn morph_transitions_round_trip() {
         define_entity_stat("morph_time", 1)
 
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5", morph_time = 20 },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, morph_time = 20 },
             pools = { health = { maximum = 40 }, energy = { maximum = 50 } },
             tags = { "winged" },
             morphs = {
@@ -6562,8 +6567,8 @@ fn morph_transitions_round_trip() {
             },
         })
         define_entity("flier", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             pools = { health = { maximum = 40 } },
         })
         define_entity("chrysalis", {
@@ -6625,8 +6630,8 @@ fn unknown_morph_placement_errors() {
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "hover", cancel = "committed" },
             },
@@ -6648,8 +6653,8 @@ fn unknown_morph_cancel_errors() {
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = 20, placement = "reserve", cancel = "maybe" },
             },
@@ -6671,8 +6676,8 @@ fn morph_time_of_wrong_shape_errors() {
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = "fast", placement = "reserve", cancel = "committed" },
             },
@@ -6694,8 +6699,8 @@ fn unknown_morph_time_stat_errors() {
         local LAND = define_terrain("land")
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("walker", {
-            location = { domain = "ground", size = 1, solidity = "solid" },
-            stats = { speed = 1, turn_rate = 30, pivot_rate = 30, radius = "0.5" },
+            location = { domain = "ground", size = 1, radius = "0.5", solidity = "solid" },
+            stats = { speed = 1, turn_rate = 30, pivot_rate = 30 },
             morphs = {
                 { into = "flier", land_pool_carry = { health = "share" }, time = { stat = "bogus" }, placement = "reserve", cancel = "committed" },
             },
@@ -6723,8 +6728,8 @@ fn parses_turret_and_its_mount() {
         })
 
         define_entity("wagon", {
-            location = { domain = "ground", size = { 2, 2 }, solidity = "solid" },
-            stats = { speed = "0.3", radius = "1", weight = "2",
+            location = { domain = "ground", size = { 2, 2 }, radius = "1", solidity = "solid" },
+            stats = { speed = "0.3", weight = "2",
                 turn_rate = 30, pivot_rate = 30, aim_rate = 30,
                 damage = 6, attack_range = 4, acquire_range = 6, attack_period = 7, damage_point = 3,
             },
@@ -6748,12 +6753,12 @@ fn parses_turret_and_its_mount() {
         .with_location(
             utils::GROUND_DOMAIN,
             CellSize::new(2, 2),
+            Some(FixedU64::from_str("1").unwrap()),
             Solidity::Solid,
             utils::GROUND,
         )
         .with_movement(
             FixedU64::from_str("0.3").unwrap(),
-            FixedU64::from_str("1").unwrap(),
             FixedU64::from_str("2").unwrap(),
             FixedU64::from_num(30),
             FixedU64::from_num(30),

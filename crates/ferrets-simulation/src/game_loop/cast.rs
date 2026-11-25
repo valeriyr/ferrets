@@ -45,7 +45,7 @@ use crate::{
         entity_skills::{self, SkillsComponent},
         field_source::FieldReach,
         order_queue::{CancelPolicy, OrderState},
-        owner, pools,
+        pools,
         rise::{RiseAttendance, RiseOrigin},
     },
     entity_def,
@@ -804,7 +804,7 @@ fn resolve(
             let session = world.resource::<GameSession>();
             let caster_owner = entity_def::owner(world, caster);
             let target_owner = entity_def::owner(world, target);
-            if !owner::admits(session, *side, caster_owner, target_owner) {
+            if !session.relation(caster_owner, target_owner).fits(*side) {
                 return Err(AimRefusal::WrongSide);
             }
             if !names(world, target, kinds) {
@@ -977,10 +977,7 @@ fn summoning(
     let count = entity_def::quantity_count(world, caster, count);
     let def = world.resource::<ContentRegistry>().def(entity_type);
     // A body wider or taller than the map has no place on it.
-    let size = def
-        .location
-        .expect("a summoned type stands somewhere")
-        .size();
+    let size = entity_def::form(world, def).extent();
     if !world.resource::<Map>().fits(size) {
         return None;
     }
@@ -1229,7 +1226,7 @@ fn gather(
                 return None;
             }
             let owner = entity_def::owner(world, entity);
-            let admitted = owner::admits(session, gathering.side, Some(player), owner)
+            let admitted = session.relation(Some(player), owner).fits(gathering.side)
                 && names(world, entity, &gathering.kinds)
                 && match gathering.sight {
                     GatherSight::Blind => true,
@@ -1510,10 +1507,7 @@ fn exact_anchor(world: &World, aim: CastAim, def: &EntityTypeDef) -> CellPos {
     match aim {
         CastAim::Cell(cell) => cell,
         CastAim::Entity(target) | CastAim::Remains(target) => {
-            let size = def
-                .location
-                .expect("a summoned type stands somewhere")
-                .size();
+            let size = entity_def::form(world, def).extent();
             let aimed = entity_def::location(world, target);
             world
                 .resource::<Map>()

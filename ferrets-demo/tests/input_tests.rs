@@ -488,6 +488,27 @@ fn ghost_snaps_to_seen_source_under_cursor_and_to_no_other() {
     );
 }
 
+/// A snap reads the cells a body holds, not its declared look: a tusker
+/// (a 3×3 look on a body of radius 0.5) at the map's left edge holds the one
+/// cell (0, 30) on a continuous map, so a cursor there snaps to it and one a
+/// cell over, inside the look, does not.
+#[test]
+fn ghost_snaps_to_cells_body_holds_at_map_edge() {
+    let mut app = utils::demo_map_app(MovementModel::Continuous);
+    let (tusker, _) = utils::create_entity(app.world_mut(), "tusker", utils::cell(0, 30), Some(0))
+        .expect("the demo content defines a tusker");
+
+    let seen = Sighted(Sighting::Seen);
+    assert_eq!(
+        snap(&app, tusker, "tusker", CellPos::new(0, 30), &seen),
+        Some(CellPos::new(0, 30))
+    );
+    assert_eq!(
+        snap(&app, tusker, "tusker", CellPos::new(1, 30), &seen),
+        None
+    );
+}
+
 #[test]
 fn ghost_snapped_to_source_fits_only_as_its_field_rules_say() {
     let mut app = utils::demo_map_app(MovementModel::Continuous);

@@ -1,9 +1,9 @@
-//! Bodies against standing terrain: overlap checks and sliding commits.
+//! The ground a body may not enter: terrain, the map's edge and bodies.
 
 mod utils;
 
 use ferrets_geometry::{cell_pos::CellPos, cell_size::CellSize, shape::Shape};
-use ferrets_math::{FixedI64, FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
+use ferrets_math::{FixedU64, fixed_urect::FixedURect, fixed_uvec2::FixedUVec2};
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing,
     mover_shape::MoverShape,
@@ -12,7 +12,10 @@ use ferrets_nav_grid::{
     slope::{Direction, Slope},
     terrain_mask::TerrainMask,
 };
-use ferrets_physics::terrain;
+use ferrets_physics::{
+    ground::{self, Ground},
+    motion,
+};
 
 //
 // ─── Fit ──────────────────────────────────────────────────────────────────────
@@ -22,7 +25,7 @@ use ferrets_physics::terrain;
 fn body_fits_open_ground() {
     let grid = walled_grid(&[]);
 
-    assert!(terrain::body_fits(
+    assert!(ground::body_fits(
         &grid,
         utils::ground_shape(),
         circle(utils::point("3.5", "3.5"), utils::cells("0.5"))
@@ -33,7 +36,7 @@ fn body_fits_open_ground() {
 fn body_reaching_into_wall_does_not_fit() {
     let grid = walled_grid(&[(5, 5)]);
 
-    assert!(!terrain::body_fits(
+    assert!(!ground::body_fits(
         &grid,
         utils::ground_shape(),
         circle(utils::point("5.2", "5.5"), utils::cells("0.5"))
@@ -45,7 +48,7 @@ fn body_reaching_into_wall_does_not_fit() {
 fn body_touching_wall_boundary_fits() {
     let grid = walled_grid(&[(5, 5)]);
 
-    assert!(terrain::body_fits(
+    assert!(ground::body_fits(
         &grid,
         utils::ground_shape(),
         circle(utils::point("4.5", "5.5"), utils::cells("0.5"))
@@ -58,12 +61,12 @@ fn body_touching_wall_boundary_fits() {
 fn body_of_no_radius_fits_only_on_clear_cell() {
     let grid = walled_grid(&[(5, 5)]);
 
-    assert!(!terrain::body_fits(
+    assert!(!ground::body_fits(
         &grid,
         utils::ground_shape(),
         circle(utils::point("5.5", "5.5"), utils::cells("0"))
     ));
-    assert!(terrain::body_fits(
+    assert!(ground::body_fits(
         &grid,
         utils::ground_shape(),
         circle(utils::point("4.5", "5.5"), utils::cells("0"))
@@ -75,7 +78,7 @@ fn body_of_no_radius_fits_only_on_clear_cell() {
 fn body_reaching_into_terrain_off_its_shape_does_not_fit() {
     let grid = water_grid(&[(5, 5)]);
 
-    assert!(!terrain::body_fits(
+    assert!(!ground::body_fits(
         &grid,
         utils::ground_shape(),
         circle(utils::point("5.2", "5.5"), utils::cells("0.5"))
@@ -91,12 +94,12 @@ fn box_body_reaching_into_wall_by_its_corner_does_not_fit() {
     // Middle (4.6, 5.4): a circle of 0.5 lies √(0.4² + 0.4²) ≈ 0.57 from
     // the wall's corner (5, 5), clear of it; the 1×1 box spans 4.1–5.1 by
     // 4.9–5.9, into (5, 4).
-    assert!(terrain::body_fits(
+    assert!(ground::body_fits(
         &grid,
         utils::ground_shape(),
         circle(utils::point("4.6", "5.4"), utils::cells("0.5")),
     ));
-    assert!(!terrain::body_fits(
+    assert!(!ground::body_fits(
         &grid,
         utils::ground_shape(),
         boxed(utils::point("4.6", "5.4")),
@@ -116,31 +119,31 @@ fn box_body_reaching_into_wall_by_its_corner_does_not_fit() {
 fn blocked_axis_drops_and_slide_keeps_other() {
     let grid = walled_grid(&[(5, 4), (5, 5), (5, 6)]);
 
-    let committed = terrain::slide_toward(
+    let reached = step(
         &grid,
         utils::ground_shape(),
         circle(utils::point("4.4", "5.4"), utils::cells("0.5")),
         utils::point("4.7", "5.7"),
     );
 
-    assert_eq!(committed, utils::point("4.4", "5.7"));
+    assert_eq!(reached, utils::point("4.4", "5.7"));
 }
 
-/// A step wanted straight into a wall commits nothing — the caller reads no
+/// A step wanted straight into a wall moves nothing — the caller reads no
 /// movement out of a wanted one as "walled off".
 #[test]
 fn step_into_wall_stays_put() {
     let grid = walled_grid(&[(5, 4), (5, 5), (5, 6)]);
     let position = utils::point("4.5", "5.5");
 
-    let committed = terrain::slide_toward(
+    let reached = step(
         &grid,
         utils::ground_shape(),
         circle(position, utils::cells("0.5")),
         utils::point("4.8", "5.5"),
     );
 
-    assert_eq!(committed, position);
+    assert_eq!(reached, position);
 }
 
 /// The same diagonal step into a column of water: the x advance is refused
@@ -149,14 +152,14 @@ fn step_into_wall_stays_put() {
 fn blocked_axis_drops_against_terrain_off_its_shape() {
     let grid = water_grid(&[(5, 4), (5, 5), (5, 6)]);
 
-    let committed = terrain::slide_toward(
+    let reached = step(
         &grid,
         utils::ground_shape(),
         circle(utils::point("4.4", "5.4"), utils::cells("0.5")),
         utils::point("4.7", "5.7"),
     );
 
-    assert_eq!(committed, utils::point("4.4", "5.7"));
+    assert_eq!(reached, utils::point("4.4", "5.7"));
 }
 
 /// A shape that takes the water too steps onto it whole.
@@ -169,71 +172,61 @@ fn shape_over_water_slides_onto_it() {
         None,
     );
 
-    let committed = terrain::slide_toward(
+    let reached = step(
         &grid,
         wading,
         circle(utils::point("4.4", "5.4"), utils::cells("0.5")),
         utils::point("4.7", "5.7"),
     );
 
-    assert_eq!(committed, utils::point("4.7", "5.7"));
+    assert_eq!(reached, utils::point("4.7", "5.7"));
 }
 
-//
-// ─── Displacement ─────────────────────────────────────────────────────────────
-//
-
+/// A body of no radius is the cell its middle lies in: a diagonal step from
+/// (4.5, 5.5) to (5.2, 5.8) would put it in water at (5, 5), so the x advance
+/// drops and the y advance survives.
 #[test]
-fn displacement_applies_signed_pushes() {
-    // x: 2.5 + 0.5 = 3; y: 2.5 − 0.25 = 2.25.
-    assert_eq!(
-        terrain::displaced(
-            utils::location("2.5", "2.5", CellSize::ONE),
-            utils::signed_cells("0.5"),
-            utils::signed_cells("-0.25"),
-            utils::MAP_SIZE,
-        ),
-        utils::point("3", "2.25")
+fn body_of_no_radius_is_stopped_by_water() {
+    let grid = water_grid(&[(5, 4), (5, 5), (5, 6)]);
+
+    let reached = step(
+        &grid,
+        utils::ground_shape(),
+        circle(utils::point("4.5", "5.5"), utils::cells("0")),
+        utils::point("5.2", "5.8"),
     );
+
+    assert_eq!(reached, utils::point("4.5", "5.8"));
 }
 
+/// A body of radius 0.7 moves as its 2×2 square. Stepping from (5, 5) to
+/// (5.5, 5.5) beside water at (6, 6), its circle would clear the water by
+/// √(0.5² + 0.5²) − 0.7 ≈ 0.007, but its square, anchored at
+/// (5.5 − 1 + 0.5, 5.5 − 1 + 0.5) = (5, 5), would cover it; the x advance
+/// alone, anchored at (5, 4), keeps its square on land:
+///
+///   . . . .     y 4
+///   . ○→. .     y 5
+///   . . . ≈     y 6, water at (6, 6)
 #[test]
-fn displacement_holds_body_clear_of_origin() {
-    // A 1×1 pushed 2 west from x 1.5 stops with its middle at 1/2, its edge
-    // on the origin; a 2×2 at 2/2 = 1.
-    assert_eq!(
-        terrain::displaced(
-            utils::location("1.5", "1.5", CellSize::ONE),
-            FixedI64::from_num(-2),
-            FixedI64::ZERO,
-            utils::MAP_SIZE,
-        ),
-        utils::point("0.5", "1.5")
+fn step_keeps_body_square_off_ground_its_circle_clears() {
+    let grid = water_grid(&[(6, 6)]);
+    let stout = MoverShape::new(
+        TerrainMask::from(utils::LAND),
+        utils::GROUND,
+        utils::GROUND,
+        CellSize::new(2, 2),
+        None,
     );
-    assert_eq!(
-        terrain::displaced(
-            utils::location("2", "2", CellSize::new(2, 2)),
-            FixedI64::from_num(-2),
-            FixedI64::ZERO,
-            utils::MAP_SIZE,
-        ),
-        utils::point("1", "2")
-    );
-}
 
-#[test]
-fn displacement_holds_body_short_of_far_edge() {
-    // A 2×2 pushed 2 south from y 62 on a 64-high map stops with its middle
-    // at 64 − 2/2 = 63, its edge on the map's.
-    assert_eq!(
-        terrain::displaced(
-            utils::location("10", "62", CellSize::new(2, 2)),
-            FixedI64::ZERO,
-            FixedI64::from_num(2),
-            utils::MAP_SIZE,
-        ),
-        utils::point("10", "63")
+    let reached = step(
+        &grid,
+        stout,
+        circle(utils::point("5", "5"), utils::cells("0.7")),
+        utils::point("5.5", "5.5"),
     );
+
+    assert_eq!(reached, utils::point("5.5", "5"));
 }
 
 //
@@ -249,13 +242,13 @@ fn body_reaching_before_origin_does_not_fit() {
         size: CellSize::new(2, 2),
         ..utils::ground_shape()
     };
-    assert!(!terrain::body_fits(
+    assert!(!ground::body_fits(
         &grid,
         shape,
         circle(utils::point("0.5", "4"), utils::cells("0.4"))
     ));
     // At x 1 it spans 0–2, its edge on the origin's.
-    assert!(terrain::body_fits(
+    assert!(ground::body_fits(
         &grid,
         shape,
         circle(utils::point("1", "4"), utils::cells("0.4"))
@@ -270,7 +263,7 @@ fn step_past_either_edge_slides_along_it() {
     // far edge: the same.
     let grid = walled_grid(&[]);
     assert_eq!(
-        terrain::slide_toward(
+        step(
             &grid,
             utils::ground_shape(),
             circle(utils::point("0.6", "3.5"), utils::cells("0.5")),
@@ -279,7 +272,7 @@ fn step_past_either_edge_slides_along_it() {
         utils::point("0.6", "3.8")
     );
     assert_eq!(
-        terrain::slide_toward(
+        step(
             &grid,
             utils::ground_shape(),
             circle(utils::point("7.4", "3.5"), utils::cells("0.5")),
@@ -299,7 +292,7 @@ fn box_body_slides_by_its_corner() {
     // 4.75–5.75, into (5, 4); the axes tie at 0.25 and x is kept: at
     // (4.75, 5.5) it spans 5–6 in y, clear of row 4.
     assert_eq!(
-        terrain::slide_toward(
+        step(
             &grid,
             utils::ground_shape(),
             boxed(utils::point("4.5", "5.5")),
@@ -313,8 +306,8 @@ fn box_body_slides_by_its_corner() {
 // ─── Draining a clip ──────────────────────────────────────────────────────────
 //
 
-/// A building raised against a standing body leaves its circle clipping the
-/// static footprint; a step out of the clip must commit, or the body is
+/// A footprint set down against a standing body leaves its circle clipping
+/// the static footprint; a step out of the clip must commit, or the body is
 /// frozen where it stands forever.
 #[test]
 fn clipped_body_walks_out_of_wall() {
@@ -323,7 +316,7 @@ fn clipped_body_walks_out_of_wall() {
     // Clipping the wall's west face; a step further west drains the clip.
     let desired = utils::point("4.9", "5.5");
     assert_eq!(
-        terrain::slide_toward(
+        step(
             &grid,
             utils::ground_shape(),
             circle(utils::point("5.2", "5.5"), utils::cells("0.5")),
@@ -341,7 +334,7 @@ fn clipped_body_cannot_clip_deeper() {
     // (5, 6), so only the along-x axis (which keeps the existing clip and
     // adds nothing) commits.
     assert_eq!(
-        terrain::slide_toward(
+        step(
             &grid,
             utils::ground_shape(),
             circle(utils::point("5.2", "5.5"), utils::cells("0.5")),
@@ -349,6 +342,33 @@ fn clipped_body_cannot_clip_deeper() {
         ),
         utils::point("5.4", "5.5")
     );
+}
+
+/// A clipped square body may step to a new anchor that keeps the blocked
+/// cell it already overlaps, and no new one: a radius-0.7 body (a 2×2
+/// square) at (5, 5) holds (4..=5, 4..=5), clipping the wall at (5, 5);
+/// aimed at (5.5, 5.5) its square would anchor at (5, 5) and newly take the
+/// wall at (6, 6), so the step keeps its x axis alone, to (5.5, 5) — a new
+/// anchor (5, 4) whose square (5..=6, 4..=5) keeps the clip and adds nothing.
+#[test]
+fn clipped_square_steps_to_new_anchor_keeping_its_clip() {
+    let grid = walled_grid(&[(5, 5), (6, 6)]);
+    let stout = MoverShape::new(
+        TerrainMask::from(utils::LAND),
+        utils::GROUND,
+        utils::GROUND,
+        CellSize::new(2, 2),
+        None,
+    );
+
+    let reached = step(
+        &grid,
+        stout,
+        circle(utils::point("5", "5"), utils::cells("0.7")),
+        utils::point("5.5", "5.5"),
+    );
+
+    assert_eq!(reached, utils::point("5.5", "5"));
 }
 
 //
@@ -371,7 +391,7 @@ fn body_climbs_only_where_ramp_rises_unless_it_walks_cliffs() {
         Some(CliffCrossing::Cross),
     );
     let slide = |shape, from: (&str, &str), to: (&str, &str)| {
-        terrain::slide_toward(
+        step(
             &grid,
             shape,
             circle(utils::point(from.0, from.1), utils::cells("0.5")),
@@ -408,14 +428,14 @@ fn small_body_never_steps_its_middle_across_cliff() {
 
     // Centered at 3.9 its circle of 0.1 spans 3.8 to 4.0, in (3, 0); at 4.4
     // it spans 4.3 to 4.5, wholly in the plateau's (4, 0) at 2.
-    let committed = terrain::slide_toward(
+    let reached = step(
         &grid,
         walker,
         circle(utils::point("3.9", "0.5"), utils::cells("0.1")),
         utils::point("4.4", "0.5"),
     );
 
-    assert_eq!(committed, utils::point("3.9", "0.5"));
+    assert_eq!(reached, utils::point("3.9", "0.5"));
 }
 
 /// A body whose circle reaches across a cliff edge the map paints with no
@@ -433,7 +453,7 @@ fn body_overlapping_cell_beyond_cliff_fits_only_if_it_crosses() {
     // At 3.8 the middle lies in (3, 0) at 1, and a circle of 0.5 spans 3.3
     // to 4.3, into the plateau's (4, 0) at 2.
     let fits = |crossing| {
-        terrain::body_fits(
+        ground::body_fits(
             &grid,
             shape(crossing),
             circle(utils::point("3.8", "0.5"), utils::cells("0.5")),
@@ -445,7 +465,55 @@ fn body_overlapping_cell_beyond_cliff_fits_only_if_it_crosses() {
 }
 
 //
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Obstacles ────────────────────────────────────────────────────────────────
+//
+
+/// A walker sinks into an obstacle only by ending deeper than it stands: 0.8
+/// from a middle it touches at 1, ending 0.6 away sinks; ending 0.8 away on
+/// another side, or 0.9 away still overlapping, does not.
+#[test]
+fn walker_sinks_only_by_ending_deeper() {
+    let walker = utils::resting("4.2", "5").shape();
+    let obstacle = utils::resting("5", "5").shape();
+
+    let obstacles = [obstacle];
+    let grid = utils::open_grid();
+    let ground = Ground::new(&grid, utils::ground_shape(), walker, &obstacles);
+
+    assert!(!ground.admits(utils::point("4.4", "5")));
+    assert!(ground.admits(utils::point("5", "4.2")));
+    assert!(ground.admits(utils::point("4.1", "5")));
+}
+
+/// A step that ends clear of the obstacle never sinks, nearer as it comes:
+/// from 1.5 away to 1.2.
+#[test]
+fn step_ending_clear_never_sinks() {
+    let walker = utils::resting("3.5", "5").shape();
+    let obstacle = utils::resting("5", "5").shape();
+
+    let obstacles = [obstacle];
+    let grid = utils::open_grid();
+    let ground = Ground::new(&grid, utils::ground_shape(), walker, &obstacles);
+
+    assert!(ground.admits(utils::point("3.8", "5")));
+}
+
+/// Sinking is judged between circles alone.
+#[test]
+#[should_panic(expected = "contact is between circles")]
+fn sinking_into_box_panics() {
+    let walker = utils::resting("4.2", "5").shape();
+    let obstacle = Shape::cell(CellPos::new(5, 5));
+
+    let obstacles = [obstacle];
+    let grid = utils::open_grid();
+
+    Ground::new(&grid, utils::ground_shape(), walker, &obstacles).admits(utils::point("4.4", "5"));
+}
+
+//
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 //
 
 /// An 8×8 single-layer grid with the given cells statically walled.
@@ -502,4 +570,10 @@ fn boxed(middle: FixedUVec2) -> Shape {
             middle.y + utils::cells("0.5"),
         ),
     ))
+}
+
+/// Where a body whose circle is `body`, moving as `mover` over `grid`, gets
+/// toward `desired` past the terrain alone.
+fn step(grid: &NavGrid, mover: MoverShape, body: Shape, desired: FixedUVec2) -> FixedUVec2 {
+    motion::advance(desired, &Ground::new(grid, mover, body, &[])).point(body.middle())
 }

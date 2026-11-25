@@ -3,10 +3,7 @@
 //! claiming its cells.
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_content::{
-    location::{LocationDef, Solidity},
-    registry::ContentRegistry,
-};
+use ferrets_content::{location::Solidity, registry::ContentRegistry};
 use ferrets_geometry::{cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize};
 use ferrets_nav_grid::{
     cliff_crossing::CliffCrossing, layer_mask::LayerMask, mover_shape::MoverShape,
@@ -15,6 +12,7 @@ use ferrets_nav_grid::{
 use crate::{
     entity_def,
     entity_index::EntityIndex,
+    form::Form,
     map::Map,
     occupancy::{GridMark, OccupancyClass},
     simulation_id::SimulationId,
@@ -54,8 +52,8 @@ pub fn takes(map: &Map, anchor: CellPos, shape: MoverShape, occupancy: Occupancy
     grid.fits_ground(anchor, shape) && grid.holds_together(anchor, shape) && flat
 }
 
-/// Whether the ground takes a footprint of `to` anchored at `anchor` on the
-/// plane `occupancy` selects: ground it [`takes`]; every cell free of standing
+/// Whether the ground takes a body of `to` anchored at `anchor` on the
+/// plane its form marks: ground it [`takes`]; every cell free of standing
 /// footprints but for what `lifted` marks — what the bodies being placed
 /// mark on it already (see [`entity_def::grid_mark`]) — and, for a body
 /// claiming its cells, clear of units and reservations but those of
@@ -65,13 +63,12 @@ pub fn takes(map: &Map, anchor: CellPos, shape: MoverShape, occupancy: Occupancy
 pub fn can_place(
     world: &World,
     anchor: CellPos,
-    to: LocationDef,
-    occupancy: OccupancyClass,
+    to: Form,
     lifted: &[GridMark],
     ignored: &[Entity],
 ) -> bool {
-    on_free_ground(world, anchor, to, occupancy, lifted)
-        && match occupancy {
+    on_free_ground(world, anchor, to, lifted)
+        && match to.occupancy() {
             OccupancyClass::Claim => true,
             OccupancyClass::Static => is_clear(&ground_holders(world, ignored), anchor, to),
         }
@@ -82,13 +79,12 @@ pub fn can_place(
 pub(crate) fn can_place_clear_of(
     world: &World,
     anchor: CellPos,
-    to: LocationDef,
-    occupancy: OccupancyClass,
+    to: Form,
     lifted: &[GridMark],
     holders: &[GroundHolder],
 ) -> bool {
-    on_free_ground(world, anchor, to, occupancy, lifted)
-        && match occupancy {
+    on_free_ground(world, anchor, to, lifted)
+        && match to.occupancy() {
             OccupancyClass::Claim => true,
             OccupancyClass::Static => is_clear(holders, anchor, to),
         }
@@ -140,27 +136,21 @@ pub(crate) fn ground_holders(world: &World, ignored: &[Entity]) -> Vec<GroundHol
         .collect()
 }
 
-/// Whether the ground [`takes`] a footprint of `to` anchored at `anchor` on the
-/// plane `occupancy` selects, every cell free of standing footprints but for
+/// Whether the ground [`takes`] a body of `to` anchored at `anchor` on the
+/// plane its form marks, every cell free of standing footprints but for
 /// what `lifted` marks, and, for a body claiming its cells, clear of units and
 /// reservations (see [`clear_of_units`]).
-fn on_free_ground(
-    world: &World,
-    anchor: CellPos,
-    to: LocationDef,
-    occupancy: OccupancyClass,
-    lifted: &[GridMark],
-) -> bool {
+fn on_free_ground(world: &World, anchor: CellPos, to: Form, lifted: &[GridMark]) -> bool {
     let map = world.resource::<Map>();
-    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), &to);
-    takes(map, anchor, shape, occupancy)
+    let shape = entity_def::mover_shape(world.resource::<ContentRegistry>(), to);
+    takes(map, anchor, shape, to.occupancy())
         && map.is_statically_free_over_lifted(anchor, shape, lifted)
         && match to.solidity() {
             Solidity::Solid => clear_of_units(
                 world,
-                CellRect::new(anchor, shape.size),
+                to.rect_at(anchor),
                 shape.layers,
-                occupancy,
+                to.occupancy(),
                 lifted,
             ),
             Solidity::Underfoot | Solidity::Passable => true,
@@ -237,8 +227,8 @@ fn clear_of_units(
 
 /// Whether none of `holders` keeps a static footprint of `to` anchored at
 /// `anchor` off the ground it would be raised over.
-fn is_clear(holders: &[GroundHolder], anchor: CellPos, to: LocationDef) -> bool {
-    let footprint = CellRect::new(anchor, to.size());
+fn is_clear(holders: &[GroundHolder], anchor: CellPos, to: Form) -> bool {
+    let footprint = to.rect_at(anchor);
     !holders.iter().any(|holder| {
         holder.layers & to.occupies() != LayerMask::EMPTY
             && holder.footprint.intersects(footprint)
