@@ -1650,10 +1650,11 @@ fn settle_unadmitted_passengers(world: &mut World, entity: Entity, to: PlayerId,
         let Some(passenger) = world.resource::<EntityIndex>().alive(id) else {
             continue;
         };
-        let admitted = world
-            .resource::<GameSession>()
-            .relation(Some(to), entity_def::owner(world, passenger))
-            .fits(boarding);
+        let admitted = boarding.contains(
+            world
+                .resource::<GameSession>()
+                .relation(Some(to), entity_def::owner(world, passenger)),
+        );
         if admitted {
             continue;
         }

@@ -5,7 +5,6 @@
 mod utils;
 
 use ferrets_content::{
-    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     build::BuilderAttendance,
     coverage::Coverage,
@@ -22,6 +21,7 @@ use ferrets_content::{
     price::{self, Price},
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::Relations,
     requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearchId},
     skills::{
@@ -290,9 +290,15 @@ fn scripts_read_skill_catalogue() {
             if focus.caster ~= "entity" then error("wrong caster") end
             if focus.target ~= "caster" then error("wrong target") end
             if focus.cast ~= "instant" then error("wrong cast") end
-            if content.skills.second_wind.cast ~= "transient" then
+            local wind = content.skills.second_wind
+            if wind.cast ~= "transient" then
                 error("wrong second wind cast")
             end
+            if wind.target ~= "standing" then error("wrong second wind target") end
+            if #wind.relations ~= 2 or wind.relations[1] ~= "own" or wind.relations[2] ~= "ally" then
+                error("wrong second wind relations")
+            end
+            if focus.relations ~= nil then error("a caster target names no relations") end
             if content.skills.rally_cry.cast ~= "delayed" then
                 error("wrong rally cry cast")
             end
@@ -1059,7 +1065,7 @@ fn research_content() -> (ContentView, ResearchId) {
                     amount: FixedU64::ONE,
                     on: Recipient::Standing {
                         whom: Whom {
-                            side: Affiliation::Allied,
+                            relations: Relations::FRIENDLY,
                             kinds: Kinds::Any,
                         },
                         reach: Reach::Wherever,

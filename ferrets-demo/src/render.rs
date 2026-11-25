@@ -11,7 +11,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use bevy::{color::Luminance, prelude::*, sprite_render::AlphaMode2d};
 use ferrets_content::{
-    affiliation::Affiliation,
     detection::Detection,
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
@@ -20,6 +19,7 @@ use ferrets_content::{
     location::Solidity,
     pool_def::PoolId,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     resource::ResourceSourceDef,
     skills::{Casting, EntityCastEffect, SkillCaster, SkillId},
     tags,
@@ -81,7 +81,7 @@ use ferrets_simulation::{
     selection::Selection,
     session::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, local_role::LocalRole,
-        player_id::PlayerId, player_mask::PlayerMask, player_slot::PlayerSlot, relation::Relation,
+        player_id::PlayerId, player_mask::PlayerMask, player_slot::PlayerSlot,
     },
     simulation_id::SimulationId,
     visibility::{self, CellVisibility, Senses, Sighting, VisibilityGrid},
@@ -3132,15 +3132,15 @@ const FOG_CLOUD_TINT: Color = Color::srgba(0.85, 0.88, 0.92, 0.45);
 /// Whose coverage of a field the overlay shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Shown {
-    /// Anyone's: the field marks the ground for all to see.
-    Anyone,
+    /// Every relation's: the field marks the ground for all to see.
+    Every,
     /// The viewed player's own alone: where another side's reaches is theirs
     /// to know. An observer watching the whole map has no side, and sees
     /// every side's.
     Own,
     /// The viewed player's side's, allies included: what the simulation reads
     /// for the side. An observer watching the whole map sees every side's.
-    Allied,
+    Friendly,
 }
 
 impl Shown {
@@ -3154,10 +3154,10 @@ impl Shown {
         covering: &PlayerMask,
     ) -> bool {
         match (self, viewed) {
-            (Shown::Anyone, _) | (Shown::Own | Shown::Allied, None) => !covering.is_empty(),
+            (Shown::Every, _) | (Shown::Own | Shown::Friendly, None) => !covering.is_empty(),
             (Shown::Own, Some(player)) => covering.contains(player),
-            (Shown::Allied, Some(player)) => {
-                covering.satisfies(session, Affiliation::Allied, Some(player))
+            (Shown::Friendly, Some(player)) => {
+                covering.satisfies(session, Relations::FRIENDLY, Some(player))
             }
         }
     }
@@ -3263,13 +3263,13 @@ pub fn update_field_overlay(
 /// it shows, in the order they are layered.
 pub(crate) fn shown_fields(registry: &ContentRegistry) -> Vec<(FieldId, Color, Shown)> {
     [
-        ("creep", CREEP_TINT, Shown::Anyone),
-        ("blight", BLIGHT_TINT, Shown::Anyone),
+        ("creep", CREEP_TINT, Shown::Every),
+        ("blight", BLIGHT_TINT, Shown::Every),
         ("power", POWER_TINT, Shown::Own),
-        ("true_sight", TRUE_SIGHT_TINT, Shown::Allied),
-        ("veil", VEIL_TINT, Shown::Allied),
-        ("smoke", SMOKE_TINT, Shown::Anyone),
-        ("fog_cloud", FOG_CLOUD_TINT, Shown::Anyone),
+        ("true_sight", TRUE_SIGHT_TINT, Shown::Friendly),
+        ("veil", VEIL_TINT, Shown::Friendly),
+        ("smoke", SMOKE_TINT, Shown::Every),
+        ("fog_cloud", FOG_CLOUD_TINT, Shown::Every),
     ]
     .into_iter()
     .filter_map(|(name, tint, shown)| registry.field(name).map(|field| (field, tint, shown)))
@@ -3311,7 +3311,7 @@ pub(crate) fn shown_coverage(
         .filter(|&player| {
             let coverer = PlayerMask::of(player);
             shown.admits(sight.session, sight.viewed, &coverer)
-                && (in_sight || Shown::Allied.admits(sight.session, sight.viewed, &coverer))
+                && (in_sight || Shown::Friendly.admits(sight.session, sight.viewed, &coverer))
         })
         .fold(PlayerMask::EMPTY, |mask, player| {
             mask | PlayerMask::of(player)
@@ -3554,7 +3554,7 @@ const RESEARCH_WORK_COLOR: Color = Color::srgb(0.35, 0.75, 0.65);
 /// The dot of a passenger of the viewed side's own.
 const OWN_PASSENGER_COLOR: Color = Color::srgb(0.4, 0.85, 0.4);
 /// The dot of a passenger of an ally of the viewed side.
-const ALLIED_PASSENGER_COLOR: Color = Color::srgb(0.95, 0.85, 0.35);
+const ALLY_PASSENGER_COLOR: Color = Color::srgb(0.95, 0.85, 0.35);
 /// The dot of a passenger of a side the viewed side fights.
 const ENEMY_PASSENGER_COLOR: Color = Color::srgb(1.0, 0.35, 0.35);
 /// The dot of a passenger nobody owns.
@@ -3921,7 +3921,7 @@ pub fn passenger_dot_color(
         None => owner.map_or(UNOWNED_PASSENGER_COLOR, player_color),
         Some(viewed) => match session.relation(Some(viewed), owner) {
             Relation::Own => OWN_PASSENGER_COLOR,
-            Relation::Allied => ALLIED_PASSENGER_COLOR,
+            Relation::Ally => ALLY_PASSENGER_COLOR,
             Relation::Enemy => ENEMY_PASSENGER_COLOR,
             Relation::Neutral => UNOWNED_PASSENGER_COLOR,
         },

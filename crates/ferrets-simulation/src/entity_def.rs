@@ -44,7 +44,7 @@ use crate::{
     player_stats::PlayerStats,
     regions,
     reservation::Reservation,
-    session::{GameSession, player_id::PlayerId, relation::Relation},
+    session::{GameSession, player_id::PlayerId},
     simulation_id::SimulationId,
 };
 use ferrets_content::{
@@ -62,6 +62,7 @@ use ferrets_content::{
     pool_def::PoolId,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::Relation,
     resource::HarvestData,
     stats::EntityModifier,
     targeting,
@@ -421,7 +422,7 @@ pub(crate) fn walk_aim(
 /// and a body that is nobody's meets everyone as an ally does.
 pub(crate) fn meeting(world: &World, first: Entity, second: Entity) -> Meeting {
     match relation(world, first, second) {
-        Relation::Own | Relation::Allied | Relation::Neutral => Meeting::Yielding,
+        Relation::Own | Relation::Ally | Relation::Neutral => Meeting::Yielding,
         Relation::Enemy => Meeting::Unyielding,
     }
 }

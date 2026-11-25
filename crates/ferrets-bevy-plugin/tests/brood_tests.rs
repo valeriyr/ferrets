@@ -7,7 +7,6 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
     berths::BerthGroup,
@@ -23,6 +22,7 @@ use ferrets_content::{
     projectile::{Aim, ProjectileDef},
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::Relation,
     repair::{RepairCost, RepairRate},
     resource::{Banking, HarvestData},
     skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Whom},
@@ -2590,7 +2590,7 @@ fn kennel_with_seated_pup_for(slots: Vec<PlayerSlot>) -> (App, Entity) {
                         buff: nipped,
                         on: Recipient::Standing {
                             whom: Whom {
-                                side: Affiliation::Own,
+                                relations: Relation::Own.into(),
                                 kinds: Kinds::Any,
                             },
                             reach: Reach::Within(Area::Around(Quantity::from(3))),
@@ -2645,7 +2645,7 @@ fn kennel_with_seated_pup_for(slots: Vec<PlayerSlot>) -> (App, Entity) {
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
                 .with_transporter(
                     Kinds::Any,
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     PassengerFate::Eject,
                     PassengerConduct::Shelter,
                 )

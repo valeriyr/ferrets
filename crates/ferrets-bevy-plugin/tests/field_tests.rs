@@ -10,7 +10,6 @@ use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::game_view;
 use ferrets_bevy_plugin::instantiate_map;
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     attack::{Delivery, Slain, Weapon},
     build::BuilderAttendance,
@@ -38,6 +37,7 @@ use ferrets_content::{
     price,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     repair::{RepairCost, RepairRate},
     requirement::{Bound, Requirement, Threshold},
     research::ResearchDef,
@@ -1191,7 +1191,7 @@ fn placement_under_lifted_field_effect_keeps_its_share() {
         registry.register(
             building("shrub", 1, 6).with_field_effects([FieldEffect::new(
                 creep,
-                Affiliation::Anyone,
+                Relations::EVERY,
                 Coverage::Any,
                 Vec::new(),
                 vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
@@ -1308,7 +1308,7 @@ fn field_on_any_terrain_crosses_every_terrain() {
 //
 
 #[test]
-fn placement_rules_read_coverage_and_affiliation() {
+fn placement_rules_read_coverage_and_relations() {
     let mut app = field_app();
     utils::place(&mut app, "hive", 10, 10, 0);
     utils::create_owned(&mut app, "pylon", 20, 10, 0);
@@ -2626,7 +2626,7 @@ fn walker_disabled_mid_tick_takes_no_further_step() {
                         buff: dazed,
                         on: Recipient::Standing {
                             whom: Whom {
-                                side: Affiliation::Anyone,
+                                relations: Relations::EVERY,
                                 kinds: Kinds::Any,
                             },
                             reach: Reach::Wherever,
@@ -2939,7 +2939,7 @@ fn field_watching_for_allies_stamps_each_ally() {
 }
 
 #[test]
-fn field_watching_for_anyone_reveals_to_every_player() {
+fn field_watching_for_every_relation_reveals_to_every_player() {
     let mut app = field_app();
     utils::create_owned(&mut app, "flare_post", 10, 10, 0);
     utils::run_ticks(&mut app, 1);
@@ -3035,7 +3035,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 Terrains::Only(utils::LAND.into()),
                 utils::GROUND.into(),
                 FieldDecay::Gradual { cycle: 2 },
-                Some(FieldWatch::new(Affiliation::Own)),
+                Some(FieldWatch::new(Relation::Own.into())),
                 None,
                 Detection::Blind,
             ),
@@ -3070,7 +3070,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 Terrains::Any,
                 utils::GROUND.into(),
                 FieldDecay::Instant,
-                Some(FieldWatch::new(Affiliation::Allied)),
+                Some(FieldWatch::new(Relations::FRIENDLY)),
                 None,
                 Detection::Blind,
             ),
@@ -3082,7 +3082,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 Terrains::Any,
                 utils::GROUND.into(),
                 FieldDecay::Instant,
-                Some(FieldWatch::new(Affiliation::Anyone)),
+                Some(FieldWatch::new(Relations::EVERY)),
                 None,
                 Detection::Blind,
             ),
@@ -3441,7 +3441,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
             building("spore", 1, 2)
                 .with_field_placement([FieldPlacement::Requires {
                     field: creep,
-                    of: Affiliation::Anyone,
+                    of: Relations::EVERY,
                     coverage: Coverage::Every,
                 }])
                 .with_morphs([MorphTransition::new(
@@ -3550,7 +3550,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_field_effects([
                     FieldEffect::new(
                         creep,
-                        Affiliation::Anyone,
+                        Relations::EVERY,
                         Coverage::Every,
                         vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
                             modifiers: vec![modifier(
@@ -3565,7 +3565,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                     ),
                     FieldEffect::new(
                         creep,
-                        Affiliation::Anyone,
+                        Relations::EVERY,
                         Coverage::Every,
                         vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
                             modifiers: vec![modifier(
@@ -3595,7 +3595,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_pool(Pool::energy(100))
                 .with_field_effects([FieldEffect::new(
                     creep,
-                    Affiliation::Anyone,
+                    Relations::EVERY,
                     Coverage::Every,
                     vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
                         modifiers: vec![modifier(
@@ -3626,7 +3626,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_pool(Pool::energy(40))
                 .with_field_effects([FieldEffect::new(
                     creep,
-                    Affiliation::Anyone,
+                    Relations::EVERY,
                     Coverage::Every,
                     vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
                         modifiers: vec![modifier(
@@ -3692,14 +3692,14 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_train_time(2)
                 .with_field_placement([FieldPlacement::Requires {
                     field: creep,
-                    of: Affiliation::Anyone,
+                    of: Relations::EVERY,
                     coverage: Coverage::Every,
                 }]),
         );
         registry.register(building("spire", 2, 2).with_field_placement([
             FieldPlacement::Requires {
                 field: creep,
-                of: Affiliation::Anyone,
+                of: Relations::EVERY,
                 coverage: Coverage::Every,
             },
         ]));
@@ -3723,7 +3723,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             utils::walker("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
                 creep,
-                Affiliation::Anyone,
+                Relations::EVERY,
                 Coverage::Any,
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     modifier(EntityStatId::SPEED, ModifierOp::PercentAdd, "1.0"),
@@ -3737,7 +3737,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             utils::walker("skimmer", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
                 creep,
-                Affiliation::Anyone,
+                Relations::EVERY,
                 Coverage::Any,
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     modifier(EntityStatId::SPEED, ModifierOp::PercentAdd, "1.0"),
@@ -3761,7 +3761,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_dying(1, [])
                 .with_field_effects([FieldEffect::new(
                     creep,
-                    Affiliation::Anyone,
+                    Relations::EVERY,
                     Coverage::Any,
                     Vec::new(),
                     vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
@@ -3785,7 +3785,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_dying(1, [])
                 .with_field_effects([FieldEffect::new(
                     creep,
-                    Affiliation::Anyone,
+                    Relations::EVERY,
                     Coverage::Any,
                     Vec::new(),
                     vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
@@ -3807,7 +3807,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         let unpowered_idles = || {
             FieldEffect::new(
                 power,
-                Affiliation::Own,
+                Relation::Own.into(),
                 Coverage::Any,
                 Vec::new(),
                 vec![EntityEffect::Disable],
@@ -3852,7 +3852,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 )])
                 .with_field_effects([FieldEffect::new(
                     creep,
-                    Affiliation::Enemy,
+                    Relation::Enemy.into(),
                     Coverage::Any,
                     vec![EntityEffect::Disable],
                     Vec::new(),
@@ -3870,7 +3870,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 )])
                 .with_field_effects([FieldEffect::new(
                     creep,
-                    Affiliation::Enemy,
+                    Relation::Enemy.into(),
                     Coverage::Any,
                     vec![EntityEffect::Disable],
                     Vec::new(),
@@ -3888,7 +3888,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 )])
                 .with_field_effects([FieldEffect::new(
                     creep,
-                    Affiliation::Enemy,
+                    Relation::Enemy.into(),
                     Coverage::Any,
                     vec![EntityEffect::Disable],
                     Vec::new(),
@@ -3913,7 +3913,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         let mends_or_wastes = |coverage| {
             FieldEffect::new(
                 power,
-                Affiliation::Own,
+                Relation::Own.into(),
                 coverage,
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     modifier(EntityStatId::HEALTH_REGEN, ModifierOp::FlatAdd, "1"),
@@ -3930,7 +3930,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             building("ember", 1, 4).with_field_effects([FieldEffect::new(
                 power,
-                Affiliation::Own,
+                Relation::Own.into(),
                 Coverage::Every,
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     modifier(EntityStatId::HEALTH_REGEN, ModifierOp::FlatAdd, "1"),
@@ -3947,7 +3947,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_tags(["structure"])
                 .with_field_effects([FieldEffect::new(
                     power,
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     Coverage::Every,
                     Vec::new(),
                     vec![EntityEffect::Disable],
@@ -3960,7 +3960,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_trainer(["zealot"])
                 .with_field_placement([FieldPlacement::Requires {
                     field: power,
-                    of: Affiliation::Own,
+                    of: Relation::Own.into(),
                     coverage: Coverage::Any,
                 }])
                 .with_morphs([MorphTransition::new(
@@ -4021,7 +4021,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
         registry.register(
             utils::walker("acolyte", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
                 power,
-                Affiliation::Own,
+                Relation::Own.into(),
                 Coverage::Any,
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                     modifier(EntityStatId::SPEED, ModifierOp::PercentAdd, "1.0"),
@@ -4045,7 +4045,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ONE)
                 .with_transporter(
                     Kinds::types(["zealot"]),
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     PassengerFate::Eject,
                     PassengerConduct::Shelter,
                 )
@@ -4064,7 +4064,7 @@ fn field_app_with(slots: Vec<PlayerSlot>) -> App {
                 .with_resource_source("crystal", DepletionPolicy::Persist)
                 .with_field_effects([FieldEffect::new(
                     power,
-                    Affiliation::Anyone,
+                    Relations::EVERY,
                     Coverage::Any,
                     Vec::new(),
                     vec![EntityEffect::Disable],

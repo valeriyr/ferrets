@@ -4,7 +4,6 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     build::BuilderAttendance,
     coverage::Coverage,
@@ -19,6 +18,7 @@ use ferrets_content::{
     price,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::Relation,
     requirement::Requirement,
     resource::DepletionPolicy,
     terrains::Terrains,
@@ -769,7 +769,7 @@ fn app() -> App {
         let powered = || {
             vec![FieldPlacement::Requires {
                 field: power,
-                of: Affiliation::Own,
+                of: Relation::Own.into(),
                 coverage: Coverage::Every,
             }]
         };

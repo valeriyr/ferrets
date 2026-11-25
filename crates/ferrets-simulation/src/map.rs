@@ -32,8 +32,8 @@ use crate::{
     simulation_id::SimulationId,
 };
 use ferrets_content::{
-    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, layer::LayerLevel,
-    registry::ContentRegistry,
+    entity_stats::EntityStatId, entity_type_def::EntityTypeDef, gateway::Joins, layer::LayerLevel,
+    registry::ContentRegistry, relation::Relation, tunnel::Passage,
 };
 
 /// The active game map.
@@ -66,7 +66,9 @@ impl Map {
     /// map gives a relief to a layer at one level or to no registered layer,
     /// or none to a layer spanning levels, a cell's level lies outside its
     /// layer's, a slope breaks its band's rules, a border between levels lies
-    /// in no band, or a placement starts a pool its type cannot start there.
+    /// in no band, a placement starts a pool its type cannot start there, or a
+    /// nobody's placement is a transporter or a held tunnel's end admitting
+    /// neutral riders, or lays fields.
     pub fn from_data(data: &MapData, registry: &ContentRegistry) -> Self {
         assert_eq!(
             data.terrain_cells().len(),
@@ -168,6 +170,7 @@ impl Map {
                 placement.type_name
             );
             check_placement_pools(placement, registry);
+            check_unowned_placement(placement, registry);
         }
 
         // Start positions indexed by slot id; environment seats have none.
@@ -706,6 +709,44 @@ fn neighbor(grid: &NavGrid, cell: CellPos, direction: Direction) -> Option<CellP
         .zip(cell.y.checked_add_signed(dy))
         .map(|(x, y)| CellPos::new(x, y))
         .filter(|&next| next.x < grid.width() && next.y < grid.height())
+}
+
+/// Checks that a nobody's `placement` is neither a transporter nor a held
+/// tunnel's end admitting neutral riders, nor a type with field sources.
+fn check_unowned_placement(placement: &Placement, registry: &ContentRegistry) {
+    let (None, Some(def)) = (placement.owner, registry.entity(&placement.type_name)) else {
+        return;
+    };
+    let admits_riders = def
+        .transporter()
+        .is_some_and(|transporter| transporter.boarding().contains(Relation::Neutral));
+    assert!(
+        !admits_riders,
+        "placement '{}' is nobody's transporter admitting riders, which no one can unload",
+        placement.type_name
+    );
+    let holds_riders = def.gateway().is_some_and(|gateway| match gateway.joins() {
+        Joins::Network(_) => false,
+        Joins::Tunnel(tunnel) => {
+            let tunnel = registry.tunnel_def(tunnel);
+            let held = match tunnel.passage() {
+                Passage::Held { .. } => true,
+                Passage::Crosses => false,
+            };
+            held && gateway.doors().admits_entrance()
+                && tunnel.boarding().contains(Relation::Neutral)
+        }
+    });
+    assert!(
+        !holds_riders,
+        "placement '{}' is nobody's tunnel end holding riders, which no one can let out",
+        placement.type_name
+    );
+    assert!(
+        def.field_sources.is_empty(),
+        "placement '{}' is nobody's and lays fields, which only an owner's sources lay",
+        placement.type_name
+    );
 }
 
 /// Checks each pool `placement` starts: a registered pool, named once, and

@@ -4,14 +4,23 @@
 mod utils;
 
 use ferrets_content::{
+    area::Area,
+    detection::Detection,
     domain::{DomainDef, DomainId},
     entity_stats::EntityStatId,
     entity_type_def::EntityTypeDef,
+    field::{Emission, FieldDecay, FieldDef, FieldGrowth, FieldSourceDef},
+    gateway::{Doors, Joins},
+    kinds::Kinds,
     layer::LayerLevel,
     location::Solidity,
     pool::{Pool, PoolInitial},
+    quantity::Quantity,
     registry::ContentRegistry,
+    relation::Relations,
     terrains::Terrains,
+    transport::{PassengerConduct, PassengerFate},
+    tunnel::{OtherEndLost, Passage, TunnelDef},
 };
 use ferrets_geometry::{
     cell_pos::CellPos, cell_rect::CellRect, cell_size::CellSize, projection::Projection,
@@ -602,6 +611,92 @@ fn placement_of_remains_panics() {
         amount: None,
         pools: Vec::new(),
     });
+
+    Map::from_data(&data, &registry);
+}
+
+#[test]
+#[should_panic(
+    expected = "placement 'ferry' is nobody's transporter admitting riders, which no one can unload"
+)]
+fn unowned_transporter_admitting_neutral_riders_panics() {
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");
+    data.add_placement(unowned("ferry"));
+
+    Map::from_data(&data, &ferry_registry(Relations::EVERY));
+}
+
+#[test]
+fn unowned_transporter_admitting_no_neutral_rider_loads() {
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");
+    data.add_placement(unowned("ferry"));
+
+    // Every rider is neutral to a nobody's ferry, so own and ally admit none:
+    // it takes no one aboard, and no one is left inside.
+    Map::from_data(&data, &ferry_registry(Relations::FRIENDLY));
+}
+
+#[test]
+fn owned_transporter_admitting_neutral_riders_loads() {
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");
+    let owner = data.add_player_slot((6, 6));
+    data.add_placement(Placement {
+        owner: Some(owner),
+        ..unowned("ferry")
+    });
+
+    Map::from_data(&data, &ferry_registry(Relations::EVERY));
+}
+
+#[test]
+#[should_panic(
+    expected = "placement 'den' is nobody's tunnel end holding riders, which no one can let out"
+)]
+fn unowned_held_tunnel_end_admitting_neutral_riders_panics() {
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");
+    data.add_placement(unowned("den"));
+
+    Map::from_data(&data, &den_registry(Relations::EVERY));
+}
+
+#[test]
+fn unowned_held_tunnel_end_admitting_no_neutral_rider_loads() {
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");
+    data.add_placement(unowned("den"));
+
+    // Every rider is neutral to a nobody's den, so own and ally admit none:
+    // no one goes in, and no one is left inside.
+    Map::from_data(&data, &den_registry(Relations::FRIENDLY));
+}
+
+#[test]
+#[should_panic(
+    expected = "placement 'fountain' is nobody's and lays fields, which only an owner's sources lay"
+)]
+fn unowned_field_source_panics() {
+    let mut registry = walker_registry();
+    let creep = registry.register_field(
+        "creep",
+        FieldDef::new(
+            Terrains::Any,
+            GROUND_LAYER.into(),
+            FieldDecay::Instant,
+            None,
+            None,
+            Detection::Blind,
+        ),
+    );
+    registry.register(
+        stationary("fountain").with_field_sources([FieldSourceDef::new(
+            creep,
+            Area::Around(Quantity::from(2)),
+            FieldGrowth::Instant,
+            Emission::Nothing,
+            Emission::Full,
+        )]),
+    );
+    let mut data = MapData::new("field", Projection::Isometric, 8, 8, "land");
+    data.add_placement(unowned("fountain"));
 
     Map::from_data(&data, &registry);
 }
@@ -1263,6 +1358,76 @@ fn wall_test_map() -> Map {
     );
     map.serve_movers(&walker_registry());
     map
+}
+
+/// [`walker_registry`] with a one-cell `ferry` carrying anyone and letting
+/// in `boarding`.
+fn ferry_registry(boarding: Relations) -> ContentRegistry {
+    let mut registry = walker_registry();
+    registry.register(
+        stationary("ferry")
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+            .with_transporter(
+                Kinds::Any,
+                boarding,
+                PassengerFate::Destroy,
+                PassengerConduct::Shelter,
+            ),
+    );
+    registry
+}
+
+/// A [`walker_registry`] with `den`, an end of a tunnel holding riders that
+/// `boarding` admits.
+fn den_registry(boarding: Relations) -> ContentRegistry {
+    let mut registry = walker_registry();
+    let tunnel = registry.register_tunnel(
+        "burrows",
+        TunnelDef::new(
+            Kinds::Any,
+            boarding,
+            OtherEndLost::Stands,
+            Passage::Held {
+                capacity: 4,
+                fate: PassengerFate::Destroy,
+            },
+        ),
+    );
+    registry.register(
+        stationary("den")
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_gateway(Joins::Tunnel(tunnel), Doors::Both),
+    );
+    registry
+}
+
+/// A one-cell solid `name` that stands on the ground and never moves.
+fn stationary(name: &str) -> EntityTypeDef {
+    EntityTypeDef::new(name).with_location(
+        WALKER_DOMAIN,
+        CellSize::ONE,
+        None,
+        Solidity::Solid,
+        GROUND_LAYER,
+    )
+}
+
+/// A nobody's `type_name` on (2, 2).
+fn unowned(type_name: &str) -> Placement {
+    Placement {
+        type_name: type_name.to_string(),
+        cell: (2, 2),
+        owner: None,
+        amount: None,
+        pools: Vec::new(),
+    }
 }
 
 /// A [`land_registry`] whose one type is a single-cell ground mover.

@@ -170,6 +170,7 @@ pub(super) fn content_table(lua: &Lua, content: &ContentView) -> mlua::Result<Ta
         entry.set("caster", skill.caster.as_str())?;
         entry.set("cast", skill.cast.as_deref())?;
         entry.set("target", skill.target.as_deref())?;
+        entry.set("relations", skill.relations.clone())?;
         entry.set(
             "requires",
             optional_requirements(lua, skill.requires.as_deref())?,

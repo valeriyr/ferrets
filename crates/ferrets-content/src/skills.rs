@@ -9,7 +9,6 @@ use ferrets_math::FixedU64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    affiliation::Affiliation,
     area::Area,
     cost::Cost,
     detection::Detection,
@@ -21,6 +20,7 @@ use crate::{
     player_buffs::PlayerBuffId,
     price::Price,
     quantity::Quantity,
+    relation::Relations,
     requirement::Requirement,
 };
 
@@ -160,7 +160,7 @@ pub enum EntityCastTarget<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Whom {
     /// Whose it must be, judged from the caster's owner.
-    pub side: Affiliation,
+    pub relations: Relations,
     /// What it must be.
     pub kinds: Kinds,
 }
@@ -586,7 +586,7 @@ pub struct Gathering {
     /// lands.
     pub area: Area,
     /// Whose they must be, judged from the caster's owner.
-    pub side: Affiliation,
+    pub relations: Relations,
     /// What they must be.
     pub kinds: Kinds,
     /// Whether the caster's side must make each out.

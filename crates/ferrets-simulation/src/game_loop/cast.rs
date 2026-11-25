@@ -403,8 +403,8 @@ pub enum AimRefusal {
     OffMap,
     /// The entity is not one the caster's owner makes out, or is gone.
     Unseen,
-    /// The entity stands on a side the cast does not take.
-    WrongSide,
+    /// The entity stands in a relation to the caster the cast does not take.
+    WrongRelation,
     /// The entity is not a kind the cast takes.
     WrongKind,
     /// The entity cannot take what the cast does to it: a buff modifying a
@@ -793,7 +793,7 @@ fn resolve(
             Ok(CastAim::Remains(remains))
         }
         EntityCastTarget::Standing {
-            whom: Whom { side, kinds },
+            whom: Whom { relations, kinds },
             ..
         } => {
             let Some(SkillTarget::Entity(id)) = target else {
@@ -804,8 +804,8 @@ fn resolve(
             let session = world.resource::<GameSession>();
             let caster_owner = entity_def::owner(world, caster);
             let target_owner = entity_def::owner(world, target);
-            if !session.relation(caster_owner, target_owner).fits(*side) {
-                return Err(AimRefusal::WrongSide);
+            if !relations.contains(session.relation(caster_owner, target_owner)) {
+                return Err(AimRefusal::WrongRelation);
             }
             if !names(world, target, kinds) {
                 return Err(AimRefusal::WrongKind);
@@ -1226,7 +1226,9 @@ fn gather(
                 return None;
             }
             let owner = entity_def::owner(world, entity);
-            let admitted = session.relation(Some(player), owner).fits(gathering.side)
+            let admitted = gathering
+                .relations
+                .contains(session.relation(Some(player), owner))
                 && names(world, entity, &gathering.kinds)
                 && match gathering.sight {
                     GatherSight::Blind => true,

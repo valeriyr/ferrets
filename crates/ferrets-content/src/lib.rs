@@ -1,7 +1,6 @@
 //! Content vocabulary — type definitions for everything content declares,
 //! and the registry that holds them.
 
-pub mod affiliation;
 pub mod annex;
 pub mod area;
 pub mod attack;
@@ -38,6 +37,7 @@ pub mod price;
 pub mod projectile;
 pub mod quantity;
 pub mod registry;
+pub mod relation;
 pub mod repair;
 pub mod requirement;
 pub mod research;

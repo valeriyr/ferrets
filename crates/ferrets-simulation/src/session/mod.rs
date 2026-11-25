@@ -14,7 +14,6 @@ pub mod player_id;
 pub mod player_mask;
 pub mod player_slot;
 pub mod player_type;
-pub mod relation;
 
 use crate::ruleset::{RemainsLimit, Ruleset};
 use crate::session::{
@@ -29,9 +28,9 @@ use crate::session::{
     player_id::PlayerId,
     player_slot::{Participation, PlayerSlot, TeamId},
     player_type::PlayerType,
-    relation::Relation,
 };
 use bevy_ecs::prelude::*;
+use ferrets_content::relation::Relation;
 
 /// Lifecycle state of the simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -448,7 +447,7 @@ impl GameSession {
     }
 
     /// How owners `a` and `b` stand toward each other: neutral when either is
-    /// nobody's, own for one player, allied for two players sharing a team,
+    /// nobody's, own for one player, allies for two players sharing a team,
     /// otherwise enemies. A player on no team (or an unknown slot id) is
     /// allied with no one.
     pub fn relation(&self, a: Option<PlayerId>, b: Option<PlayerId>) -> Relation {
@@ -462,7 +461,7 @@ impl GameSession {
             self.slot(a).and_then(PlayerSlot::team),
             self.slot(b).and_then(PlayerSlot::team),
         ) {
-            (Some(team_a), Some(team_b)) if team_a == team_b => Relation::Allied,
+            (Some(team_a), Some(team_b)) if team_a == team_b => Relation::Ally,
             (Some(_), Some(_)) | (None, _) | (_, None) => Relation::Enemy,
         }
     }

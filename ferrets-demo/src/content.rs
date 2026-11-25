@@ -91,7 +91,7 @@ pub const CONTENT: &str = r#"
         terrains = "any",
         spreads_on = GROUND,
         decay = { cycle = 40 },
-        blocks_sight = { height = 1, of = "anyone" },
+        blocks_sight = { height = 1, of = RELATIONS.EVERY },
     })
     -- A fog cloud a shaman calls down: its side sees every cell of it, while
     -- an enemy, on the ground or in the air, sees nothing through it. It
@@ -100,7 +100,7 @@ pub const CONTENT: &str = r#"
         terrains = "any",
         spreads_on = GROUND | AIR,
         decay = { cycle = 60 },
-        watches = { of = "allied" },
+        watches = { of = RELATIONS.FRIENDLY },
         blocks_sight = { height = 2, of = "enemy" },
     })
 
@@ -146,7 +146,7 @@ pub const CONTENT: &str = r#"
     -- hides what lies behind it from everyone on the ground around it.
     define_entity("standing_stone", {
         location = { domain = "land", size = { 2, 2 }, solidity = "solid" },
-        blocks_sight = { height = 2, of = "anyone" },
+        blocks_sight = { height = 2, of = RELATIONS.EVERY },
     })
 
     -- Projectile kinds. Each is registered by name so the renderer can draw an
@@ -229,7 +229,7 @@ pub const CONTENT: &str = r#"
         caster = "entity",
         cooldown = 120,
         cost = { energy = "20" },
-        effect = { heal = { amount = "15", on = { kind = "allied", only = { tags = { "biological" } } } } },
+        effect = { heal = { amount = "15", on = { kind = RELATIONS.FRIENDLY, only = { tags = { "biological" } } } } },
     })
     -- The shaman's curse withers an enemy's body for ten seconds: its health
     -- ceiling falls by nearly a third, and a unit at half health stays at half
@@ -1100,13 +1100,13 @@ pub const CONTENT: &str = r#"
     -- built, showing a patch under itself while still going up. Structures
     -- left off creep waste away once built; a larva off creep is gone in a
     -- second; swarmlings run a third faster on anyone's creep.
-    local ON_CREEP = { requires = "creep", of = "anyone", coverage = "every" }
-    local WITHERS_OFF_CREEP = { field = "creep", of = "anyone", coverage = "any",
+    local ON_CREEP = { requires = "creep", of = RELATIONS.EVERY, coverage = "every" }
+    local WITHERS_OFF_CREEP = { field = "creep", of = RELATIONS.EVERY, coverage = "any",
         holds_while = "risen",
         outside = { {
             stats = { { entity_stat = "health_drain", op = "flat", value = "0.2" } },
         } } }
-    local DIES_OFF_CREEP = { field = "creep", of = "anyone", coverage = "any", outside = { {
+    local DIES_OFF_CREEP = { field = "creep", of = RELATIONS.EVERY, coverage = "any", outside = { {
         stats = { { entity_stat = "health_drain", op = "flat", value = "1.25" } },
     } } }
 
@@ -1130,7 +1130,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND },
         selection = { priority = 10 },
         field_effects = {
-            { field = "creep", of = "anyone", coverage = "any", inside = { {
+            { field = "creep", of = RELATIONS.EVERY, coverage = "any", inside = { {
                 stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } } },
         },
@@ -1522,7 +1522,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND },
         selection = { priority = 10 },
         field_effects = {
-            { field = "creep", of = "anyone", coverage = "any", inside = { {
+            { field = "creep", of = RELATIONS.EVERY, coverage = "any", inside = { {
                 stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } } },
         },
@@ -1617,7 +1617,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND },
         selection = { priority = 12 },
         field_effects = {
-            { field = "creep", of = "anyone", coverage = "any", inside = { {
+            { field = "creep", of = RELATIONS.EVERY, coverage = "any", inside = { {
                 stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } } },
         },
@@ -1642,7 +1642,7 @@ pub const CONTENT: &str = r#"
         attack = { targets = GROUND },
         selection = { priority = 11 },
         field_effects = {
-            { field = "creep", of = "anyone", coverage = "any", inside = { {
+            { field = "creep", of = RELATIONS.EVERY, coverage = "any", inside = { {
                 stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } } },
         },
@@ -1683,7 +1683,7 @@ pub const CONTENT: &str = r#"
 
     -- Every conclave unit but the arbiter itself declares that the veil of
     -- its own side, or an ally's, conceals it while it stands inside.
-    local VEILED = { field = "veil", of = "allied", coverage = "every", inside = { "conceal" } }
+    local VEILED = { field = "veil", of = RELATIONS.FRIENDLY, coverage = "every", inside = { "conceal" } }
 
     define_entity("nexus", {
         race = "conclave",
@@ -1987,7 +1987,7 @@ pub const CONTENT: &str = r#"
         effect = { relocate = {
             journey = { from_aim = {
                 party = { around = {
-                    at = "ground", area = 2, side = "own",
+                    at = "ground", area = 2, relations = "own",
                     kinds = { tags = { "biological", "mechanical" } },
                     sight = "seen", count = "all", shortfall = "leave",
                 } },
@@ -2007,7 +2007,7 @@ pub const CONTENT: &str = r#"
         effect = { relocate = {
             journey = { from_aim = {
                 party = { around = {
-                    at = { kind = "ground", range = 9 }, area = 2, side = "enemy",
+                    at = { kind = "ground", range = 9 }, area = 2, relations = "enemy",
                     kinds = { tags = { "biological", "mechanical" } },
                     sight = "seen", count = { at_most = 4 }, shortfall = "leave",
                 } },
@@ -2856,18 +2856,18 @@ pub const CONTENT: &str = r#"
     -- Every undead structure stands on blight and spreads its own, so a base
     -- grows its ground outward as it is built. The hall and the mine are the
     -- exceptions: they make blight where there is none.
-    local ON_BLIGHT = { requires = "blight", of = "anyone", coverage = "every" }
+    local ON_BLIGHT = { requires = "blight", of = RELATIONS.EVERY, coverage = "every" }
     local function blights(area)
         return { { field = "blight", area = area, growth = "instant", while_rising = "nothing", while_disabled = "full" } }
     end
     -- The dead mend only on their own ground: off blight nothing knits.
     local MENDS = { stats = { { entity_stat = "health_regen", op = "flat", value = "0.1" } } }
-    local HEALS_ON_BLIGHT = { field = "blight", of = "anyone", coverage = "any", inside = { MENDS } }
+    local HEALS_ON_BLIGHT = { field = "blight", of = RELATIONS.EVERY, coverage = "any", inside = { MENDS } }
     -- A necromancer mends on the blight and, away from it, holds half its
     -- energy ceiling, and what it holds stays where it was — clamped, never
     -- given back: stepping back onto the blight lifts the ceiling and nothing
     -- else. One entry says both sides.
-    local BOUND_TO_BLIGHT = { field = "blight", of = "anyone", coverage = "any",
+    local BOUND_TO_BLIGHT = { field = "blight", of = RELATIONS.EVERY, coverage = "any",
         inside = { MENDS },
         outside = { {
             pool_maximums = { { entity_stat = "max_energy", op = "percent", value = "-0.5" } },
@@ -2990,7 +2990,7 @@ pub const CONTENT: &str = r#"
         effect = { relocate = {
             journey = { from_caster = {
                 party = { caster_and_around = {
-                    area = 4, side = "own",
+                    area = 4, relations = "own",
                     kinds = { types = { "acolyte", "ghoul", "skeleton" } },
                     sight = "seen", count = { at_most = 24 }, shortfall = "refuse",
                 } },

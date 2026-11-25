@@ -10,7 +10,6 @@ mod utils;
 
 use bevy::prelude::{App, Entity};
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
@@ -20,6 +19,7 @@ use ferrets_content::{
     pool::Pool,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::Relation,
     skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Whom},
     stack_rule::StackRule,
 };
@@ -1601,7 +1601,7 @@ fn walker_disabled_mid_tick_is_inert_to_contact() {
                         buff: stunned,
                         on: Recipient::Standing {
                             whom: Whom {
-                                side: Affiliation::Own,
+                                relations: Relation::Own.into(),
                                 kinds: Kinds::Any,
                             },
                             reach: Reach::Within(Area::Around(Quantity::from(8))),

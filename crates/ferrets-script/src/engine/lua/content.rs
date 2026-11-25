@@ -37,6 +37,7 @@ use ferrets_content::{
     projectile::ProjectileDef,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::Relations,
     repair::{RepairCost, RepairRate},
     requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearchId},
@@ -61,7 +62,7 @@ use ferrets_math::{FixedI64, FixedU64, fixed_vec2::FixedVec2};
 use ferrets_nav_grid::{layer_id::LayerId, layer_mask::LayerMask, terrain_mask::TerrainMask};
 use mlua::{Lua, Table, Value};
 
-use crate::{content, error::ScriptError};
+use crate::{content, engine::lua::read_only, error::ScriptError};
 
 /// The keys a requirement table may name, one of them each.
 const REQUIREMENT_KEYS: [&str; 13] = [
@@ -89,11 +90,26 @@ enum Group {
     List(Vec<Requirement>),
 }
 
-/// Installs the `define_*` globals, each registering into `registry` — the one
-/// assigner of every derived id, so what a script observes (the layer id
-/// `define_layer` returns) is what the finished registry holds.
+/// Installs the read-only named sets of relations `RELATIONS.FRIENDLY` and
+/// `RELATIONS.EVERY`, each read as a fresh list, and the `define_*` globals,
+/// each registering into `registry` — the one assigner of every derived id,
+/// so what a script observes (the layer id `define_layer` returns) is what
+/// the finished registry holds.
 pub(super) fn register(lua: &Lua, registry: &Rc<RefCell<ContentRegistry>>) -> mlua::Result<()> {
     let globals = lua.globals();
+
+    let relations = read_only::table(lua, "RELATIONS", |lua, name| {
+        let relations = match name {
+            "FRIENDLY" => Relations::FRIENDLY,
+            "EVERY" => Relations::EVERY,
+            _ => return None,
+        };
+        Some(
+            lua.create_sequence_from(content::relation_names(relations))
+                .map(Value::Table),
+        )
+    })?;
+    globals.set("RELATIONS", relations)?;
 
     let races = Rc::clone(registry);
     globals.set(
@@ -602,37 +618,77 @@ fn parse_projectile(table: &Table) -> crate::Result<ProjectileDef> {
     ))
 }
 
-/// The sides an aim at something standing may name.
-const SIDES: [&str; 4] = ["'own'", "'allied'", "'enemy'", "'anyone'"];
-
 /// Reads where a summon sets its units down, which may be any aim:
-/// `"caster"`, `"ground"`, `"fallen"` or a side (`"own"`, `"allied"`,
-/// `"enemy"`, `"anyone"`) on its own, or any but `"caster"` as a
-/// `{ kind, only, range }` table — `only` the filter an aimed entity must
-/// pass, `range` how close the caster must come (a cell count or a
-/// `{ stat = ... }` table), each left out for none.
+/// `"caster"`, `"ground"`, `"fallen"`, one relation (`"own"`, `"ally"`,
+/// `"enemy"`, `"neutral"`) or a list of relations on its own, or any but
+/// `"caster"` as a `{ kind, only, range }` table — `kind` one of those names
+/// or a list of relations, `only` the filter an aimed entity must pass,
+/// `range` how close the caster must come (a cell count or a `{ stat = ... }`
+/// table), each left out for none.
 fn parse_summon_at(value: &Value, registry: &ContentRegistry) -> crate::Result<SummonAt> {
+    let expected = [
+        "an aim name",
+        "a { kind = ..., only = ..., range = ... } table",
+        "a list of relation names",
+    ];
     let (kind, only, reach) = match value {
-        Value::String(kind) => (kind.to_string_lossy(), None, Reach::Wherever),
-        Value::Table(aim) => (
-            required::<String>(aim, "kind")?,
-            optional::<Value>(aim, "only")?,
-            parse_reach(aim, registry)?,
-        ),
+        Value::String(_) => (value.clone(), None, Reach::Wherever),
+        Value::Table(aim) => match aim
+            .raw_get::<Value>("kind")
+            .map_err(|error| field_error("kind", error))?
+        {
+            // A table naming no kind lists relations.
+            Value::Nil => {
+                match list_shape(aim, "aim")? {
+                    ListShape::Keyed => {
+                        return Err(content::unexpected(
+                            "aim",
+                            &expected,
+                            "a keyed table naming no kind",
+                        ));
+                    }
+                    ListShape::Whole | ListShape::Gapped => {}
+                }
+                return Ok(SummonAt::Standing {
+                    whom: Whom {
+                        relations: parse_relations(value, "aim")?,
+                        kinds: Kinds::Any,
+                    },
+                    reach: Reach::Wherever,
+                });
+            }
+            kind => (
+                kind,
+                optional::<Value>(aim, "only")?,
+                parse_reach(aim, registry)?,
+            ),
+        },
         other => {
-            return Err(content::unexpected(
-                "aim",
-                &[
-                    "an aim name",
-                    "a { kind = ..., only = ..., range = ... } table",
-                ],
-                &found(other),
-            ));
+            return Err(content::unexpected("aim", &expected, &found(other)));
         }
     };
     let filter = |only: Option<Value>| match only {
         Some(only) => parse_kinds(&only, "aim filter"),
         None => Ok(Kinds::Any),
+    };
+    let kind = match &kind {
+        Value::String(name) => name.to_string_lossy(),
+        Value::Table(_) => {
+            return Ok(SummonAt::Standing {
+                whom: Whom {
+                    relations: parse_relations(&kind, "aim kind")?,
+                    kinds: filter(only)?,
+                },
+                reach,
+            });
+        }
+        other => {
+            return Err(content::unexpected(
+                "aim kind",
+                &["an aim name", "a list of relation names"],
+                &found(other),
+            ));
+        }
     };
     match kind.as_str() {
         "caster" => match (only, value) {
@@ -654,14 +710,16 @@ fn parse_summon_at(value: &Value, registry: &ContentRegistry) -> crate::Result<S
         // Anything else names whose it must be, in the same words every other
         // capability uses.
         whose => {
-            let side = content::affiliation(whose).map_err(|_| {
-                let mut expected = vec!["'caster'", "'ground'", "'fallen'"];
-                expected.extend_from_slice(&SIDES);
-                content::unexpected("aim", &expected, &content::quoted(whose))
+            let relations = content::relation(whose).map(Relations::from).map_err(|_| {
+                unexpected_aim(
+                    "aim",
+                    &["'caster'", "'ground'", "'fallen'"],
+                    &content::quoted(whose),
+                )
             })?;
             Ok(SummonAt::Standing {
                 whom: Whom {
-                    side,
+                    relations,
                     kinds: filter(only)?,
                 },
                 reach,
@@ -672,16 +730,11 @@ fn parse_summon_at(value: &Value, registry: &ContentRegistry) -> crate::Result<S
 
 /// Reads the entity a cast acts on: `"caster"`, or something standing.
 fn parse_recipient(value: &Value, registry: &ContentRegistry) -> crate::Result<Recipient> {
-    let expected = || {
-        let mut expected = vec!["'caster'"];
-        expected.extend_from_slice(&SIDES);
-        expected
-    };
     match parse_summon_at(value, registry)? {
         SummonAt::Caster => Ok(Recipient::Caster),
         SummonAt::Standing { whom, reach } => Ok(Recipient::Standing { whom, reach }),
-        SummonAt::Ground { .. } => Err(content::unexpected("recipient", &expected(), "'ground'")),
-        SummonAt::Fallen { .. } => Err(content::unexpected("recipient", &expected(), "'fallen'")),
+        SummonAt::Ground { .. } => Err(unexpected_aim("recipient", &["'caster'"], "'ground'")),
+        SummonAt::Fallen { .. } => Err(unexpected_aim("recipient", &["'caster'"], "'fallen'")),
     }
 }
 
@@ -692,57 +745,47 @@ fn parse_spot(value: &Value, registry: &ContentRegistry) -> crate::Result<Spot> 
         SummonAt::Caster => Ok(Spot::Caster),
         SummonAt::Ground { reach } => Ok(Spot::Ground { reach }),
         SummonAt::Standing { whom, reach } => Ok(Spot::Standing { whom, reach }),
-        SummonAt::Fallen { .. } => {
-            let mut expected = vec!["'caster'", "'ground'"];
-            expected.extend_from_slice(&SIDES);
-            Err(content::unexpected("spot", &expected, "'fallen'"))
-        }
+        SummonAt::Fallen { .. } => Err(unexpected_aim(
+            "spot",
+            &["'caster'", "'ground'"],
+            "'fallen'",
+        )),
     }
 }
 
 /// Reads an aim away from the caster: the ground, or something standing.
 fn parse_away(value: &Value, registry: &ContentRegistry) -> crate::Result<Away> {
-    let expected = || {
-        let mut expected = vec!["'ground'"];
-        expected.extend_from_slice(&SIDES);
-        expected
-    };
+    let what = "aim away from the caster";
     match parse_summon_at(value, registry)? {
         SummonAt::Ground { reach } => Ok(Away::Ground { reach }),
         SummonAt::Standing { whom, reach } => Ok(Away::Standing { whom, reach }),
-        SummonAt::Caster => Err(content::unexpected(
-            "aim away from the caster",
-            &expected(),
-            "'caster'",
-        )),
-        SummonAt::Fallen { .. } => Err(content::unexpected(
-            "aim away from the caster",
-            &expected(),
-            "'fallen'",
-        )),
+        SummonAt::Caster => Err(unexpected_aim(what, &["'ground'"], "'caster'")),
+        SummonAt::Fallen { .. } => Err(unexpected_aim(what, &["'ground'"], "'fallen'")),
     }
 }
 
 /// Reads an aim at something standing.
 fn parse_standing_aim(value: &Value, registry: &ContentRegistry) -> crate::Result<(Whom, Reach)> {
+    let what = "aim at something standing";
     match parse_summon_at(value, registry)? {
         SummonAt::Standing { whom, reach } => Ok((whom, reach)),
-        SummonAt::Caster => Err(content::unexpected(
-            "aim at something standing",
-            &SIDES,
-            "'caster'",
-        )),
-        SummonAt::Ground { .. } => Err(content::unexpected(
-            "aim at something standing",
-            &SIDES,
-            "'ground'",
-        )),
-        SummonAt::Fallen { .. } => Err(content::unexpected(
-            "aim at something standing",
-            &SIDES,
-            "'fallen'",
-        )),
+        SummonAt::Caster => Err(unexpected_aim(what, &[], "'caster'")),
+        SummonAt::Ground { .. } => Err(unexpected_aim(what, &[], "'ground'")),
+        SummonAt::Fallen { .. } => Err(unexpected_aim(what, &[], "'fallen'")),
     }
+}
+
+/// The error for an aim `what` that found `found` where it takes one of
+/// `aims`, a relation name, or a list of relation names.
+fn unexpected_aim(what: &str, aims: &[&str], found: &str) -> ScriptError {
+    let relations: Vec<String> = content::relation_names(Relations::EVERY)
+        .into_iter()
+        .map(content::quoted)
+        .collect();
+    let mut expected = aims.to_vec();
+    expected.extend(relations.iter().map(String::as_str));
+    expected.push("a list of relation names");
+    content::unexpected(what, &expected, found)
 }
 
 /// Reads a filter: `{ types = {...}, tags = {...} }`, or `"any"` for one that
@@ -1383,6 +1426,69 @@ fn optional<T: mlua::FromLua>(table: &Table, field: &str) -> crate::Result<Optio
     Ok(value)
 }
 
+/// A required "whose" field (see [`parse_relations`]).
+fn required_relations(table: &Table, field: &str) -> crate::Result<Relations> {
+    parse_relations(&required::<Value>(table, field)?, field)
+}
+
+/// Reads a "whose": one relation's name (`"enemy"`) or a list of them
+/// (`{ "own", "ally" }`), naming the set of those relations.
+fn parse_relations(value: &Value, what: &str) -> crate::Result<Relations> {
+    let expected = ["a relation name", "a list of relation names"];
+    match value {
+        Value::String(name) => content::relation(&name.to_string_lossy()).map(Relations::from),
+        Value::Table(names) if names.metatable().is_some() => Err(content::unexpected(
+            what,
+            &expected,
+            "a table with a metatable",
+        )),
+        Value::Table(names) => match list_shape(names, what)? {
+            ListShape::Keyed => Err(content::unexpected(what, &expected, "a keyed table")),
+            ListShape::Gapped => Err(content::unexpected(
+                what,
+                &expected,
+                "a list not numbered 1, 2, ... without a gap",
+            )),
+            ListShape::Whole => {
+                let names = names
+                    .sequence_values::<String>()
+                    .collect::<mlua::Result<Vec<String>>>()
+                    .map_err(|error| field_error(what, error))?;
+                content::relations(&names)
+            }
+        },
+        other => Err(content::unexpected(what, &expected, &found(other))),
+    }
+}
+
+/// How a table's entries stand as a list.
+enum ListShape {
+    /// Entries under 1, 2, … with none missing.
+    Whole,
+    /// Only numbered entries, not numbered 1, 2, … without a gap.
+    Gapped,
+    /// An entry under a key that is not a number.
+    Keyed,
+}
+
+/// The shape of `table`'s entries as a list.
+fn list_shape(table: &Table, what: &str) -> crate::Result<ListShape> {
+    let mut entries = 0;
+    for pair in table.pairs::<Value, Value>() {
+        let (key, _) = pair.map_err(|error| field_error(what, error))?;
+        match key {
+            Value::Integer(_) => entries += 1,
+            _ => return Ok(ListShape::Keyed),
+        }
+    }
+    let listed = table.sequence_values::<Value>().count();
+    if listed == entries {
+        Ok(ListShape::Whole)
+    } else {
+        Ok(ListShape::Gapped)
+    }
+}
+
 /// A required boolean field.
 ///
 /// Read through `Option` rather than as a plain `bool`, because Lua's `nil`
@@ -1976,7 +2082,7 @@ fn parse_from_aim_to(value: &Value) -> crate::Result<FromAimTo> {
     )
 }
 
-/// Reads the bodies a relocation gathers: `{ area, side, kinds, sight,
+/// Reads the bodies a relocation gathers: `{ area, relations, kinds, sight,
 /// count, shortfall }`, where `sight` is `"blind"` or `"seen"` and `count` is
 /// `"all"` or `{ at_most = n }`.
 fn parse_gathering(table: &Table, registry: &ContentRegistry) -> crate::Result<Gathering> {
@@ -1986,7 +2092,7 @@ fn parse_gathering(table: &Table, registry: &ContentRegistry) -> crate::Result<G
             &required::<Value>(table, "area")?,
             registry,
         )?,
-        side: content::affiliation(&required::<String>(table, "side")?)?,
+        relations: required_relations(table, "relations")?,
         kinds: parse_kinds(&required::<Value>(table, "kinds")?, "relocation kinds")?,
         sight: content::gather_sight(&required::<String>(table, "sight")?)?,
         count: parse_count(&required::<Value>(table, "count")?, registry)?,
@@ -2019,7 +2125,7 @@ fn parse_count(value: &Value, registry: &ContentRegistry) -> crate::Result<Count
 fn parse_network(table: &Table) -> crate::Result<NetworkDef> {
     Ok(NetworkDef::new(
         parse_kinds(&required::<Value>(table, "carries")?, "carries")?,
-        content::affiliation(&required::<String>(table, "boarding")?)?,
+        required_relations(table, "boarding")?,
         required::<u32>(table, "capacity")?,
         content::passenger_fate(&required::<String>(table, "fate")?)?,
     ))
@@ -2031,7 +2137,7 @@ fn parse_network(table: &Table) -> crate::Result<NetworkDef> {
 fn parse_tunnel(table: &Table) -> crate::Result<TunnelDef> {
     Ok(TunnelDef::new(
         parse_kinds(&required::<Value>(table, "carries")?, "carries")?,
-        content::affiliation(&required::<String>(table, "boarding")?)?,
+        required_relations(table, "boarding")?,
         content::other_end_lost(&required::<String>(table, "other_end_lost")?)?,
         parse_passage(&required::<Value>(table, "passage")?)?,
     ))
@@ -2064,12 +2170,12 @@ fn parse_holder(table: &Table, registry: &ContentRegistry) -> crate::Result<Opti
     match (transporter, gateway) {
         (Some(transporter), None) => {
             let carries = parse_kinds(&required::<Value>(&transporter, "carries")?, "carries")?;
-            let boarding = required::<String>(&transporter, "boarding")?;
+            let boarding = required_relations(&transporter, "boarding")?;
             let fate = required::<String>(&transporter, "fate")?;
             let conduct = required::<String>(&transporter, "conduct")?;
             Ok(Some(Holder::Transporter(TransporterDef::new(
                 carries,
-                content::affiliation(&boarding)?,
+                boarding,
                 content::passenger_fate(&fate)?,
                 content::passenger_conduct(&conduct)?,
             ))))
@@ -2106,7 +2212,7 @@ fn parse_joins(gateway: &Table, registry: &ContentRegistry) -> crate::Result<Joi
 /// Reads a field definition: the `terrains` its cells lie on — `"any"` or a
 /// terrain mask — the layer mask it `spreads_on`, its `decay` — `"instant"`,
 /// `"never"`, or a `{ cycle = ticks }` table — whom it `watches`, a
-/// `{ of = affiliation }` table, none unless declared — what it
+/// `{ of = relations }` table, none unless declared — what it
 /// `blocks_sight`, a `{ height, of }` table, nothing unless declared — and its
 /// `detection`, the layer mask of what it reveals, blind unless declared (a
 /// watch's `detection` reads the same).
@@ -2116,9 +2222,7 @@ fn parse_field(table: &Table) -> crate::Result<FieldDef> {
     let decay = parse_field_decay(required::<Value>(table, "decay")?)?;
     let watches = optional::<Table>(table, "watches")?
         .map(|watches| -> crate::Result<FieldWatch> {
-            Ok(FieldWatch::new(content::affiliation(&required::<String>(
-                &watches, "of",
-            )?)?))
+            Ok(FieldWatch::new(required_relations(&watches, "of")?))
         })
         .transpose()?;
     Ok(FieldDef::new(
@@ -2139,7 +2243,7 @@ fn parse_blocks_sight(table: &Table) -> crate::Result<Option<SightBlock>> {
         .map(|block| {
             Ok(SightBlock::new(
                 required::<u32>(&block, "height")?,
-                content::affiliation(&required::<String>(&block, "of")?)?,
+                required_relations(&block, "of")?,
             ))
         })
         .transpose()
@@ -2717,7 +2821,7 @@ fn parse_field_placement(
             ) {
                 (Some(name), None) => Ok(FieldPlacement::Requires {
                     field: resolve(name)?,
-                    of: content::affiliation(&required::<String>(entry, "of")?)?,
+                    of: required_relations(entry, "of")?,
                     coverage: content::coverage(&required::<String>(entry, "coverage")?)?,
                 }),
                 (None, Some(name)) => Ok(FieldPlacement::Forbids {
@@ -2759,7 +2863,7 @@ fn parse_field_effects(
                 .transpose()?;
             Ok(FieldEffect::new(
                 field_id(entry, registry)?,
-                content::affiliation(&required::<String>(entry, "of")?)?,
+                required_relations(entry, "of")?,
                 content::coverage(&required::<String>(entry, "coverage")?)?,
                 inside,
                 outside,

@@ -1,7 +1,11 @@
 //! Network scopes: whose gateways of a network link with one another, formed
 //! from their owners.
 
-use ferrets_content::{affiliation::Affiliation, network::NetworkId, registry::ContentRegistry};
+use ferrets_content::{
+    network::NetworkId,
+    registry::ContentRegistry,
+    relation::{Relation, Relations},
+};
 
 use crate::session::{GameSession, player_id::PlayerId, player_slot::TeamId};
 
@@ -25,18 +29,23 @@ pub(crate) fn scope_of(
     network: NetworkId,
     owner: Option<PlayerId>,
 ) -> Option<NetworkScope> {
-    match (registry.network_def(network).boarding(), owner) {
-        (Affiliation::Anyone, _) => Some(NetworkScope::Everyone),
-        (Affiliation::Own, Some(player)) => Some(NetworkScope::Player(player)),
-        (Affiliation::Allied, Some(player)) => {
-            match session.slot(player).and_then(|slot| slot.team()) {
-                Some(team) => Some(NetworkScope::Team(team)),
-                None => Some(NetworkScope::Player(player)),
-            }
+    let boarding = registry.network_def(network).boarding();
+    match (boarding, owner) {
+        (boarding, _) if boarding == Relations::EVERY => Some(NetworkScope::Everyone),
+        (boarding, Some(player)) if boarding == Relations::FRIENDLY => {
+            Some(match session.slot(player).and_then(|slot| slot.team()) {
+                Some(team) => NetworkScope::Team(team),
+                None => NetworkScope::Player(player),
+            })
         }
-        (Affiliation::Own | Affiliation::Allied, None) => None,
-        (Affiliation::Enemy, _) => {
-            unreachable!("the registry refuses a network admitting only enemies")
+        (boarding, Some(player)) if boarding == Relation::Own.into() => {
+            Some(NetworkScope::Player(player))
         }
+        (boarding, None) if boarding == Relations::FRIENDLY || boarding == Relation::Own.into() => {
+            None
+        }
+        _ => unreachable!(
+            "the registry admits a network boarded by its owner's own, its owner's side, or every relation"
+        ),
     }
 }

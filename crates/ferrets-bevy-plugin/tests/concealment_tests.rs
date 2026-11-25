@@ -7,7 +7,6 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{ai::game_view, map};
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
     berths::BerthGroup,
@@ -35,6 +34,7 @@ use ferrets_content::{
     projectile::{Aim, ProjectileDef},
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
     splash::{SplashDef, SplashShape},
     stack_rule::StackRule,
@@ -1797,7 +1797,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 amount: FixedU64::from_num(10),
                 on: Recipient::Standing {
                     whom: Whom {
-                        side: Affiliation::Enemy,
+                        relations: Relation::Enemy.into(),
                         kinds: Kinds::Any,
                     },
                     reach: Reach::Wherever,
@@ -1938,7 +1938,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 )])
                 .with_field_effects([FieldEffect::new(
                     veil,
-                    Affiliation::Enemy,
+                    Relation::Enemy.into(),
                     Coverage::Any,
                     vec![EntityEffect::Disable],
                     Vec::new(),
@@ -2011,7 +2011,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
         let veiled = || {
             FieldEffect::new(
                 veil,
-                Affiliation::Allied,
+                Relations::FRIENDLY,
                 Coverage::Any,
                 vec![EntityEffect::Conceal],
                 Vec::new(),
@@ -2080,7 +2080,7 @@ fn concealment_app(slots: Vec<PlayerSlot>) -> App {
                 .with_sight_range(2)
                 .with_field_effects([FieldEffect::new(
                     veil,
-                    Affiliation::Allied,
+                    Relations::FRIENDLY,
                     Coverage::Every,
                     vec![EntityEffect::Conceal],
                     Vec::new(),

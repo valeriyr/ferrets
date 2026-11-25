@@ -11,7 +11,6 @@ use ferrets_nav_grid::{
 };
 
 use crate::{
-    affiliation::Affiliation,
     annex::{AloneConduct, AnnexLife},
     area::Area,
     attack::{AttackDef, Delivery, Weapon},
@@ -40,6 +39,7 @@ use crate::{
     pool_shift::PoolShift,
     projectile::{Aim, ProjectileDef, ProjectileId},
     quantity::Quantity,
+    relation::{Relation, Relations},
     repair::RepairCost,
     requirement::{Bound, Requirement, Scope, Threshold},
     research::{ResearchDef, ResearchId},
@@ -845,18 +845,27 @@ impl ContentRegistry {
     /// returns its existing id.
     ///
     /// Panics if `name` is empty, the skill costs an unregistered resource
-    /// kind, its effect references a buff this registry never minted, or its
-    /// watch detects on an unregistered layer.
+    /// kind, its effect references a buff this registry never minted, its
+    /// watch detects on an unregistered layer, or it aims at or gathers no
+    /// relation.
     pub fn register_skill(&mut self, name: impl Into<String>, skill: SkillDef) -> SkillId {
         let name = name.into();
         assert!(!name.is_empty(), "skill name must not be empty");
-
         match &skill.caster {
             SkillCaster::Entity {
                 costs,
                 casting,
                 effect,
             } => {
+                match effect.target() {
+                    EntityCastTarget::Standing { whom, .. } => assert!(
+                        !whom.relations.is_empty(),
+                        "skill '{name}' aims at no relation"
+                    ),
+                    EntityCastTarget::Caster
+                    | EntityCastTarget::Ground { .. }
+                    | EntityCastTarget::Fallen { .. } => {}
+                }
                 // The least a number ever folds to: one content spells out is
                 // that number, and a stat is the floor it was registered with.
                 let least = |quantity: &Quantity| match quantity {
@@ -1036,15 +1045,21 @@ impl ContentRegistry {
                         }
                     }
                     EntityCastEffect::Relocate { journey, .. } => {
-                        match journey.gathering().map(|gathering| gathering.count) {
-                            Some(Count::AtMost(count)) => {
-                                assert_whole(count, &format!("skill '{name}' gathering count"));
-                                assert!(
-                                    least(&count) >= FixedU64::ONE,
-                                    "skill '{name}' relocates nobody at all"
-                                );
+                        if let Some(gathering) = journey.gathering() {
+                            assert!(
+                                !gathering.relations.is_empty(),
+                                "skill '{name}' gathers no relation"
+                            );
+                            match gathering.count {
+                                Count::AtMost(count) => {
+                                    assert_whole(count, &format!("skill '{name}' gathering count"));
+                                    assert!(
+                                        least(&count) >= FixedU64::ONE,
+                                        "skill '{name}' relocates nobody at all"
+                                    );
+                                }
+                                Count::All => {}
                             }
-                            Some(Count::All) | None => {}
                         }
                     }
                 }
@@ -1306,8 +1321,8 @@ impl ContentRegistry {
     /// first.
     ///
     /// Panics if `name` is empty, the field is already registered, it names an
-    /// unregistered terrain, spreads on an unregistered layer, or detects on an
-    /// unregistered layer.
+    /// unregistered terrain, spreads on an unregistered layer, detects on an
+    /// unregistered layer, or watches for or blocks the sight of no relation.
     pub fn register_field(&mut self, name: impl Into<String>, field: FieldDef) -> FieldId {
         let name = name.into();
         assert!(!name.is_empty(), "field name must not be empty");
@@ -1322,6 +1337,18 @@ impl ContentRegistry {
             "field '{name}' spreads on unregistered layers {unregistered}"
         );
         self.validate_detection(&format!("field '{name}'"), field.detection());
+        if let Some(watch) = field.watches() {
+            assert!(
+                !watch.of().is_empty(),
+                "field '{name}' watches for no relation"
+            );
+        }
+        if let Some(block) = field.blocks_sight() {
+            assert!(
+                !block.of().is_empty(),
+                "field '{name}' blocks no relation's sight"
+            );
+        }
 
         let id = FieldId::from_index(self.field_defs.len());
         self.fields.insert(name, id);
@@ -1362,7 +1389,8 @@ impl ContentRegistry {
     /// ids everywhere.
     ///
     /// Panics if `name` is empty, the network is already registered, it holds
-    /// no cargo at all, or it admits only enemies.
+    /// no cargo at all, or its boarding is not its owner's own, its owner's
+    /// side, or every relation.
     pub fn register_network(&mut self, name: impl Into<String>, network: NetworkDef) -> NetworkId {
         let name = name.into();
         assert!(!name.is_empty(), "network name must not be empty");
@@ -1374,12 +1402,13 @@ impl ContentRegistry {
             network.capacity() > 0,
             "network '{name}' holds nothing at all"
         );
-        match network.boarding() {
-            Affiliation::Own | Affiliation::Allied | Affiliation::Anyone => {}
-            Affiliation::Enemy => {
-                panic!("network '{name}' admits only enemies, so no gateways ever link")
-            }
-        }
+        let boarding = network.boarding();
+        assert!(
+            boarding == Relation::Own.into()
+                || boarding == Relations::FRIENDLY
+                || boarding == Relations::EVERY,
+            "network '{name}' links gateways by owner, so it admits its owner's own, its owner's side (own and ally), or every relation"
+        );
 
         let id = NetworkId::from_index(self.network_defs.len());
         self.networks.insert(name, id);
@@ -1414,7 +1443,7 @@ impl ContentRegistry {
     /// the same order resolves to identical ids everywhere.
     ///
     /// Panics if `name` is empty, the tunnel is already registered, it holds
-    /// no cargo at all, or it admits only enemies.
+    /// no cargo at all, or it admits neither its owner's own nor allies.
     pub fn register_tunnel(&mut self, name: impl Into<String>, tunnel: TunnelDef) -> TunnelId {
         let name = name.into();
         assert!(!name.is_empty(), "tunnel name must not be empty");
@@ -1428,10 +1457,10 @@ impl ContentRegistry {
             }
             Passage::Crosses => {}
         }
-        match tunnel.boarding() {
-            Affiliation::Own | Affiliation::Allied | Affiliation::Anyone => {}
-            Affiliation::Enemy => panic!("tunnel '{name}' admits only enemies"),
-        }
+        assert!(
+            tunnel.boarding().intersects(Relations::FRIENDLY),
+            "tunnel '{name}' admits neither its owner's own nor allies"
+        );
 
         let id = TunnelId::from_index(self.tunnel_defs.len());
         self.tunnels.insert(name, id);
@@ -1883,10 +1912,36 @@ impl ContentRegistry {
 
     /// Checks that every field the type projects, reads for placement or
     /// warp-in, or answers to was minted by this registry, that neither its
-    /// placement nor its warp-in rules both require and forbid a field, and
-    /// that every field-effect modifier targets a registered entity stat.
+    /// placement nor its warp-in rules both require and forbid a field, that
+    /// every field-effect modifier targets a registered entity stat, and that
+    /// its placement rules, field effects and sight blocker each name some
+    /// relation.
     fn validate_fields(&self, def: &EntityTypeDef) {
         let known = |field: FieldId| field.index() < self.field_defs.len();
+        for placement in &def.field_placement {
+            match placement {
+                FieldPlacement::Requires { of, .. } => assert!(
+                    !of.is_empty(),
+                    "entity type '{}' requires a field laid by no relation",
+                    def.name
+                ),
+                FieldPlacement::Forbids { .. } => {}
+            }
+        }
+        for effect in &def.field_effects {
+            assert!(
+                !effect.of().is_empty(),
+                "entity type '{}' takes a field effect from no relation",
+                def.name
+            );
+        }
+        if let Some(block) = def.blocks_sight {
+            assert!(
+                !block.of().is_empty(),
+                "entity type '{}' blocks no relation's sight",
+                def.name
+            );
+        }
         for source in &def.field_sources {
             assert!(
                 known(source.field()),
@@ -2961,11 +3016,17 @@ impl ContentRegistry {
         }
     }
 
-    /// Checks that a transporter is not itself transportable.
+    /// Checks that a transporter is not itself transportable and lets some
+    /// relation board.
     fn validate_transport(&self, def: &EntityTypeDef) {
-        if def.transporter().is_none() {
+        let Some(transporter) = def.transporter() else {
             return;
-        }
+        };
+        assert!(
+            !transporter.boarding().is_empty(),
+            "entity type '{}' lets no relation board",
+            def.name
+        );
         // A transporter riding inside another would nest holders; keeping the
         // two capabilities apart makes that unrepresentable.
         assert!(

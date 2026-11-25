@@ -7,7 +7,6 @@ use ferrets_math::FixedU64;
 use ferrets_nav_grid::layer_mask::LayerMask;
 
 use crate::{
-    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexDef, DockDef},
     attack::{AttackDef, Delivery, Slain, Weapon},
     base_stats::BaseStats,
@@ -30,6 +29,7 @@ use crate::{
     pool_def::PoolId,
     price::{self, Price},
     quantity::Quantity,
+    relation::Relations,
     repair::{RepairCost, RepairRate, RepairerDef},
     requirement::Requirement,
     research::{ResearchId, ResearcherDef},
@@ -727,7 +727,7 @@ impl EntityTypeDef {
     pub fn with_transporter(
         mut self,
         carries: Kinds,
-        boarding: Affiliation,
+        boarding: Relations,
         passenger_fate: PassengerFate,
         conduct: PassengerConduct,
     ) -> Self {

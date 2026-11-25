@@ -8,7 +8,6 @@ mod utils;
 use std::collections::BTreeSet;
 
 use ferrets_content::{
-    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
@@ -48,6 +47,7 @@ use ferrets_content::{
     price::{self, Price},
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     repair::{RepairCost, RepairRate},
     requirement::{Bound, Requirement, Threshold},
     research::{ResearchDef, ResearcherDef},
@@ -2241,7 +2241,7 @@ fn register_rejects_transporter_without_reach() {
             .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
             .with_transporter(
                 Kinds::tags(["infantry"]),
-                Affiliation::Own,
+                Relation::Own.into(),
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -2262,7 +2262,7 @@ fn register_rejects_zero_cargo_capacity() {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
                 Kinds::tags(["infantry"]),
-                Affiliation::Own,
+                Relation::Own.into(),
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -2282,7 +2282,28 @@ fn register_rejects_transporter_without_capacity() {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
                 Kinds::tags(["infantry"]),
-                Affiliation::Own,
+                Relation::Own.into(),
+                PassengerFate::Destroy,
+                PassengerConduct::Shelter,
+            ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'wagon' lets no relation board")]
+fn register_rejects_transporter_boarded_by_no_relation() {
+    let mut registry = utils::ground_registry();
+    registry.register_tag("infantry");
+    registry.register(
+        utils::standing("wagon", utils::GROUND_DOMAIN)
+            .with_stat(EntityStatId::LOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::UNLOAD_RANGE, FixedU64::ONE)
+            .with_stat(EntityStatId::LOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
+            .with_stat(EntityStatId::CARGO_CAPACITY, FixedU64::from_num(4))
+            .with_transporter(
+                Kinds::tags(["infantry"]),
+                Relations::NONE,
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -2314,7 +2335,7 @@ fn register_rejects_transportable_transporter() {
             .with_stat(EntityStatId::CARGO_SIZE, FixedU64::from_num(2))
             .with_transporter(
                 Kinds::tags(["infantry"]),
-                Affiliation::Own,
+                Relation::Own.into(),
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -2334,7 +2355,7 @@ fn validate_rejects_unresolved_carries_entry() {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
                 Kinds::tags(["critters"]),
-                Affiliation::Own,
+                Relation::Own.into(),
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -2354,7 +2375,7 @@ fn validate_accepts_carries_entry_registered_later() {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
                 Kinds::types(["footman"]),
-                Affiliation::Own,
+                Relation::Own.into(),
                 PassengerFate::Destroy,
                 PassengerConduct::Shelter,
             ),
@@ -2376,7 +2397,7 @@ fn register_links_assigns_ids_in_registration_order() {
     let warren = registry.register_network("warren", warren_def(255));
     let nest = registry.register_network(
         "nest",
-        NetworkDef::new(Kinds::Any, Affiliation::Allied, 8, PassengerFate::Eject),
+        NetworkDef::new(Kinds::Any, Relations::FRIENDLY, 8, PassengerFate::Eject),
     );
     let tunnel = registry.register_tunnel("tunnel", tunnel_def(Passage::Crosses));
 
@@ -2385,7 +2406,7 @@ fn register_links_assigns_ids_in_registration_order() {
     assert_eq!(registry.network_name(warren), Some("warren"));
     assert_eq!(registry.tunnel("tunnel"), Some(tunnel));
     assert_eq!(registry.tunnel_name(tunnel), Some("tunnel"));
-    assert_eq!(registry.network_def(nest).boarding(), Affiliation::Allied);
+    assert_eq!(registry.network_def(nest).boarding(), Relations::FRIENDLY);
     assert_eq!(
         registry.tunnel_def(tunnel).other_end_lost(),
         OtherEndLost::Stands
@@ -2415,22 +2436,60 @@ fn register_network_rejects_no_capacity() {
 }
 
 #[test]
-#[should_panic(expected = "network 'warren' admits only enemies, so no gateways ever link")]
+#[should_panic(
+    expected = "network 'warren' links gateways by owner, so it admits its owner's own, its owner's side (own and ally), or every relation"
+)]
 fn register_network_rejects_enemy_boarding() {
     ContentRegistry::default().register_network(
         "warren",
-        NetworkDef::new(Kinds::Any, Affiliation::Enemy, 8, PassengerFate::Destroy),
+        NetworkDef::new(
+            Kinds::Any,
+            Relation::Enemy.into(),
+            8,
+            PassengerFate::Destroy,
+        ),
     );
 }
 
 #[test]
-#[should_panic(expected = "tunnel 'tunnel' admits only enemies")]
+#[should_panic(expected = "tunnel 'tunnel' admits neither its owner's own nor allies")]
 fn register_tunnel_rejects_enemy_boarding() {
     ContentRegistry::default().register_tunnel(
         "tunnel",
         TunnelDef::new(
             Kinds::Any,
-            Affiliation::Enemy,
+            Relation::Enemy.into(),
+            OtherEndLost::Stands,
+            Passage::Crosses,
+        ),
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "network 'warren' links gateways by owner, so it admits its owner's own, its owner's side (own and ally), or every relation"
+)]
+fn register_network_rejects_boarding_that_scopes_no_owner() {
+    // Own, ally and the unowned but no enemy: no scope of owners holds that.
+    ContentRegistry::default().register_network(
+        "warren",
+        NetworkDef::new(
+            Kinds::Any,
+            Relation::Own | Relation::Ally | Relation::Neutral,
+            8,
+            PassengerFate::Destroy,
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "tunnel 'tunnel' admits neither its owner's own nor allies")]
+fn register_tunnel_rejects_empty_boarding() {
+    ContentRegistry::default().register_tunnel(
+        "tunnel",
+        TunnelDef::new(
+            Kinds::Any,
+            Relations::NONE,
             OtherEndLost::Stands,
             Passage::Crosses,
         ),
@@ -2566,7 +2625,7 @@ fn validate_rejects_network_letting_in_another_networks_gateway() {
         "warren",
         NetworkDef::new(
             Kinds::tags(["infantry"]),
-            Affiliation::Own,
+            Relation::Own.into(),
             255,
             PassengerFate::Destroy,
         ),
@@ -2575,7 +2634,7 @@ fn validate_rejects_network_letting_in_another_networks_gateway() {
         "nest",
         NetworkDef::new(
             Kinds::tags(["burrows"]),
-            Affiliation::Own,
+            Relation::Own.into(),
             8,
             PassengerFate::Destroy,
         ),
@@ -2660,7 +2719,7 @@ fn validate_rejects_unresolved_network_carries_entry() {
         "warren",
         NetworkDef::new(
             Kinds::tags(["critters"]),
-            Affiliation::Own,
+            Relation::Own.into(),
             8,
             PassengerFate::Destroy,
         ),
@@ -2676,7 +2735,7 @@ fn validate_rejects_unresolved_tunnel_carries_entry() {
         "tunnel",
         TunnelDef::new(
             Kinds::tags(["critters"]),
-            Affiliation::Own,
+            Relation::Own.into(),
             OtherEndLost::Stands,
             Passage::Crosses,
         ),
@@ -4206,7 +4265,7 @@ fn validate_rejects_field_effect_over_terrain_its_domain_never_takes() {
     );
     registry.register(dry_knight(dry).with_field_effects([FieldEffect::new(
         creep,
-        Affiliation::Anyone,
+        Relations::EVERY,
         Coverage::Any,
         vec![EntityEffect::Conceal],
         Vec::new(),
@@ -4393,7 +4452,7 @@ fn validate_accepts_target_buff_over_terrain_its_caster_never_takes() {
                     buff: wet,
                     on: Recipient::Standing {
                         whom: Whom {
-                            side: Affiliation::Anyone,
+                            relations: Relations::EVERY,
                             kinds: Kinds::Any,
                         },
                         reach: Reach::Wherever,
@@ -4617,7 +4676,7 @@ fn validate_rejects_passive_and_field_effect_feeding_each_other() {
             .with_passives([surging])
             .with_field_effects([FieldEffect::new(
                 creep,
-                Affiliation::Anyone,
+                Relations::EVERY,
                 Coverage::Any,
                 vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
                     modifiers: vec![EntityModifier {
@@ -4955,7 +5014,7 @@ fn register_rejects_field_effect_on_pool_maximum_without_shift() {
             .with_pool(Pool::health(35))
             .with_field_effects([FieldEffect::new(
                 creep,
-                Affiliation::Anyone,
+                Relations::EVERY,
                 Coverage::Every,
                 Vec::new(),
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
@@ -4982,7 +5041,7 @@ fn register_rejects_field_effect_moving_stat_it_holds_while_judging() {
             .with_pool(Pool::health(35))
             .with_field_effects([FieldEffect::new(
                 creep,
-                Affiliation::Anyone,
+                Relations::EVERY,
                 Coverage::Every,
                 Vec::new(),
                 vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
@@ -6246,12 +6305,12 @@ fn register_accepts_field_sources_placement_and_effects() {
             .with_field_sources([emitter(creep)])
             .with_field_placement([FieldPlacement::Requires {
                 field: creep,
-                of: Affiliation::Anyone,
+                of: Relations::EVERY,
                 coverage: Coverage::Every,
             }])
             .with_field_effects([FieldEffect::new(
                 creep,
-                Affiliation::Anyone,
+                Relations::EVERY,
                 Coverage::Any,
                 vec![EntityEffect::Modifiers(EntityModifiers::PoolMaximums {
                     modifiers: vec![EntityModifier {
@@ -6340,8 +6399,8 @@ fn register_keeps_what_field_watches_and_blocks() {
             Terrains::Any,
             utils::GROUND.into(),
             FieldDecay::Instant,
-            Some(FieldWatch::new(Affiliation::Allied)),
-            Some(SightBlock::new(2, Affiliation::Enemy)),
+            Some(FieldWatch::new(Relations::FRIENDLY)),
+            Some(SightBlock::new(2, Relation::Enemy.into())),
             Detection::Blind,
         ),
     );
@@ -6359,14 +6418,88 @@ fn register_keeps_what_field_watches_and_blocks() {
 
     assert_eq!(
         registry.field_def(fog).watches(),
-        Some(FieldWatch::new(Affiliation::Allied))
+        Some(FieldWatch::new(Relations::FRIENDLY))
     );
     assert_eq!(
         registry.field_def(fog).blocks_sight(),
-        Some(SightBlock::new(2, Affiliation::Enemy))
+        Some(SightBlock::new(2, Relation::Enemy.into()))
     );
     assert_eq!(registry.field_def(power).watches(), None);
     assert_eq!(registry.field_def(power).blocks_sight(), None);
+}
+
+#[test]
+#[should_panic(expected = "field 'fog_cloud' watches for no relation")]
+fn register_rejects_field_watching_no_relation() {
+    utils::ground_registry().register_field(
+        "fog_cloud",
+        FieldDef::new(
+            Terrains::Any,
+            utils::GROUND.into(),
+            FieldDecay::Instant,
+            Some(FieldWatch::new(Relations::NONE)),
+            None,
+            Detection::Blind,
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "field 'fog_cloud' blocks no relation's sight")]
+fn register_rejects_field_blocking_no_relation() {
+    utils::ground_registry().register_field(
+        "fog_cloud",
+        FieldDef::new(
+            Terrains::Any,
+            utils::GROUND.into(),
+            FieldDecay::Instant,
+            None,
+            Some(SightBlock::new(2, Relations::NONE)),
+            Detection::Blind,
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'hive' requires a field laid by no relation")]
+fn register_rejects_placement_requiring_field_laid_by_no_relation() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("hive", utils::GROUND_DOMAIN).with_field_placement([
+            FieldPlacement::Requires {
+                field: creep,
+                of: Relations::NONE,
+                coverage: Coverage::Every,
+            },
+        ]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'crawler' takes a field effect from no relation")]
+fn register_rejects_field_effect_from_no_relation() {
+    let mut registry = utils::ground_registry();
+    let creep = creep_field(&mut registry);
+    registry.register(
+        utils::standing("crawler", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
+            creep,
+            Relations::NONE,
+            Coverage::Every,
+            Vec::new(),
+            vec![EntityEffect::Disable],
+            None,
+        )]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "entity type 'pillar' blocks no relation's sight")]
+fn register_rejects_entity_blocking_no_relation() {
+    utils::ground_registry().register(
+        utils::standing("pillar", utils::GROUND_DOMAIN)
+            .with_blocks_sight(SightBlock::new(2, Relations::NONE)),
+    );
 }
 
 #[test]
@@ -6422,7 +6555,7 @@ fn register_rejects_effect_of_foreign_field() {
     utils::ground_registry().register(
         utils::standing("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             creep,
-            Affiliation::Own,
+            Relation::Own.into(),
             Coverage::Every,
             Vec::new(),
             vec![EntityEffect::Disable],
@@ -6483,7 +6616,7 @@ fn register_rejects_effect_of_field_off_its_layer() {
     registry.register(
         utils::standing("crawler", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             tide,
-            Affiliation::Own,
+            Relation::Own.into(),
             Coverage::Every,
             Vec::new(),
             vec![EntityEffect::Disable],
@@ -6510,7 +6643,7 @@ fn register_accepts_effect_of_field_spreading_on_its_layer_among_others() {
     registry.register(
         utils::standing("wader", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             shoal,
-            Affiliation::Own,
+            Relation::Own.into(),
             Coverage::Every,
             Vec::new(),
             vec![EntityEffect::Disable],
@@ -6665,7 +6798,7 @@ fn register_rejects_field_effect_with_no_side() {
     registry.register(
         utils::standing("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             creep,
-            Affiliation::Anyone,
+            Relations::EVERY,
             Coverage::Any,
             Vec::new(),
             Vec::new(),
@@ -6682,7 +6815,7 @@ fn register_rejects_field_effect_with_no_modifiers() {
     registry.register(
         utils::standing("zergling", utils::GROUND_DOMAIN).with_field_effects([FieldEffect::new(
             creep,
-            Affiliation::Anyone,
+            Relations::EVERY,
             Coverage::Any,
             vec![EntityEffect::Modifiers(EntityModifiers::Stats(Vec::new()))],
             Vec::new(),
@@ -6703,7 +6836,7 @@ fn register_rejects_field_effect_on_stat_type_lacks() {
             .with_pool(Pool::health(35))
             .with_field_effects([FieldEffect::new(
                 creep,
-                Affiliation::Anyone,
+                Relations::EVERY,
                 Coverage::Every,
                 Vec::new(),
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
@@ -6727,7 +6860,7 @@ fn register_accepts_field_effect_on_rate_its_pool_carries() {
             .with_pool(Pool::health(35))
             .with_field_effects([FieldEffect::new(
                 creep,
-                Affiliation::Anyone,
+                Relations::EVERY,
                 Coverage::Every,
                 Vec::new(),
                 vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
@@ -6930,7 +7063,7 @@ fn validate_rejects_skill_aimed_at_unregistered_type() {
                     amount: FixedU64::ONE,
                     on: Recipient::Standing {
                         whom: Whom {
-                            side: Affiliation::Enemy,
+                            relations: Relation::Enemy.into(),
                             kinds: Kinds::types(["ghost"]),
                         },
                         reach: Reach::Wherever,
@@ -6961,7 +7094,7 @@ fn validate_accepts_skill_aimed_at_type_that_carries_it() {
                     amount: FixedU64::ONE,
                     on: Recipient::Standing {
                         whom: Whom {
-                            side: Affiliation::Allied,
+                            relations: Relations::FRIENDLY,
                             kinds: Kinds::types(["priest"]),
                         },
                         reach: Reach::Wherever,
@@ -7089,7 +7222,7 @@ fn register_rejects_exact_summon_on_standing_body_it_is_not_raised_over() {
     let burrow = registry.type_id("burrow").expect("just registered");
     let at = SummonAt::Standing {
         whom: Whom {
-            side: Affiliation::Own,
+            relations: Relation::Own.into(),
             kinds: Kinds::Any,
         },
         reach: Reach::Wherever,
@@ -7143,7 +7276,7 @@ fn register_accepts_reach_read_from_stat_caster_carries() {
                     amount: FixedU64::ONE,
                     on: Recipient::Standing {
                         whom: Whom {
-                            side: Affiliation::Enemy,
+                            relations: Relation::Enemy.into(),
                             kinds: Kinds::Any,
                         },
                         reach: Reach::Within(Area::Around(Quantity::Stat(raise_range))),
@@ -7178,7 +7311,7 @@ fn register_rejects_reach_by_stat_caster_lacks() {
                     amount: FixedU64::ONE,
                     on: Recipient::Standing {
                         whom: Whom {
-                            side: Affiliation::Enemy,
+                            relations: Relation::Enemy.into(),
                             kinds: Kinds::Any,
                         },
                         reach: Reach::Within(Area::Around(Quantity::Stat(raise_range))),
@@ -7294,7 +7427,7 @@ fn register_rejects_cast_point_by_stat_caster_lacks() {
                     amount: FixedU64::ONE,
                     on: Recipient::Standing {
                         whom: Whom {
-                            side: Affiliation::Enemy,
+                            relations: Relation::Enemy.into(),
                             kinds: Kinds::Any,
                         },
                         reach: Reach::Wherever,
@@ -7458,7 +7591,7 @@ fn register_accepts_cast_worked_on_stats_caster_carries() {
                     amount: FixedU64::ONE,
                     on: Recipient::Standing {
                         whom: Whom {
-                            side: Affiliation::Enemy,
+                            relations: Relation::Enemy.into(),
                             kinds: Kinds::Any,
                         },
                         reach: Reach::Wherever,
@@ -8163,6 +8296,50 @@ fn register_rejects_relocation_of_nobody() {
 }
 
 #[test]
+#[should_panic(expected = "skill 'recall' gathers no relation")]
+fn register_rejects_gathering_of_no_relation() {
+    utils::ground_registry().register_skill(
+        "recall",
+        relocating(from_aim(
+            AimParty::Around {
+                at: cell(),
+                gathering: Gathering {
+                    relations: Relations::NONE,
+                    ..gathering(Count::All)
+                },
+            },
+            FromAimTo::Caster,
+        )),
+    );
+}
+
+#[test]
+#[should_panic(expected = "skill 'smite' aims at no relation")]
+fn register_rejects_skill_aimed_at_no_relation() {
+    utils::ground_registry().register_skill(
+        "smite",
+        SkillDef {
+            cooldown: 1,
+            caster: SkillCaster::Entity {
+                costs: Vec::new(),
+                casting: Casting::Instant,
+                effect: EntityCastEffect::Damage {
+                    amount: FixedU64::ONE,
+                    on: Recipient::Standing {
+                        whom: Whom {
+                            relations: Relations::NONE,
+                            kinds: Kinds::Any,
+                        },
+                        reach: Reach::Wherever,
+                    },
+                },
+            },
+            requires: Vec::new(),
+        },
+    );
+}
+
+#[test]
 #[should_panic(expected = "skill 'homeward' relocates nobody at all")]
 fn register_rejects_home_journey_of_nobody() {
     utils::ground_registry().register_skill(
@@ -8258,7 +8435,7 @@ fn validate_rejects_swap_aimed_at_unregistered_type() {
         "swap",
         relocating(Journey::Swap {
             whom: Whom {
-                side: Affiliation::Own,
+                relations: Relation::Own.into(),
                 kinds: Kinds::only(vec![Kind::Type("ghost".into())]),
             },
             reach: Reach::Wherever,
@@ -9012,7 +9189,7 @@ fn relocating(journey: Journey) -> SkillDef {
 fn gathering(count: Count) -> Gathering {
     Gathering {
         area: Area::Around(Quantity::from(2)),
-        side: Affiliation::Own,
+        relations: Relation::Own.into(),
         kinds: Kinds::Any,
         sight: GatherSight::Blind,
         count,
@@ -9033,7 +9210,7 @@ fn from_aim(party: AimParty, to: FromAimTo) -> Journey {
 /// Something own standing, of any kind.
 fn own_anything() -> Whom {
     Whom {
-        side: Affiliation::Own,
+        relations: Relation::Own.into(),
         kinds: Kinds::Any,
     }
 }
@@ -9050,7 +9227,7 @@ fn cell() -> Away {
 fn warren_def(capacity: u32) -> NetworkDef {
     NetworkDef::new(
         Kinds::Any,
-        Affiliation::Own,
+        Relation::Own.into(),
         capacity,
         PassengerFate::Destroy,
     )
@@ -9059,7 +9236,12 @@ fn warren_def(capacity: u32) -> NetworkDef {
 /// A tunnel of `passage`, letting in anyone of its owner's, its survivor
 /// standing.
 fn tunnel_def(passage: Passage) -> TunnelDef {
-    TunnelDef::new(Kinds::Any, Affiliation::Own, OtherEndLost::Stands, passage)
+    TunnelDef::new(
+        Kinds::Any,
+        Relation::Own.into(),
+        OtherEndLost::Stands,
+        passage,
+    )
 }
 
 /// A held passage of `capacity` that kills whoever is inside with the
@@ -9136,7 +9318,7 @@ fn register_power(registry: &mut ContentRegistry) -> FieldId {
 fn powered(power: FieldId) -> FieldPlacement {
     FieldPlacement::Requires {
         field: power,
-        of: Affiliation::Own,
+        of: Relation::Own.into(),
         coverage: Coverage::Every,
     }
 }

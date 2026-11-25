@@ -3,12 +3,12 @@
 
 use bevy_ecs::{entity::Entity, world::World};
 use ferrets_content::{
-    affiliation::Affiliation,
     entity_stats::EntityStatId,
     gateway::{GatewayDef, Joins},
     kinds::Kinds,
     landing::Landing,
     registry::ContentRegistry,
+    relation::Relations,
     tunnel::Passage,
 };
 use ferrets_geometry::cell_pos::CellPos;
@@ -60,7 +60,7 @@ pub(crate) fn would_enter(
         return Err(Refusal::TargetUnfit);
     }
     let registry = world.resource::<ContentRegistry>();
-    let (carries, boarding, passage): (&Kinds, Affiliation, Passage) = match def.joins() {
+    let (carries, boarding, passage): (&Kinds, Relations, Passage) = match def.joins() {
         Joins::Network(network) => {
             let network = registry.network_def(network);
             (
@@ -77,13 +77,11 @@ pub(crate) fn would_enter(
             (tunnel.carries(), tunnel.boarding(), tunnel.passage())
         }
     };
-    let allowed = world
-        .resource::<GameSession>()
-        .relation(
-            entity_def::owner(world, gateway),
-            entity_def::owner(world, entity),
-        )
-        .fits(boarding);
+    let relation = world.resource::<GameSession>().relation(
+        entity_def::owner(world, gateway),
+        entity_def::owner(world, entity),
+    );
+    let allowed = boarding.contains(relation);
     if !allowed || !carries.admits(entity_def::of(world, entity)) {
         return Err(Refusal::TargetUnfit);
     }

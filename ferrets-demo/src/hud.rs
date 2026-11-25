@@ -2005,7 +2005,7 @@ fn aim_refusal_words(refusal: AimRefusal) -> &'static str {
         AimRefusal::Unaimed => "Pick a target the skill takes",
         AimRefusal::OffMap => "Off the map",
         AimRefusal::Unseen => "Not in sight",
-        AimRefusal::WrongSide => "Not a side it can be cast on",
+        AimRefusal::WrongRelation => "Not a relation it can be cast on",
         AimRefusal::WrongKind => "Not something it can be cast on",
         AimRefusal::Uncarried => "It would do nothing to that",
         AimRefusal::Unheld => "The buff would not hold there",

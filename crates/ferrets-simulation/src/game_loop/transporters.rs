@@ -36,13 +36,11 @@ pub(crate) fn would_take(
     let def = transporter_def(world, transporter);
 
     // Read from the holder: whom it admits is its own rule about its riders.
-    let allowed = world
-        .resource::<GameSession>()
-        .relation(
-            entity_def::owner(world, transporter),
-            entity_def::owner(world, entity),
-        )
-        .fits(def.boarding());
+    let relation = world.resource::<GameSession>().relation(
+        entity_def::owner(world, transporter),
+        entity_def::owner(world, entity),
+    );
+    let allowed = def.boarding().contains(relation);
     if !allowed || !def.carries().admits(entity_def::of(world, entity)) {
         return Err(Refusal::TargetUnfit);
     }

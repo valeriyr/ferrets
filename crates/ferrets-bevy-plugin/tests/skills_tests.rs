@@ -2,7 +2,6 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     cost::Cost,
     detection::Detection,
@@ -16,6 +15,7 @@ use ferrets_content::{
     price::{self, Price},
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     requirement::Requirement,
     research::ResearchDef,
     skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
@@ -347,7 +347,7 @@ fn aim_at_target_out_of_sight_is_unseen() {
 }
 
 #[test]
-fn aim_at_ownerless_target_of_own_only_skill_is_wrong_side() {
+fn aim_at_ownerless_target_of_own_only_skill_is_wrong_relation() {
     let mut app = app();
     let (mage, _) =
         utils::create_entity(app.world_mut(), "mage", utils::cell(5, 5), Some(0)).unwrap();
@@ -358,7 +358,7 @@ fn aim_at_ownerless_target_of_own_only_skill_is_wrong_side() {
 
     assert_eq!(
         aim(&app, mage, "bless", Some(SkillTarget::Entity(stray_id))),
-        Err(AimRefusal::WrongSide)
+        Err(AimRefusal::WrongRelation)
     );
 }
 
@@ -494,7 +494,7 @@ fn app() -> App {
                         buff: frenzy,
                         on: Recipient::Standing {
                             whom: Whom {
-                                side: Affiliation::Anyone,
+                                relations: Relations::EVERY,
                                 kinds: Kinds::Any,
                             },
                             reach: Reach::Wherever,
@@ -515,7 +515,7 @@ fn app() -> App {
                         buff: frenzy,
                         on: Recipient::Standing {
                             whom: Whom {
-                                side: Affiliation::Own,
+                                relations: Relation::Own.into(),
                                 kinds: Kinds::only([Kind::Type("mage".to_string())]),
                             },
                             reach: Reach::Wherever,
@@ -536,7 +536,7 @@ fn app() -> App {
                         amount: FixedU64::from_num(10),
                         on: Recipient::Standing {
                             whom: Whom {
-                                side: Affiliation::Anyone,
+                                relations: Relations::EVERY,
                                 kinds: Kinds::Any,
                             },
                             reach: Reach::Wherever,

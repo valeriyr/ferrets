@@ -15,13 +15,13 @@ use crate::{
     session::{GameSession, player_id::PlayerId, player_mask::PlayerMask},
 };
 use ferrets_content::{
-    affiliation::Affiliation,
     coverage::Coverage,
     entity_effect::EntityEffect,
     entity_modifiers::EntityModifiers,
     entity_type_def::EntityTypeDef,
     field::{FieldEffect, FieldId, FieldPlacement, FieldSide},
     registry::ContentRegistry,
+    relation::Relations,
     requirement::Requirement,
 };
 
@@ -110,7 +110,7 @@ impl FieldGrid {
         session: &GameSession,
         field: FieldId,
         pos: CellPos,
-        of: Affiliation,
+        of: Relations,
         player: Option<PlayerId>,
     ) -> bool {
         self.covered(field, pos).satisfies(session, of, player)
@@ -283,16 +283,11 @@ impl PlayerMask {
     /// `player`.
     ///
     /// Coverage belongs to whoever laid it, so an empty mask is nobody's and
-    /// satisfies nothing — not even [`Affiliation::Anyone`], which names anyone
-    /// who is there rather than the absence of cover.
-    pub fn satisfies(
-        self,
-        session: &GameSession,
-        of: Affiliation,
-        player: Option<PlayerId>,
-    ) -> bool {
+    /// satisfies nothing — not even a set naming every relation, which names
+    /// anyone who is there rather than the absence of cover.
+    pub fn satisfies(self, session: &GameSession, of: Relations, player: Option<PlayerId>) -> bool {
         self.players()
-            .any(|other| session.relation(player, Some(other)).fits(of))
+            .any(|other| of.contains(session.relation(player, Some(other))))
     }
 }
 
@@ -420,7 +415,7 @@ pub fn detects(world: &World, player: PlayerId, cell: CellPos, layers: LayerMask
     let session = world.resource::<GameSession>();
     registry.detecting_fields().any(|(field, revealed)| {
         revealed & layers != LayerMask::EMPTY
-            && grid.covers(session, field, cell, Affiliation::Allied, Some(player))
+            && grid.covers(session, field, cell, Relations::FRIENDLY, Some(player))
     })
 }
 

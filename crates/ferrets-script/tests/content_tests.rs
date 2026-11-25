@@ -6,7 +6,6 @@
 mod utils;
 
 use ferrets_content::{
-    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
@@ -44,6 +43,7 @@ use ferrets_content::{
     price::{self, Price},
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     repair::{RepairCost, RepairRate},
     requirement::{Bound, Requirement, Threshold},
     research::ResearchDef,
@@ -650,7 +650,7 @@ fn parses_transporter() {
             pools = { health = { maximum = 150 } },
             transporter = {
                 carries = { types = { "footman" }, tags = { "infantry" } },
-                boarding = "allied",
+                boarding = RELATIONS.FRIENDLY,
                 fate = "eject",
                 conduct = "fight",
             },
@@ -667,7 +667,7 @@ fn parses_transporter() {
             Kind::Tag("infantry".to_string()),
         ])
     );
-    assert_eq!(transporter.boarding(), Affiliation::Allied);
+    assert_eq!(transporter.boarding(), Relations::FRIENDLY);
     assert_eq!(transporter.passenger_fate(), PassengerFate::Eject);
     assert_eq!(transporter.conduct(), PassengerConduct::Fight);
     assert_eq!(
@@ -714,7 +714,7 @@ fn parses_sheltering_transporter() {
         .expect("cart defined")
         .transporter()
         .expect("cart can transport");
-    assert_eq!(transporter.boarding(), Affiliation::Own);
+    assert_eq!(transporter.boarding(), Relation::Own.into());
     assert_eq!(transporter.passenger_fate(), PassengerFate::Destroy);
     assert_eq!(transporter.conduct(), PassengerConduct::Shelter);
 }
@@ -746,7 +746,7 @@ fn unknown_passenger_conduct_errors() {
 }
 
 #[test]
-fn unknown_boarding_affiliation_errors() {
+fn unknown_boarding_relation_errors() {
     let source = r#"
         local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
@@ -766,7 +766,7 @@ fn unknown_boarding_affiliation_errors() {
         panic!("must reject a boarding rule naming nobody the engine knows");
     };
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("affiliation must be 'own', 'allied', 'enemy', or 'anyone', found 'everybody'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("relation must be 'own', 'ally', 'enemy', or 'neutral', found 'everybody'")),
         "unexpected error: {error:?}"
     );
 }
@@ -811,7 +811,7 @@ fn parses_network_and_its_gateway() {
         registry.network_def(warren),
         &NetworkDef::new(
             Kinds::tags(["ground"]),
-            Affiliation::Own,
+            Relation::Own.into(),
             40,
             PassengerFate::Destroy,
         )
@@ -832,7 +832,7 @@ fn parses_crossing_tunnel_and_its_end() {
         registry.tunnel_def(tunnel),
         &TunnelDef::new(
             Kinds::Any,
-            Affiliation::Allied,
+            Relations::FRIENDLY,
             OtherEndLost::Stands,
             Passage::Crosses,
         )
@@ -1300,7 +1300,7 @@ fn unknown_skill_caster_errors() {
 fn unknown_aim_errors() {
     let error = skill_error(r#"{ damage = { amount = "5", on = "everyone" } }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("aim must be 'caster', 'ground', 'fallen', 'own', 'allied', 'enemy', or 'anyone', found 'everyone'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("aim must be 'caster', 'ground', 'fallen', 'own', 'ally', 'enemy', 'neutral', or a list of relation names, found 'everyone'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1328,7 +1328,7 @@ fn entity_skill_with_target_beside_effect_errors() {
 fn damage_on_ground_errors() {
     let error = skill_error(r#"{ damage = { amount = "5", on = "ground" } }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("recipient must be 'caster', 'own', 'allied', 'enemy', or 'anyone', found 'ground'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("recipient must be 'caster', 'own', 'ally', 'enemy', 'neutral', or a list of relation names, found 'ground'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1337,7 +1337,7 @@ fn damage_on_ground_errors() {
 fn heal_on_fallen_errors() {
     let error = skill_error(r#"{ heal = { amount = "5", on = "fallen" } }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("recipient must be 'caster', 'own', 'allied', 'enemy', or 'anyone', found 'fallen'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("recipient must be 'caster', 'own', 'ally', 'enemy', 'neutral', or a list of relation names, found 'fallen'")),
         "unexpected error: {error:?}"
     );
 }
@@ -1346,7 +1346,7 @@ fn heal_on_fallen_errors() {
 fn watch_at_fallen_errors() {
     let error = skill_error(r#"{ watch = { at = "fallen", area = 6, duration = 40 } }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("spot must be 'caster', 'ground', 'own', 'allied', 'enemy', or 'anyone', found 'fallen'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("spot must be 'caster', 'ground', 'own', 'ally', 'enemy', 'neutral', or a list of relation names, found 'fallen'")),
         "unexpected error: {error:?}"
     );
 }
@@ -3462,7 +3462,7 @@ fn summon_reads_its_field_rules() {
         within,
         &vec![FieldPlacement::Requires {
             field: power,
-            of: Affiliation::Own,
+            of: Relation::Own.into(),
             coverage: Coverage::Every,
         }]
     );
@@ -3599,7 +3599,7 @@ fn warper_reads_its_catalogue_field_rules_and_landing() {
             ["recruit"],
             vec![FieldPlacement::Requires {
                 field: power,
-                of: Affiliation::Own,
+                of: Relation::Own.into(),
                 coverage: Coverage::Every,
             }],
             Landing::Sighted,
@@ -3696,7 +3696,7 @@ fn skill_numbers_read_stats() {
             effect = { relocate = {
                 journey = { from_aim = {
                     party = { around = {
-                        at = "ground", area = 2, side = "own", kinds = "any",
+                        at = "ground", area = 2, relations = "own", kinds = "any",
                         sight = "blind", count = { at_most = { stat = "host_size" } }, shortfall = "leave",
                     } },
                     to = "caster",
@@ -4433,18 +4433,18 @@ fn parses_fields_sources_placement_and_effects() {
     assert_eq!(registry.field_def(blight).decay(), FieldDecay::Never);
     assert_eq!(
         registry.field_def(creep).watches(),
-        Some(FieldWatch::new(Affiliation::Own))
+        Some(FieldWatch::new(Relation::Own.into()))
     );
     assert_eq!(registry.field_def(power).watches(), None);
     assert_eq!(registry.field_def(power).blocks_sight(), None);
     let fog_cloud = registry.field("fog_cloud").expect("fog cloud defined");
     assert_eq!(
         registry.field_def(fog_cloud).watches(),
-        Some(FieldWatch::new(Affiliation::Allied))
+        Some(FieldWatch::new(Relations::FRIENDLY))
     );
     assert_eq!(
         registry.field_def(fog_cloud).blocks_sight(),
-        Some(SightBlock::new(2, Affiliation::Enemy))
+        Some(SightBlock::new(2, Relation::Enemy.into()))
     );
     assert_eq!(
         registry.field_def(creep).terrains(),
@@ -4493,7 +4493,7 @@ fn parses_fields_sources_placement_and_effects() {
         vec![
             FieldPlacement::Requires {
                 field: power,
-                of: Affiliation::Own,
+                of: Relation::Own.into(),
                 coverage: Coverage::Any,
             },
             FieldPlacement::Forbids { field: creep },
@@ -4503,7 +4503,7 @@ fn parses_fields_sources_placement_and_effects() {
         gateway.field_effects,
         vec![FieldEffect::new(
             power,
-            Affiliation::Own,
+            Relation::Own.into(),
             Coverage::Every,
             Vec::new(),
             vec![EntityEffect::Disable],
@@ -4514,7 +4514,7 @@ fn parses_fields_sources_placement_and_effects() {
         registry.entity("zergling").unwrap().field_effects,
         vec![FieldEffect::new(
             creep,
-            Affiliation::Anyone,
+            Relations::EVERY,
             Coverage::Any,
             vec![EntityEffect::Modifiers(EntityModifiers::Stats(vec![
                 EntityModifier {
@@ -4578,7 +4578,7 @@ fn field_placement_rule_names_exactly_one_verb() {
         define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = "never" })
         define_entity("spore", {
             location = { domain = "ground", size = 1, solidity = "solid" },
-            field_placement = { { requires = "creep", forbids = "creep", of = "anyone", coverage = "any" } },
+            field_placement = { { requires = "creep", forbids = "creep", of = RELATIONS.EVERY, coverage = "any" } },
         })
     "#;
     let error = content::load(&engine(), source).err().expect("two verbs");
@@ -4597,7 +4597,7 @@ fn unknown_field_coverage_errors() {
         define_field("veil", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("zealot", {
             location = { domain = "ground", size = 1, solidity = "solid" },
-            field_effects = { { field = "veil", of = "allied", coverage = "half", inside = { "conceal" } } },
+            field_effects = { { field = "veil", of = RELATIONS.FRIENDLY, coverage = "half", inside = { "conceal" } } },
         })
     "#;
     let error = content::load(&engine(), source)
@@ -4619,7 +4619,7 @@ fn field_effect_without_coverage_errors() {
         define_field("veil", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("zealot", {
             location = { domain = "ground", size = 1, solidity = "solid" },
-            field_effects = { { field = "veil", of = "allied", inside = { "conceal" } } },
+            field_effects = { { field = "veil", of = RELATIONS.FRIENDLY, inside = { "conceal" } } },
         })
     "#;
     let error = content::load(&engine(), source)
@@ -4636,7 +4636,7 @@ fn field_effect_without_coverage_errors() {
 }
 
 #[test]
-fn unknown_field_watch_affiliation_errors() {
+fn unknown_field_watch_relation_errors() {
     let source = r#"
         local GROUND = define_layer("ground", { level = 1 })
         local LAND = define_terrain("land")
@@ -4644,7 +4644,7 @@ fn unknown_field_watch_affiliation_errors() {
         define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = "never", watches = { of = "friends" } })
     "#;
     let Err(error) = content::load(&engine(), source) else {
-        panic!("must reject a watch naming no side");
+        panic!("must reject a watch naming no relation");
     };
 
     let ScriptError::ContentError(message) = &error else {
@@ -4652,7 +4652,7 @@ fn unknown_field_watch_affiliation_errors() {
     };
     assert_eq!(
         message,
-        "affiliation must be 'own', 'allied', 'enemy', or 'anyone', found 'friends'"
+        "relation must be 'own', 'ally', 'enemy', or 'neutral', found 'friends'"
     );
 }
 
@@ -4692,6 +4692,303 @@ fn field_without_layers_it_spreads_on_errors() {
 }
 
 //
+// ─── Relations ───────────────────────────────────────────────────────────────
+
+#[test]
+fn relations_read_one_relation_or_list_of_them() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = "enemy" } })
+        define_field("veil", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = { "own", "ally", "neutral" } } })
+        define_field("haze", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = { "enemy", "enemy" } } })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let watched = |name: &str| {
+        registry
+            .field_def(registry.field(name).expect("defined"))
+            .watches()
+            .expect("watches")
+            .of()
+    };
+    assert_eq!(watched("creep"), Relation::Enemy.into());
+    assert_eq!(
+        watched("veil"),
+        Relation::Own | Relation::Ally | Relation::Neutral
+    );
+    // A relation listed twice names it once.
+    assert_eq!(watched("haze"), Relation::Enemy.into());
+}
+
+#[test]
+fn named_relations_read_as_their_sets() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = RELATIONS.FRIENDLY } })
+        define_field("veil", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = RELATIONS.EVERY } })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let watched = |name: &str| {
+        registry
+            .field_def(registry.field(name).expect("defined"))
+            .watches()
+            .expect("watches")
+            .of()
+    };
+    assert_eq!(watched("creep"), Relations::FRIENDLY);
+    assert_eq!(watched("veil"), Relations::EVERY);
+}
+
+#[test]
+#[should_panic(expected = "field 'haze' watches for no relation")]
+fn empty_relations_list_reads_empty_set_registry_judges() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("haze", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = {} } })
+    "#;
+    let _ = content::load(&engine(), source);
+}
+
+#[test]
+fn relations_list_with_gap_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = { "own", nil, "enemy" } } })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a list with a gap");
+    };
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "of must be a relation name or a list of relation names, found a list not numbered 1, 2, ... without a gap"
+    );
+}
+
+#[test]
+fn relations_list_numbered_from_zero_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = { [0] = "own" } } })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a list numbered from 0");
+    };
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "of must be a relation name or a list of relation names, found a list not numbered 1, 2, ... without a gap"
+    );
+}
+
+#[test]
+fn keyed_table_relations_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = { "own", side = "enemy" } } })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject a keyed table as a set of relations");
+    };
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "of must be a relation name or a list of relation names, found a keyed table"
+    );
+}
+
+#[test]
+fn bare_list_aims_at_relations_it_lists() {
+    let source = r#"
+        define_skill("mend", { cooldown = 1, caster = "entity", effect = { heal = { amount = "5", on = RELATIONS.FRIENDLY } } })
+        define_skill("bless", { cooldown = 1, caster = "entity", effect = { heal = { amount = "5", on = { "own", "neutral" } } } })
+        define_tag("hall")
+        define_skill("smite", { cooldown = 1, caster = "entity", effect = { damage = { amount = "5", on = { kind = { "enemy", "neutral" }, only = { tags = { "hall" } }, range = 4 } } } })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let aim = |name: &str| {
+        let def = registry
+            .skill(name)
+            .and_then(|id| registry.skill_def(id))
+            .expect("the skill is defined");
+        let SkillCaster::Entity { effect, .. } = &def.caster else {
+            panic!("{name} is cast by an entity");
+        };
+        match effect.target() {
+            EntityCastTarget::Standing { whom, reach } => (whom.clone(), reach),
+            other => panic!("{name} is aimed at something standing, not {other:?}"),
+        }
+    };
+    let whom = |relations: Relations| Whom {
+        relations,
+        kinds: Kinds::Any,
+    };
+    assert_eq!(aim("mend"), (whom(Relations::FRIENDLY), Reach::Wherever));
+    assert_eq!(
+        aim("bless"),
+        (whom(Relation::Own | Relation::Neutral), Reach::Wherever)
+    );
+    assert_eq!(
+        aim("smite"),
+        (
+            Whom {
+                relations: Relation::Enemy | Relation::Neutral,
+                kinds: Kinds::tags(["hall"]),
+            },
+            Reach::Within(Area::Around(Quantity::from(4)))
+        )
+    );
+}
+
+#[test]
+fn keyed_aim_naming_no_kind_errors() {
+    let error = skill_error(r#"{ damage = { amount = "5", on = { "own", range = 4 } } }"#);
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "aim must be an aim name, a { kind = ..., only = ..., range = ... } table, or a list of relation names, found a keyed table naming no kind"
+    );
+}
+
+#[test]
+fn aim_list_with_gap_errors() {
+    let error = skill_error(r#"{ damage = { amount = "5", on = { "own", nil, "enemy" } } }"#);
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "aim must be a relation name or a list of relation names, found a list not numbered 1, 2, ... without a gap"
+    );
+}
+
+#[test]
+fn aim_kind_of_number_errors() {
+    let error = skill_error(r#"{ damage = { amount = "5", on = { kind = 5 } } }"#);
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "aim kind must be an aim name or a list of relation names, found integer"
+    );
+}
+
+#[test]
+fn named_relation_set_reads_as_fresh_list() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        local friendly = RELATIONS.FRIENDLY
+        table.insert(friendly, "enemy")
+        define_field("creep", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = RELATIONS.FRIENDLY } })
+        define_field("haze", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = friendly } })
+    "#;
+    let registry = content::load(&engine(), source).expect("content loads");
+    let watched = |name: &str| {
+        registry
+            .field_def(registry.field(name).expect("defined"))
+            .watches()
+            .expect("watches")
+            .of()
+    };
+    // The insert changed only the list it was handed.
+    assert_eq!(watched("creep"), Relations::FRIENDLY);
+    assert_eq!(watched("haze"), Relations::FRIENDLY | Relation::Enemy);
+}
+
+#[test]
+fn named_relation_sets_are_read_only() {
+    let error = content::load(&engine(), r#"RELATIONS.FRIENDLY = { "enemy" }"#)
+        .err()
+        .expect("must reject a write to RELATIONS");
+    assert_eq!(
+        format!("{error}"),
+        "engine error: runtime error: RELATIONS is read-only"
+    );
+}
+
+#[test]
+fn unknown_named_relation_set_errors() {
+    let error = content::load(&engine(), r#"local friendly = RELATIONS.FRIENDY"#)
+        .err()
+        .expect("must reject an unknown set");
+    assert_eq!(
+        format!("{error}"),
+        "engine error: runtime error: RELATIONS has no entry 'FRIENDY'"
+    );
+}
+
+#[test]
+fn named_relation_set_by_number_errors() {
+    let error = content::load(&engine(), r#"local friendly = RELATIONS[1]"#)
+        .err()
+        .expect("must reject a numbered entry");
+    assert_eq!(
+        format!("{error}"),
+        "engine error: runtime error: RELATIONS has no entry integer"
+    );
+}
+
+#[test]
+fn named_relation_sets_keep_their_metatable() {
+    let error = content::load(&engine(), r#"setmetatable(RELATIONS, nil)"#)
+        .err()
+        .expect("must refuse to drop the metatable");
+    // Lua's own message, carried with the chunk's position and traceback.
+    assert!(
+        format!("{error}").contains("runtime error: ")
+            && format!("{error}").contains("cannot change a protected metatable"),
+        "unexpected error: {error}"
+    );
+    // `getmetatable` shows only the lock.
+    content::load(
+        &engine(),
+        r#"assert(getmetatable(RELATIONS) == "RELATIONS is read-only")"#,
+    )
+    .expect("content loads");
+}
+
+#[test]
+fn relations_namespace_as_value_errors() {
+    let source = r#"
+        local GROUND = define_layer("ground", { level = 1 })
+        define_terrain("land")
+        define_domain("ground", { layer = GROUND, terrains = "any" })
+        define_field("creep", { terrains = "any", spreads_on = GROUND, decay = "never", watches = { of = RELATIONS } })
+    "#;
+    let Err(error) = content::load(&engine(), source) else {
+        panic!("must reject the namespace as a set of relations");
+    };
+    let ScriptError::ContentError(message) = &error else {
+        panic!("expected a content error, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "of must be a relation name or a list of relation names, found a table with a metatable"
+    );
+}
+
 // ─── Breeder, broodling, interruption and reason ─────────────────────────────
 //
 
@@ -5415,7 +5712,7 @@ fn type_reads_blocks_sight_and_sees_up() {
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("rock", {
             location = { domain = "ground", size = 2, solidity = "solid" },
-            blocks_sight = { height = 1, of = "anyone" },
+            blocks_sight = { height = 1, of = RELATIONS.EVERY },
         })
         define_entity("scout", {
             location = { domain = "ground", size = 1, solidity = "solid" },
@@ -5426,7 +5723,7 @@ fn type_reads_blocks_sight_and_sees_up() {
 
     assert_eq!(
         registry.entity("rock").unwrap().blocks_sight,
-        Some(SightBlock::new(1, Affiliation::Anyone))
+        Some(SightBlock::new(1, Relations::EVERY))
     );
     assert_eq!(registry.entity("scout").unwrap().blocks_sight, None);
     assert_eq!(
@@ -5466,7 +5763,7 @@ fn blocks_sight_without_whose_errors() {
     };
     assert_eq!(
         message,
-        "field 'of': error converting Lua nil to String (expected string or number)"
+        "of must be a relation name or a list of relation names, found nil"
     );
 }
 
@@ -5477,7 +5774,7 @@ fn blocks_sight_without_height_errors() {
         define_domain("ground", { layer = GROUND, terrains = "any" })
         define_entity("rock", {
             location = { domain = "ground", size = 1, solidity = "solid" },
-            blocks_sight = { of = "anyone" },
+            blocks_sight = { of = RELATIONS.EVERY },
         })
     "#;
 
@@ -5831,7 +6128,7 @@ fn field_effect_reads_concealed() {
         define_field("veil", { terrains = "any", spreads_on = GROUND, decay = "instant" })
         define_entity("zealot", {
             location = { domain = "ground", size = 1, solidity = "solid" },
-            field_effects = { { field = "veil", of = "allied", coverage = "every", inside = { "conceal" } } },
+            field_effects = { { field = "veil", of = RELATIONS.FRIENDLY, coverage = "every", inside = { "conceal" } } },
         })
     "#;
     let registry = content::load(&engine(), source).expect("content loads");
@@ -5840,7 +6137,7 @@ fn field_effect_reads_concealed() {
         registry.entity("zealot").unwrap().field_effects,
         vec![FieldEffect::new(
             veil,
-            Affiliation::Allied,
+            Relations::FRIENDLY,
             Coverage::Every,
             vec![EntityEffect::Conceal],
             Vec::new(),
@@ -5868,7 +6165,7 @@ fn field_effect_reads_both_sides() {
         registry.entity("zealot").unwrap().field_effects,
         vec![FieldEffect::new(
             power,
-            Affiliation::Own,
+            Relation::Own.into(),
             Coverage::Every,
             vec![EntityEffect::Conceal],
             vec![EntityEffect::Disable, EntityEffect::Conceal],
@@ -5887,7 +6184,7 @@ fn field_effect_reads_holds_while() {
         define_entity("pit", {
             location = { domain = "ground", size = 1, solidity = "solid" },
             pools = { health = { maximum = 100 } },
-            field_effects = { { field = "creep", of = "anyone", coverage = "every", holds_while = "risen",
+            field_effects = { { field = "creep", of = RELATIONS.EVERY, coverage = "every", holds_while = "risen",
                 outside = { { stats = { { entity_stat = "health_drain", op = "flat", value = "0.2" } } } } } },
         })
     "#;
@@ -5997,7 +6294,7 @@ fn relocate_effect_reads_journey_and_landing() {
             journey: Box::new(Journey::FromAim {
                 party: AimParty::Target {
                     whom: Whom {
-                        side: Affiliation::Enemy,
+                        relations: Relation::Enemy.into(),
                         kinds: Kinds::Any,
                     },
                     reach: Reach::Wherever,
@@ -6012,7 +6309,7 @@ fn relocate_effect_reads_journey_and_landing() {
         EntityCastEffect::Relocate {
             journey: Box::new(Journey::Swap {
                 whom: Whom {
-                    side: Affiliation::Own,
+                    relations: Relation::Own.into(),
                     kinds: Kinds::Any,
                 },
                 reach: Reach::Within(Area::Around(Quantity::from(10))),
@@ -6038,7 +6335,7 @@ fn relocate_gathering_reads_area_filter_sight_count_and_shortfall() {
             effect = { relocate = {
                 journey = { from_caster = {
                     party = { caster_and_around = {
-                        area = 4, side = "own", kinds = { tags = { "undead" } },
+                        area = 4, relations = "own", kinds = { tags = { "undead" } },
                         sight = "blind", count = { at_most = 24 }, shortfall = "refuse",
                     } },
                     to = { aim = { kind = "own", only = { types = { "crypt" } } } },
@@ -6052,7 +6349,7 @@ fn relocate_gathering_reads_area_filter_sight_count_and_shortfall() {
             effect = { relocate = {
                 journey = { from_caster = {
                     party = { around = {
-                        area = 3, side = "enemy", kinds = "any", sight = "seen", count = { at_most = 2 }, shortfall = "leave",
+                        area = 3, relations = "enemy", kinds = "any", sight = "seen", count = { at_most = 2 }, shortfall = "leave",
                     } },
                     to = { aim = "ground" },
                 } },
@@ -6065,7 +6362,7 @@ fn relocate_gathering_reads_area_filter_sight_count_and_shortfall() {
             effect = { relocate = {
                 journey = { from_aim = {
                     party = { around = {
-                        at = "ground", area = 2, side = "allied", kinds = "any", sight = "blind", count = "all", shortfall = "leave",
+                        at = "ground", area = 2, relations = RELATIONS.FRIENDLY, kinds = "any", sight = "blind", count = "all", shortfall = "leave",
                     } },
                     to = "caster",
                 } },
@@ -6080,7 +6377,7 @@ fn relocate_gathering_reads_area_filter_sight_count_and_shortfall() {
             journey: Box::new(Journey::FromCaster {
                 party: CasterParty::CasterAndAround(Gathering {
                     area: Area::Around(Quantity::from(4)),
-                    side: Affiliation::Own,
+                    relations: Relation::Own.into(),
                     kinds: Kinds::only([Kind::Tag("undead".to_string())]),
                     sight: GatherSight::Blind,
                     count: Count::AtMost(Quantity::from(24)),
@@ -6088,7 +6385,7 @@ fn relocate_gathering_reads_area_filter_sight_count_and_shortfall() {
                 }),
                 to: FromCasterTo::Aim(Away::Standing {
                     whom: Whom {
-                        side: Affiliation::Own,
+                        relations: Relation::Own.into(),
                         kinds: Kinds::only([Kind::Type("crypt".to_string())]),
                     },
                     reach: Reach::Wherever,
@@ -6103,7 +6400,7 @@ fn relocate_gathering_reads_area_filter_sight_count_and_shortfall() {
             journey: Box::new(Journey::FromCaster {
                 party: CasterParty::Around(Gathering {
                     area: Area::Around(Quantity::from(3)),
-                    side: Affiliation::Enemy,
+                    relations: Relation::Enemy.into(),
                     kinds: Kinds::Any,
                     sight: GatherSight::Seen,
                     count: Count::AtMost(Quantity::from(2)),
@@ -6126,7 +6423,7 @@ fn relocate_gathering_reads_area_filter_sight_count_and_shortfall() {
                     },
                     gathering: Gathering {
                         area: Area::Around(Quantity::from(2)),
-                        side: Affiliation::Allied,
+                        relations: Relations::FRIENDLY,
                         kinds: Kinds::Any,
                         sight: GatherSight::Blind,
                         count: Count::All,
@@ -6149,7 +6446,7 @@ fn relocate_gathering_without_sight_errors() {
             effect = { relocate = {
                 journey = { from_caster = {
                     party = { around = {
-                        area = 3, side = "enemy", kinds = "any", count = "all", shortfall = "leave",
+                        area = 3, relations = "enemy", kinds = "any", count = "all", shortfall = "leave",
                     } },
                     to = { aim = "ground" },
                 } },
@@ -6172,7 +6469,7 @@ fn relocate_gathering_with_unknown_sight_errors() {
             effect = { relocate = {
                 journey = { from_caster = {
                     party = { around = {
-                        area = 3, side = "enemy", kinds = "any", sight = "keen",
+                        area = 3, relations = "enemy", kinds = "any", sight = "keen",
                         count = "all", shortfall = "leave",
                     } },
                     to = { aim = "ground" },
@@ -6230,7 +6527,7 @@ fn relocate_home_reads_its_kinds_from_either_spot() {
             journey: Box::new(Journey::FromAim {
                 party: AimParty::Target {
                     whom: Whom {
-                        side: Affiliation::Own,
+                        relations: Relation::Own.into(),
                         kinds: Kinds::Any,
                     },
                     reach: Reach::Wherever,
@@ -6275,7 +6572,7 @@ fn relocate_party_at_caster_of_unknown_word_errors() {
 #[test]
 fn relocate_party_at_aim_naming_target_and_around_errors() {
     let error = relocation_error(
-        r#"{ from_aim = { party = { target = "own", around = { at = "ground", area = 2, side = "own", kinds = "any", sight = "blind", count = "all", shortfall = "leave" } }, to = "caster" } }"#,
+        r#"{ from_aim = { party = { target = "own", around = { at = "ground", area = 2, relations = "own", kinds = "any", sight = "blind", count = "all", shortfall = "leave" } }, to = "caster" } }"#,
     );
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("a party at the aim table must have exactly one of 'target' or 'around'")),
@@ -6308,7 +6605,7 @@ fn relocate_aim_at_caster_errors() {
     let error =
         relocation_error(r#"{ from_caster = { party = "caster", to = { aim = "caster" } } }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("aim away from the caster must be 'ground', 'own', 'allied', 'enemy', or 'anyone', found 'caster'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("aim away from the caster must be 'ground', 'own', 'ally', 'enemy', 'neutral', or a list of relation names, found 'caster'")),
         "unexpected error: {error:?}"
     );
 }
@@ -6317,7 +6614,7 @@ fn relocate_aim_at_caster_errors() {
 fn relocate_swap_aimed_at_ground_errors() {
     let error = relocation_error(r#"{ swap = "ground" }"#);
     assert!(
-        matches!(&error, ScriptError::ContentError(m) if m.contains("aim at something standing must be 'own', 'allied', 'enemy', or 'anyone', found 'ground'")),
+        matches!(&error, ScriptError::ContentError(m) if m.contains("aim at something standing must be 'own', 'ally', 'enemy', 'neutral', or a list of relation names, found 'ground'")),
         "unexpected error: {error:?}"
     );
 }
@@ -6325,7 +6622,7 @@ fn relocate_swap_aimed_at_ground_errors() {
 #[test]
 fn relocate_count_of_unknown_shape_errors() {
     let error = relocation_error(
-        r#"{ from_aim = { party = { around = { at = "ground", area = 2, side = "own", kinds = "any", sight = "blind", count = 3, shortfall = "leave" } }, to = "caster" } }"#,
+        r#"{ from_aim = { party = { around = { at = "ground", area = 2, relations = "own", kinds = "any", sight = "blind", count = 3, shortfall = "leave" } }, to = "caster" } }"#,
     );
     assert!(
         matches!(&error, ScriptError::ContentError(m) if m.contains("relocation count must be 'all' or an { at_most = n } table, found integer")),
@@ -6461,7 +6758,7 @@ const FIELDS: &str = r#"
 
     define_field("creep", { terrains = LAND, spreads_on = GROUND, decay = { cycle = 9 }, watches = { of = "own" } })
     define_field("power", { terrains = LAND, spreads_on = GROUND, decay = "instant" })
-    define_field("fog_cloud", { terrains = "any", spreads_on = GROUND, decay = "instant", watches = { of = "allied" }, blocks_sight = { height = 2, of = "enemy" } })
+    define_field("fog_cloud", { terrains = "any", spreads_on = GROUND, decay = "instant", watches = { of = RELATIONS.FRIENDLY }, blocks_sight = { height = 2, of = "enemy" } })
     define_field("blight", { terrains = LAND, spreads_on = GROUND, decay = "never" })
 
     define_entity("hive", {
@@ -6501,7 +6798,7 @@ const FIELDS: &str = r#"
         stats = { speed = "0.3", turn_rate = 30, pivot_rate = 30, weight = 1 },
         pools = { health = { maximum = 20 } },
         field_effects = {
-            { field = "creep", of = "anyone", coverage = "any", inside = { {
+            { field = "creep", of = RELATIONS.EVERY, coverage = "any", inside = { {
                 stats = { { entity_stat = "speed", op = "percent", value = "0.3" } },
             } } },
         },
@@ -6934,8 +7231,7 @@ fn relocation_error(journey: &str) -> ScriptError {
 
 /// The `tunnel` definition, written as Lua: letting in anyone allied,
 /// crossing at once, and an end standing when its other end is lost.
-const CROSSING: &str =
-    r#"carries = "any", boarding = "allied", other_end_lost = "stands", passage = "crosses""#;
+const CROSSING: &str = r#"carries = "any", boarding = RELATIONS.FRIENDLY, other_end_lost = "stands", passage = "crosses""#;
 
 /// Every stat a crossing gateway both ways reads, written as Lua.
 const CROSSED: &str = "load_range = 1, load_period = 2, unload_range = 1";

@@ -10,7 +10,6 @@ use utils::Announced;
 use bevy::prelude::*;
 
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     attack::Slain,
     detection::Detection,
@@ -21,6 +20,7 @@ use ferrets_content::{
     pool::Pool,
     pool_def::PoolId,
     quantity::Quantity,
+    relation::Relation,
     repair::{RepairCost, RepairRate},
     skills::{Casting, EntityCastEffect, Reach, Recipient, SkillCaster, SkillDef, Spot, Whom},
     work::{CrewLimit, WorkPresence},
@@ -1122,7 +1122,7 @@ fn enemy_skill_app() -> (App, ferrets_content::skills::SkillId) {
                         amount: FixedU64::from_num(5),
                         on: Recipient::Standing {
                             whom: Whom {
-                                side: Affiliation::Enemy,
+                                relations: Relation::Enemy.into(),
                                 kinds: Kinds::Any,
                             },
                             reach: Reach::Wherever,

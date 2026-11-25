@@ -5,9 +5,8 @@
 use ferrets_nav_grid::{layer_mask::LayerMask, terrain_mask::TerrainMask};
 
 use crate::{
-    affiliation::Affiliation, area::Area, coverage::Coverage, detection::Detection,
-    entity_effect::EntityEffect, requirement::Requirement, sight_block::SightBlock,
-    terrains::Terrains,
+    area::Area, coverage::Coverage, detection::Detection, entity_effect::EntityEffect,
+    relation::Relations, requirement::Requirement, sight_block::SightBlock, terrains::Terrains,
 };
 
 /// A handle to a registered field kind, assigned in registration order.
@@ -50,19 +49,19 @@ pub enum FieldDecay {
 pub struct FieldWatch {
     /// Whom a covered cell is in sight of, judged from the players covering
     /// it.
-    of: Affiliation,
+    of: Relations,
 }
 
 impl FieldWatch {
     /// Creates a new `FieldWatch` with the given data.
-    pub fn new(of: Affiliation) -> Self {
+    pub fn new(of: Relations) -> Self {
         Self { of }
     }
 
     /// Whom a covered cell is in sight of, judged from the players covering
     /// it.
     #[inline]
-    pub fn of(&self) -> Affiliation {
+    pub fn of(&self) -> Relations {
         self.of
     }
 }
@@ -297,7 +296,7 @@ pub enum FieldPlacement {
         /// The field read.
         field: FieldId,
         /// Whose coverage counts.
-        of: Affiliation,
+        of: Relations,
         /// Which footprint cells are read.
         coverage: Coverage,
     },
@@ -336,7 +335,7 @@ pub struct FieldEffect {
     /// The field read.
     field: FieldId,
     /// Whose coverage counts.
-    of: Affiliation,
+    of: Relations,
     /// How much of the bearer's footprint must be covered for it to stand
     /// inside; a footprint cell on terrain the field rejects is never
     /// covered.
@@ -354,7 +353,7 @@ impl FieldEffect {
     /// Creates a new `FieldEffect` with the given data.
     pub fn new(
         field: FieldId,
-        of: Affiliation,
+        of: Relations,
         coverage: Coverage,
         inside: Vec<EntityEffect>,
         outside: Vec<EntityEffect>,
@@ -378,7 +377,7 @@ impl FieldEffect {
 
     /// Whose coverage counts.
     #[inline]
-    pub fn of(&self) -> Affiliation {
+    pub fn of(&self) -> Relations {
         self.of
     }
 

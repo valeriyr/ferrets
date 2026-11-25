@@ -1,7 +1,7 @@
 //! The network vocabulary: a registered passage holding whoever enters any of its
 //! gateways, until it is let out at another.
 
-use crate::{affiliation::Affiliation, kinds::Kinds, transport::PassengerFate};
+use crate::{kinds::Kinds, relation::Relations, transport::PassengerFate};
 
 /// A handle to a registered network, assigned in registration order.
 ///
@@ -31,7 +31,7 @@ pub struct NetworkDef {
     carries: Kinds,
     /// Whose units may enter a gateway, judged from its owner; the gateways
     /// whose owners admit one another form one running network.
-    boarding: Affiliation,
+    boarding: Relations,
     /// The cargo size the bodies inside one running network may add up to.
     capacity: u32,
     /// What happens to the bodies inside a running network when its last
@@ -41,7 +41,7 @@ pub struct NetworkDef {
 
 impl NetworkDef {
     /// Creates a new `NetworkDef` with the given data.
-    pub fn new(carries: Kinds, boarding: Affiliation, capacity: u32, fate: PassengerFate) -> Self {
+    pub fn new(carries: Kinds, boarding: Relations, capacity: u32, fate: PassengerFate) -> Self {
         Self {
             carries,
             boarding,
@@ -59,7 +59,7 @@ impl NetworkDef {
     /// Whose units may enter a gateway, judged from its owner; the gateways
     /// whose owners admit one another form one running network.
     #[inline]
-    pub fn boarding(&self) -> Affiliation {
+    pub fn boarding(&self) -> Relations {
         self.boarding
     }
 

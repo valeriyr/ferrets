@@ -5,7 +5,6 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::ai::game_view;
 use ferrets_content::{
-    affiliation::Affiliation,
     berths::BerthGroup,
     brood::OrphanFate,
     build::BuilderAttendance,
@@ -27,6 +26,7 @@ use ferrets_content::{
     pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     skills::{
         Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, SummonArrival, SummonAt,
         SummonPlacement,
@@ -350,6 +350,28 @@ fn neutral_burrow_is_of_no_warren_and_turns_beast_away() {
     utils::run_ticks(&mut app, utils::APPLY + 10);
 
     assert_eq!(links::membership_of(app.world(), burrow), Membership::Apart);
+    assert!(!entity_def::hidden(app.world(), beast));
+}
+
+#[test]
+fn neutral_grove_is_of_no_grove_network_and_turns_beast_away() {
+    let mut app = app();
+    let (grove, grove_id) =
+        utils::create_entity(app.world_mut(), "grove", utils::cell(10, 10), None)
+            .expect("grove fits at (10, 10)");
+    let (beast, beast_id) = utils::create_owned(&mut app, "beast", 9, 10, 0);
+
+    utils::select(&mut app, beast_id);
+    utils::push_command(
+        &mut app,
+        PlayerCommand::Board {
+            target: grove_id,
+            flush: true,
+        },
+    );
+    utils::run_ticks(&mut app, utils::APPLY + 10);
+
+    assert_eq!(links::membership_of(app.world(), grove), Membership::Apart);
     assert!(!entity_def::hidden(app.world(), beast));
 }
 
@@ -1023,6 +1045,42 @@ fn beast_enters_enemys_thicket_and_leaves_at_own() {
     utils::run_ticks(&mut app, utils::APPLY + 1);
 
     assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(25, 9));
+}
+
+#[test]
+fn beast_enters_nobodys_thicket_and_leaves_at_own() {
+    let mut app = teamed_app(0);
+    let (_, nobodys_id) =
+        utils::create_entity(app.world_mut(), "thicket", utils::cell(10, 10), None)
+            .expect("thicket fits at (10, 10)");
+    let (_, own_id) = utils::create_owned(&mut app, "thicket", 25, 10, 0);
+    let (beast, beast_id) = utils::create_owned(&mut app, "beast", 9, 10, 0);
+
+    utils::board(&mut app, beast_id, nobodys_id);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+    assert!(entity_def::hidden(app.world(), beast));
+    utils::unload(&mut app, own_id, None);
+    utils::run_ticks(&mut app, utils::APPLY + 1);
+
+    assert_eq!(utils::anchor_of(app.world(), beast), CellPos::new(25, 9));
+}
+
+#[test]
+fn teamless_players_groves_join_apart() {
+    let mut app = app();
+    let (own, _) = utils::create_owned(&mut app, "grove", 10, 10, 0);
+    let (other, _) = utils::create_owned(&mut app, "grove", 25, 10, 1);
+
+    // A friendly network's gateways link by team, and a teamless owner's by
+    // its player alone.
+    assert_eq!(
+        links::membership_of(app.world(), own),
+        Membership::Joined(grove_of(&app, 0))
+    );
+    assert_eq!(
+        links::membership_of(app.world(), other),
+        Membership::Joined(grove_of(&app, 1))
+    );
 }
 
 //
@@ -1935,7 +1993,7 @@ fn register(app: &mut App) {
     let beasts = || Kinds::tags(["beast"]);
     let network = |registry: &mut ContentRegistry,
                    name: &str,
-                   boarding: Affiliation,
+                   boarding: Relations,
                    capacity: u32,
                    fate: PassengerFate| {
         registry.register_network(name, NetworkDef::new(beasts(), boarding, capacity, fate))
@@ -1943,35 +2001,35 @@ fn register(app: &mut App) {
     let warren = network(
         &mut registry,
         "warren",
-        Affiliation::Own,
+        Relation::Own.into(),
         3,
         PassengerFate::Destroy,
     );
     let hollow = network(
         &mut registry,
         "hollow",
-        Affiliation::Own,
+        Relation::Own.into(),
         3,
         PassengerFate::Eject,
     );
     let grove = network(
         &mut registry,
         "grove",
-        Affiliation::Allied,
+        Relations::FRIENDLY,
         2,
         PassengerFate::Destroy,
     );
     let thicket = network(
         &mut registry,
         "thicket",
-        Affiliation::Anyone,
+        Relations::EVERY,
         3,
         PassengerFate::Destroy,
     );
     let tunnel_of = |registry: &mut ContentRegistry, name: &str, lost, passage| {
         registry.register_tunnel(
             name,
-            TunnelDef::new(beasts(), Affiliation::Own, lost, passage),
+            TunnelDef::new(beasts(), Relation::Own.into(), lost, passage),
         )
     };
     let tunnel = tunnel_of(
@@ -2069,7 +2127,7 @@ fn register(app: &mut App) {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
                 Kinds::tags(["beast", "portable"]),
-                Affiliation::Own,
+                Relation::Own.into(),
                 PassengerFate::Eject,
                 PassengerConduct::Shelter,
             ),
@@ -2404,6 +2462,18 @@ fn warren_of(app: &App, player: PlayerId) -> LinkKey {
             .resource::<ContentRegistry>()
             .network("warren")
             .expect("warren is registered"),
+        scope: NetworkScope::Player(player),
+    }
+}
+
+/// Player `player`'s running `grove`, scoped by the player alone.
+fn grove_of(app: &App, player: PlayerId) -> LinkKey {
+    LinkKey::Network {
+        network: app
+            .world()
+            .resource::<ContentRegistry>()
+            .network("grove")
+            .expect("grove is registered"),
         scope: NetworkScope::Player(player),
     }
 }

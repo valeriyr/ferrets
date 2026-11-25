@@ -9,6 +9,7 @@
 mod ai;
 mod command;
 mod content;
+mod read_only;
 mod scenario;
 mod view;
 

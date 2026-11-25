@@ -5,7 +5,6 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
-    affiliation::Affiliation,
     attack::Slain,
     build::BuilderAttendance,
     coverage::Coverage,
@@ -18,6 +17,7 @@ use ferrets_content::{
     pool::Pool,
     pool_def::PoolId,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     terrains::Terrains,
     transport::{PassengerConduct, PassengerFate},
     work::{Attachment, BerthStance, CrewLimit, WorkPresence},
@@ -2890,7 +2890,7 @@ fn builders_app() -> App {
             walking(builder("warded_mason", 1, Solidity::Solid))
                 .with_field_placement([FieldPlacement::Requires {
                     field: ward,
-                    of: Affiliation::Anyone,
+                    of: Relations::EVERY,
                     coverage: Coverage::Every,
                 }])
                 .with_builder(
@@ -3163,7 +3163,7 @@ fn carrying_larvae_app() -> App {
                     .with_builder(["depot"], BuilderAttendance::Consumed)
                     .with_transporter(
                         Kinds::types(["rider"]),
-                        Affiliation::Own,
+                        Relation::Own.into(),
                         fate,
                         PassengerConduct::Shelter,
                     ),

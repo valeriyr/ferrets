@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use bevy::{ecs::world::EntityRef, prelude::*};
 use ferrets_content::{
     entity_stats::EntityStatId, holder::Holder, pool_def::PoolId, registry::ContentRegistry,
+    relation::Relation,
 };
 use ferrets_script::ai::{
     AiRuntime,
@@ -47,7 +48,7 @@ use ferrets_simulation::{
     resources::PlayerResources,
     session::{
         GameSession, ai_detection::AiDetection, ai_vision::AiVision, player_id::PlayerId,
-        player_type::PlayerType, relation::Relation,
+        player_type::PlayerType,
     },
     simulation_id::SimulationId,
     supply,
@@ -298,7 +299,7 @@ pub fn game_view(
             // lifted by omniscient vision, a cloak pierced by detection
             // everywhere. A glimpse is a footprint and nothing more.
             Relation::Own => my_entities.push(view(&entity_ref, Hold::Listed)),
-            Relation::Allied => ally_entities.push(view(&entity_ref, Hold::Listed)),
+            Relation::Ally => ally_entities.push(view(&entity_ref, Hold::Listed)),
             Relation::Enemy | Relation::Neutral => {
                 match visibility::sighting(world, player, entity, Senses::Given(vision, detection))
                 {
@@ -307,7 +308,7 @@ pub fn game_view(
                         Relation::Neutral => {
                             neutral_entities.push(view(&entity_ref, Hold::Withheld))
                         }
-                        Relation::Own | Relation::Allied => {
+                        Relation::Own | Relation::Ally => {
                             unreachable!("own and allied entities are listed above")
                         }
                     },

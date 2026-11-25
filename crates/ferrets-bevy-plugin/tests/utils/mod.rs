@@ -8,7 +8,6 @@ use ferrets_bevy_plugin::{
     replay,
 };
 use ferrets_content::{
-    affiliation::Affiliation,
     annex::{AloneConduct, AnnexClaim, AnnexLife, AnnexWork},
     area::Area,
     attack::{AttackDef, Delivery, Slain, Weapon},
@@ -40,6 +39,7 @@ use ferrets_content::{
     projectile::{Aim, ProjectileDef},
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     repair::{RepairCost, RepairRate},
     requirement::Requirement,
     research::{ResearchDef, ResearchId},
@@ -1655,7 +1655,7 @@ pub fn brood_app_for(slots: Vec<PlayerSlot>, model: MovementModel) -> App {
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
                 .with_transporter(
                     Kinds::Any,
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     PassengerFate::Eject,
                     PassengerConduct::Shelter,
                 ),
@@ -3577,7 +3577,7 @@ pub fn transport_app() -> App {
                 .with_dying(2, [])
                 .with_tags(["infantry"]),
         );
-        let carrier = |name: &str, boarding: Affiliation| {
+        let carrier = |name: &str, boarding: Relations| {
             EntityTypeDef::new(name)
                 .with_location(
                     GROUND_DOMAIN,
@@ -3606,7 +3606,7 @@ pub fn transport_app() -> App {
                     PassengerConduct::Shelter,
                 )
         };
-        registry.register(carrier("wagon", Affiliation::Own));
+        registry.register(carrier("wagon", Relation::Own.into()));
         // A holder that works from inside a seam, for riders inside a holder
         // inside a job.
         registry.register(
@@ -3615,7 +3615,7 @@ pub fn transport_app() -> App {
                 .with_resource_source("gold", DepletionPolicy::Persist),
         );
         registry.register(
-            carrier("hauler", Affiliation::Own)
+            carrier("hauler", Relation::Own.into())
                 .with_sight_range(8)
                 .with_stat(EntityStatId::HARVEST_RANGE, FixedU64::ONE)
                 .with_resource_carrier([(
@@ -3632,8 +3632,8 @@ pub fn transport_app() -> App {
                     ),
                 )]),
         );
-        registry.register(carrier("ferry", Affiliation::Allied));
-        registry.register(carrier("raft", Affiliation::Anyone));
+        registry.register(carrier("ferry", Relations::FRIENDLY));
+        registry.register(carrier("raft", Relations::EVERY));
         // A mender that works from inside its patient, for a job that walks.
         registry.register(
             EntityTypeDef::new("surgeon")
@@ -3833,7 +3833,7 @@ pub fn transport_app() -> App {
                 .with_stat(EntityStatId::REPAIR_SPEED, FixedU64::ONE)
                 .with_transporter(
                     Kinds::tags(["infantry"]),
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     PassengerFate::Eject,
                     PassengerConduct::Fight,
                 )
@@ -3915,7 +3915,7 @@ pub fn transport_app() -> App {
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
                 .with_transporter(
                     Kinds::types(["rifleman", "gun_rider"]),
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     PassengerFate::Eject,
                     PassengerConduct::Fight,
                 ),

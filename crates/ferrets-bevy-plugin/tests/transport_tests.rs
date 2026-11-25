@@ -5,7 +5,6 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
-    affiliation::Affiliation,
     attack::Slain,
     entity_buffs::{EntityBuffDef, Lasting},
     entity_effect::EntityEffect,
@@ -15,6 +14,7 @@ use ferrets_content::{
     location::Solidity,
     pool::Pool,
     registry::ContentRegistry,
+    relation::Relation,
     stack_rule::StackRule,
     stats::ModifierOp,
     transport::{PassengerConduct, PassengerFate},
@@ -1092,7 +1092,7 @@ fn wide_passenger_unloaded_at_cell_walks_on_as_move_does() {
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
                 .with_transporter(
                     Kinds::types(["cart"]),
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     PassengerFate::Eject,
                     PassengerConduct::Shelter,
                 ),
@@ -2160,7 +2160,7 @@ fn raft_app_over(water: &[(u32, u32)], unload_range: u32) -> App {
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
                 .with_transporter(
                     Kinds::types(["marine"]),
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     PassengerFate::Eject,
                     PassengerConduct::Fight,
                 ),

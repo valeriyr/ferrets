@@ -5,7 +5,6 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::map;
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     attack::Slain,
     berths::BerthGroup,
@@ -31,6 +30,7 @@ use ferrets_content::{
     pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     skills::{
         Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, SkillId, SummonArrival, SummonAt,
         SummonPlacement,
@@ -1650,7 +1650,7 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
                 Kinds::types(["recruit"]),
-                Affiliation::Own,
+                Relation::Own.into(),
                 PassengerFate::Eject,
                 PassengerConduct::Fight,
             ),
@@ -1682,7 +1682,7 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
                 Kinds::types(["recruit"]),
-                Affiliation::Own,
+                Relation::Own.into(),
                 PassengerFate::Eject,
                 PassengerConduct::Shelter,
             ),
@@ -1711,7 +1711,7 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
             .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ZERO)
             .with_transporter(
                 Kinds::types(["recruit"]),
-                Affiliation::Own,
+                Relation::Own.into(),
                 PassengerFate::Eject,
                 PassengerConduct::Fight,
             ),
@@ -1720,7 +1720,7 @@ fn hills_app(model: MovementModel, ramps: Ramps, rise: Rise) -> App {
         "warren",
         NetworkDef::new(
             Kinds::types(["recruit"]),
-            Affiliation::Own,
+            Relation::Own.into(),
             4,
             PassengerFate::Destroy,
         ),
@@ -1987,7 +1987,7 @@ fn nest_app() -> App {
             .with_dying(1, [])
             .with_field_placement([FieldPlacement::Requires {
                 field: mulch,
-                of: Affiliation::Anyone,
+                of: Relations::EVERY,
                 coverage: Coverage::Every,
             }]),
     );

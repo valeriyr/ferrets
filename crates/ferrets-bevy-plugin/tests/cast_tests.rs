@@ -3,7 +3,6 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     attack::Slain,
     cost::Cost,
@@ -26,6 +25,7 @@ use ferrets_content::{
     price,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::Relation,
     requirement::Requirement,
     resource::DepletionPolicy,
     skills::{
@@ -2346,7 +2346,7 @@ fn app() -> App {
                         amount: FixedU64::from_num(5),
                         on: Recipient::Standing {
                             whom: Whom {
-                                side: Affiliation::Enemy,
+                                relations: Relation::Enemy.into(),
                                 kinds: Kinds::Any,
                             },
                             reach: Reach::Within(Area::Around(Quantity::from(4))),
@@ -2711,7 +2711,7 @@ fn app() -> App {
                 Landing::Anywhere,
                 vec![FieldPlacement::Requires {
                     field: glow,
-                    of: Affiliation::Own,
+                    of: Relation::Own.into(),
                     coverage: Coverage::Every,
                 }],
                 SummonArrival::Rising,
@@ -3089,7 +3089,7 @@ fn shore_app() -> App {
             registry.register_entity_buff("drenched", buff(Lasting::While(at_sea.clone())));
         let own_within = |cells| Recipient::Standing {
             whom: Whom {
-                side: Affiliation::Own,
+                relations: Relation::Own.into(),
                 kinds: Kinds::Any,
             },
             reach: Reach::Within(Area::Around(Quantity::from(cells))),
@@ -3187,7 +3187,7 @@ fn shore_app() -> App {
                 marked,
                 Recipient::Standing {
                     whom: Whom {
-                        side: Affiliation::Own,
+                        relations: Relation::Own.into(),
                         kinds: Kinds::Any,
                     },
                     reach: Reach::Wherever,

@@ -3,7 +3,6 @@
 
 use bevy::prelude::*;
 use ferrets_content::{
-    affiliation::Affiliation,
     attack::Slain,
     berths::BerthGroup,
     dying::{Bequest, DeathKind, LeftBy},
@@ -13,6 +12,7 @@ use ferrets_content::{
     location::Solidity,
     pool::Pool,
     registry::ContentRegistry,
+    relation::Relation,
     resource::DepletionPolicy,
     transport::{PassengerConduct, PassengerFate},
 };
@@ -902,7 +902,7 @@ fn app(limit: RemainsLimit) -> App {
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::from_num(2))
                 .with_transporter(
                     Kinds::Any,
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     PassengerFate::Destroy,
                     PassengerConduct::Shelter,
                 ),

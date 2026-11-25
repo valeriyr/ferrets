@@ -1,7 +1,6 @@
 //! Loading game content from a script into a [`ContentRegistry`].
 
 use ferrets_content::{
-    affiliation::Affiliation,
     annex::{AnnexClaim, AnnexWork},
     attack::Slain,
     concealment::Concealment,
@@ -16,6 +15,7 @@ use ferrets_content::{
     pool_shift::PoolShift,
     projectile::Aim,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     resource::{Banking, DepletionPolicy},
     skills::{GatherSight, Refund, Shortfall, SummonArrival, SummonPlacement},
     splash::SplashShape,
@@ -204,19 +204,26 @@ pub(crate) fn banking(value: &str) -> crate::Result<Banking> {
     )
 }
 
-/// Maps an affiliation name to its enum — the one "whose" every capability
-/// declares.
-pub(crate) fn affiliation(value: &str) -> crate::Result<Affiliation> {
-    keyword(
-        "affiliation",
-        value,
-        &[
-            ("own", Affiliation::Own),
-            ("allied", Affiliation::Allied),
-            ("enemy", Affiliation::Enemy),
-            ("anyone", Affiliation::Anyone),
-        ],
-    )
+/// Maps a relation name to its enum — one word of the "whose" every
+/// capability declares.
+pub(crate) fn relation(value: &str) -> crate::Result<Relation> {
+    let options: Vec<(&str, Relation)> = Relations::EVERY
+        .iter()
+        .map(|relation| (relation_name(relation), relation))
+        .collect();
+    keyword("relation", value, &options)
+}
+
+/// The names of the relations `relations` names, in [`Relation`]'s order.
+pub(crate) fn relation_names(relations: Relations) -> Vec<&'static str> {
+    relations.iter().map(relation_name).collect()
+}
+
+/// The set of the relations `names` names.
+pub(crate) fn relations(names: &[String]) -> crate::Result<Relations> {
+    names
+        .iter()
+        .try_fold(Relations::NONE, |set, name| Ok(set | relation(name)?))
 }
 
 /// Maps a passenger fate name to its enum.
@@ -549,5 +556,15 @@ pub(crate) fn stack_rule(value: &str) -> crate::Result<StackRule> {
                     &quoted(other),
                 )
             }),
+    }
+}
+
+/// The name content gives `relation`.
+fn relation_name(relation: Relation) -> &'static str {
+    match relation {
+        Relation::Own => "own",
+        Relation::Ally => "ally",
+        Relation::Enemy => "enemy",
+        Relation::Neutral => "neutral",
     }
 }

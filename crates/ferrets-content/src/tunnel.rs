@@ -1,7 +1,7 @@
 //! The tunnel vocabulary: a registered passage joining two gateways bound to
 //! each other at birth.
 
-use crate::{affiliation::Affiliation, kinds::Kinds, transport::PassengerFate};
+use crate::{kinds::Kinds, relation::Relations, transport::PassengerFate};
 
 /// A handle to a registered tunnel, assigned in registration order.
 ///
@@ -54,7 +54,7 @@ pub struct TunnelDef {
     /// Whom it lets in.
     carries: Kinds,
     /// Whose units may enter.
-    boarding: Affiliation,
+    boarding: Relations,
     /// What happens to one end when its standing other end is lost.
     other_end_lost: OtherEndLost,
     /// What becomes of a body that enters.
@@ -65,7 +65,7 @@ impl TunnelDef {
     /// Creates a new `TunnelDef` with the given data.
     pub fn new(
         carries: Kinds,
-        boarding: Affiliation,
+        boarding: Relations,
         other_end_lost: OtherEndLost,
         passage: Passage,
     ) -> Self {
@@ -85,7 +85,7 @@ impl TunnelDef {
 
     /// Whose units may enter.
     #[inline]
-    pub fn boarding(&self) -> Affiliation {
+    pub fn boarding(&self) -> Relations {
         self.boarding
     }
 

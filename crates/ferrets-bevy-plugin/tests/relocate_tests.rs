@@ -4,7 +4,6 @@ mod utils;
 
 use bevy::prelude::*;
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     cost::Cost,
     detection::Detection,
@@ -23,6 +22,7 @@ use ferrets_content::{
     pool_shift::PoolShift,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     resource::DepletionPolicy,
     skills::{
         AimParty, Away, CasterParty, Casting, Count, EntityCastEffect, FromAimTo, FromCasterTo,
@@ -329,7 +329,7 @@ fn recall_gathering_nobody_is_refused_unpaid() {
 }
 
 #[test]
-fn anyones_gathering_takes_resource_source_with_harvester_inside() {
+fn every_relations_gathering_takes_resource_source_with_harvester_inside() {
     let mut app = app();
     let (_, mage_id) = utils::create_owned(&mut app, "mage", 5, 5, 0);
     let (mine, _) = utils::create_entity(app.world_mut(), "mine", utils::cell(20, 5), None)
@@ -1281,7 +1281,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                 .with_stat(EntityStatId::UNLOAD_PERIOD, FixedU64::ONE)
                 .with_transporter(
                     Kinds::tags(["infantry"]),
-                    Affiliation::Own,
+                    Relation::Own.into(),
                     PassengerFate::Destroy,
                     PassengerConduct::Shelter,
                 ),
@@ -1290,23 +1290,24 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
             reach: Reach::Wherever,
         };
         let own = || Whom {
-            side: Affiliation::Own,
+            relations: Relation::Own.into(),
             kinds: Kinds::Any,
         };
-        let gathering_of = |side, sight, count, shortfall| Gathering {
+        let gathering_of = |relations, sight, count, shortfall| Gathering {
             area: Area::Around(Quantity::from(2)),
-            side,
+            relations,
             kinds: Kinds::Any,
             sight,
             count,
             shortfall,
         };
-        let gathering =
-            |count, shortfall| gathering_of(Affiliation::Own, GatherSight::Blind, count, shortfall);
-        let recall_anyones = |sight| Journey::FromAim {
+        let gathering = |count, shortfall| {
+            gathering_of(Relation::Own.into(), GatherSight::Blind, count, shortfall)
+        };
+        let recall_every_relation = |sight| Journey::FromAim {
             party: AimParty::Around {
                 at: cell(),
-                gathering: gathering_of(Affiliation::Anyone, sight, Count::All, Shortfall::Leave),
+                gathering: gathering_of(Relations::EVERY, sight, Count::All, Shortfall::Leave),
             },
             to: FromAimTo::Caster,
         };
@@ -1381,12 +1382,12 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
             ),
             (
                 "recall_seen",
-                recall_anyones(GatherSight::Seen),
+                recall_every_relation(GatherSight::Seen),
                 Landing::Anywhere,
             ),
             (
                 "recall_blind",
-                recall_anyones(GatherSight::Blind),
+                recall_every_relation(GatherSight::Blind),
                 Landing::Anywhere,
             ),
             (
@@ -1403,7 +1404,7 @@ fn seated_app(slots: Vec<PlayerSlot>, local: PlayerId) -> App {
                     party: CasterParty::CasterAndAround(gathering(Count::All, Shortfall::Leave)),
                     to: FromCasterTo::Aim(Away::Standing {
                         whom: Whom {
-                            side: Affiliation::Own,
+                            relations: Relation::Own.into(),
                             kinds: Kinds::tags(["hall"]),
                         },
                         reach: Reach::Wherever,
@@ -1531,7 +1532,7 @@ fn register_recaller(app: &mut App) {
                             },
                             gathering: Gathering {
                                 area: Area::Around(Quantity::from(2)),
-                                side: Affiliation::Own,
+                                relations: Relation::Own.into(),
                                 kinds: Kinds::Any,
                                 sight: GatherSight::Blind,
                                 count: Count::All,

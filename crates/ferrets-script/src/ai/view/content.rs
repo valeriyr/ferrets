@@ -2,7 +2,6 @@
 //! session.
 
 use ferrets_content::{
-    affiliation::Affiliation,
     cost::Cost,
     coverage::Coverage,
     entity_stats::EntityStatId,
@@ -14,6 +13,8 @@ use ferrets_content::{
 };
 use ferrets_nav_grid::layer_mask::LayerMask;
 use ferrets_simulation::entity_def;
+
+use crate::content;
 
 /// The limit a requirement compares against, as a script reads it: an amount,
 /// or a fraction of the reference, as a decimal string.
@@ -125,32 +126,39 @@ impl ContentView {
                     let def = registry
                         .skill_def(id)
                         .expect("a listed skill resolves in its own registry");
-                    let (caster, cast, target) = match &def.caster {
+                    let (caster, cast, target, relations) = match &def.caster {
                         SkillCaster::Entity {
                             casting, effect, ..
-                        } => (
-                            "entity",
-                            Some(match casting {
-                                Casting::Transient => "transient",
-                                Casting::Instant => "instant",
-                                Casting::Delayed { .. } => "delayed",
-                            }),
-                            Some(match effect.target() {
-                                EntityCastTarget::Caster => "caster",
-                                EntityCastTarget::Ground { .. } => "ground",
-                                EntityCastTarget::Fallen { .. } => "fallen",
+                        } => {
+                            let (target, relations) = match effect.target() {
+                                EntityCastTarget::Caster => ("caster", None),
+                                EntityCastTarget::Ground { .. } => ("ground", None),
+                                EntityCastTarget::Fallen { .. } => ("fallen", None),
                                 EntityCastTarget::Standing {
-                                    whom: Whom { side, .. },
+                                    whom: Whom { relations, .. },
                                     ..
-                                } => match side {
-                                    Affiliation::Own => "own",
-                                    Affiliation::Allied => "allied",
-                                    Affiliation::Enemy => "enemy",
-                                    Affiliation::Anyone => "anyone",
-                                },
-                            }),
-                        ),
-                        SkillCaster::Player { .. } => ("player", None, None),
+                                } => (
+                                    "standing",
+                                    Some(
+                                        content::relation_names(*relations)
+                                            .into_iter()
+                                            .map(str::to_string)
+                                            .collect(),
+                                    ),
+                                ),
+                            };
+                            (
+                                "entity",
+                                Some(match casting {
+                                    Casting::Transient => "transient",
+                                    Casting::Instant => "instant",
+                                    Casting::Delayed { .. } => "delayed",
+                                }),
+                                Some(target),
+                                relations,
+                            )
+                        }
+                        SkillCaster::Player { .. } => ("player", None, None, None),
                     };
                     SkillContentView {
                         name: name.to_string(),
@@ -158,6 +166,7 @@ impl ContentView {
                         caster: caster.to_string(),
                         cast: cast.map(str::to_string),
                         target: target.map(str::to_string),
+                        relations,
                         requires: requirements(&def.requires, registry),
                     }
                 })
@@ -177,11 +186,14 @@ pub struct SkillContentView {
     /// How an entity cast takes its caster's time: `"transient"`,
     /// `"instant"` or `"delayed"`. `None` for a player cast.
     pub cast: Option<String>,
-    /// What an entity cast acts on: `"caster"`, `"ground"`, `"fallen"`, or
-    /// a standing entity's side, `"own"`, `"allied"`, `"enemy"` or
-    /// `"anyone"`. `None` for a player cast, which lands on the casting
+    /// What an entity cast acts on: `"caster"`, `"ground"`, `"fallen"` or
+    /// `"standing"`. `None` for a player cast, which lands on the casting
     /// player.
     pub target: Option<String>,
+    /// The relations a standing target may stand in to the caster, each
+    /// `"own"`, `"ally"`, `"enemy"` or `"neutral"`. `None` for any other
+    /// target.
+    pub relations: Option<Vec<String>>,
     /// What must hold for a cast. `None` when nothing must.
     pub requires: Option<Vec<RequirementView>>,
 }

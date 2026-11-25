@@ -5,8 +5,11 @@ mod utils;
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 use ferrets_bevy_plugin::PendingInput;
 use ferrets_content::{
-    affiliation::Affiliation, coverage::Coverage, field::FieldPlacement, location::Solidity,
+    coverage::Coverage,
+    field::FieldPlacement,
+    location::Solidity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
 };
 use ferrets_demo::{
     input,
@@ -118,7 +121,7 @@ fn ghost_judges_field_rules_on_coverage_overlay_shows() {
         .expect("the demo content defines power");
     let on_enemy_power = [FieldPlacement::Requires {
         field: power,
-        of: Affiliation::Enemy,
+        of: Relation::Enemy.into(),
         coverage: Coverage::Every,
     }];
     let rect = CellRect::new(CellPos::new(21, 21), CellSize::ONE);
@@ -526,7 +529,7 @@ fn ghost_snapped_to_source_fits_only_as_its_field_rules_say() {
         .clone();
     def.field_placement = vec![FieldPlacement::Requires {
         field: creep,
-        of: Affiliation::Anyone,
+        of: Relations::EVERY,
         coverage: Coverage::Every,
     }];
     let info = world.get::<EntityInfoComponent>(mine).expect("placed");

@@ -4,7 +4,6 @@
 mod utils;
 
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     attack::Slain,
     brood::{BroodlingDef, Lingering, OrphanFate},
@@ -33,6 +32,7 @@ use ferrets_content::{
     price,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     requirement::{Bound, Requirement, Threshold},
     resource::Banking,
     rise::{RisePool, RisePoolInitial},
@@ -829,7 +829,7 @@ fn standing_stones_block_sight_and_huntress_sees_one_level_up() {
 
     assert_eq!(
         blocks_sight("standing_stone"),
-        Some(SightBlock::new(2, Affiliation::Anyone))
+        Some(SightBlock::new(2, Relations::EVERY))
     );
     // Groves leave the view open, so the map stays easy to read.
     assert_eq!(blocks_sight("tree"), None);
@@ -887,17 +887,17 @@ fn smoke_blocks_everyone_and_fog_cloud_blinds_enemies_alone() {
     assert_eq!(smoke.watches(), None);
     assert_eq!(
         smoke.blocks_sight(),
-        Some(SightBlock::new(1, Affiliation::Anyone))
+        Some(SightBlock::new(1, Relations::EVERY))
     );
     let fog_cloud = field("fog_cloud");
     assert_eq!(fog_cloud.spreads_on(), ground | air);
     assert_eq!(
         fog_cloud.watches(),
-        Some(FieldWatch::new(Affiliation::Allied))
+        Some(FieldWatch::new(Relations::FRIENDLY))
     );
     assert_eq!(
         fog_cloud.blocks_sight(),
-        Some(SightBlock::new(2, Affiliation::Enemy))
+        Some(SightBlock::new(2, Relation::Enemy.into()))
     );
 
     // The marine throws the smoke and the shaman calls the fog.
@@ -955,7 +955,7 @@ fn creep_watches_for_its_spreader_and_power_does_not() {
 
     assert_eq!(
         registry.field_def(creep).watches(),
-        Some(FieldWatch::new(Affiliation::Own))
+        Some(FieldWatch::new(Relation::Own.into()))
     );
     assert_eq!(registry.field_def(power).watches(), None);
     // The tumor leaves the watching to its creep.
@@ -1083,7 +1083,7 @@ fn grunt_and_shaman_carry_their_abilities() {
         effect.target(),
         EntityCastTarget::Standing {
             whom: &Whom {
-                side: Affiliation::Allied,
+                relations: Relations::FRIENDLY,
                 kinds: Kinds::tags(["biological"]),
             },
             reach: Reach::Wherever,
@@ -2704,7 +2704,7 @@ fn arbiter_veils_its_side_but_not_itself() {
                 effect.on(FieldSide::Outside)
             ),
             (
-                Affiliation::Allied,
+                Relations::FRIENDLY,
                 Coverage::Every,
                 &[EntityEffect::Conceal][..],
                 &[][..]

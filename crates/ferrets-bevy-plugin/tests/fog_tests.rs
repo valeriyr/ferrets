@@ -8,7 +8,6 @@ mod utils;
 use bevy::prelude::*;
 use ferrets_bevy_plugin::{ai::game_view, map};
 use ferrets_content::{
-    affiliation::Affiliation,
     area::Area,
     detection::Detection,
     domain::DomainDef,
@@ -20,6 +19,7 @@ use ferrets_content::{
     pool::Pool,
     quantity::Quantity,
     registry::ContentRegistry,
+    relation::{Relation, Relations},
     sight_block::SightBlock,
     skills::{Casting, EntityCastEffect, Reach, SkillCaster, SkillDef, Spot},
     stats::ModifierOp,
@@ -1428,7 +1428,7 @@ fn relief_app(ground_relief_blocks: &[&str]) -> App {
         EntityTypeDef::new("rock")
             .with_location(walking, CellSize::ONE, None, Solidity::Solid, ground)
             .with_pool(Pool::health(20))
-            .with_blocks_sight(SightBlock::new(1, Affiliation::Anyone)),
+            .with_blocks_sight(SightBlock::new(1, Relations::EVERY)),
     );
     let smoke = registry.register_field(
         "smoke",
@@ -1437,7 +1437,7 @@ fn relief_app(ground_relief_blocks: &[&str]) -> App {
             ground.into(),
             FieldDecay::Instant,
             None,
-            Some(SightBlock::new(1, Affiliation::Anyone)),
+            Some(SightBlock::new(1, Relations::EVERY)),
             Detection::Blind,
         ),
     );
@@ -1549,9 +1549,9 @@ fn shadow_app() -> App {
         );
         registry.register(body("flier", utils::AIR_DOMAIN, utils::AIR, 1).with_sight_range(8));
         for (name, side, of) in [
-            ("rock", 1, Affiliation::Anyone),
-            ("boulder", 2, Affiliation::Anyone),
-            ("ward", 1, Affiliation::Enemy),
+            ("rock", 1, Relations::EVERY),
+            ("boulder", 2, Relations::EVERY),
+            ("ward", 1, Relation::Enemy.into()),
         ] {
             registry.register(
                 body(name, utils::GROUND_DOMAIN, utils::GROUND, side)
@@ -1561,7 +1561,7 @@ fn shadow_app() -> App {
         registry.register(
             body("cairn", utils::GROUND_DOMAIN, utils::GROUND, 1)
                 .with_dying(10, [])
-                .with_blocks_sight(SightBlock::new(1, Affiliation::Anyone)),
+                .with_blocks_sight(SightBlock::new(1, Relations::EVERY)),
         );
         let smoke = registry.register_field(
             "smoke",
@@ -1570,7 +1570,7 @@ fn shadow_app() -> App {
                 utils::GROUND.into(),
                 FieldDecay::Instant,
                 None,
-                Some(SightBlock::new(1, Affiliation::Anyone)),
+                Some(SightBlock::new(1, Relations::EVERY)),
                 Detection::Blind,
             ),
         );
@@ -1581,7 +1581,7 @@ fn shadow_app() -> App {
                 utils::GROUND | utils::AIR,
                 FieldDecay::Instant,
                 None,
-                Some(SightBlock::new(1, Affiliation::Anyone)),
+                Some(SightBlock::new(1, Relations::EVERY)),
                 Detection::Blind,
             ),
         );
@@ -1591,7 +1591,7 @@ fn shadow_app() -> App {
                 Terrains::Any,
                 utils::GROUND.into(),
                 FieldDecay::Instant,
-                Some(FieldWatch::new(Affiliation::Anyone)),
+                Some(FieldWatch::new(Relations::EVERY)),
                 None,
                 Detection::Blind,
             ),
@@ -1603,7 +1603,7 @@ fn shadow_app() -> App {
                 utils::GROUND.into(),
                 FieldDecay::Instant,
                 None,
-                Some(SightBlock::new(1, Affiliation::Enemy)),
+                Some(SightBlock::new(1, Relation::Enemy.into())),
                 Detection::Blind,
             ),
         );
@@ -1613,7 +1613,7 @@ fn shadow_app() -> App {
                 Terrains::Any,
                 utils::GROUND.into(),
                 FieldDecay::Instant,
-                Some(FieldWatch::new(Affiliation::Own)),
+                Some(FieldWatch::new(Relation::Own.into())),
                 None,
                 Detection::Blind,
             ),

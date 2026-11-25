@@ -1,7 +1,7 @@
 //! Content-defined transport capability: whom an entity carries, and on what
 //! terms.
 
-use crate::{affiliation::Affiliation, kinds::Kinds};
+use crate::{kinds::Kinds, relation::Relations};
 
 /// What happens to the passengers when their holder dies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,8 +29,9 @@ pub enum PassengerConduct {
 pub struct TransporterDef {
     /// Whom it admits.
     carries: Kinds,
-    /// Whose units may board.
-    boarding: Affiliation,
+    /// Whose units may board, judged from the transporter's owner: every
+    /// rider of a nobody's transporter is neutral to it.
+    boarding: Relations,
     /// What happens to the passengers when the holder dies.
     passenger_fate: PassengerFate,
     /// What passengers do while aboard.
@@ -41,7 +42,7 @@ impl TransporterDef {
     /// Creates a new `TransporterDef` with the given data.
     pub fn new(
         carries: Kinds,
-        boarding: Affiliation,
+        boarding: Relations,
         passenger_fate: PassengerFate,
         conduct: PassengerConduct,
     ) -> Self {
@@ -59,9 +60,9 @@ impl TransporterDef {
         &self.carries
     }
 
-    /// Whose units may board.
+    /// Whose units may board, judged from the transporter's owner.
     #[inline]
-    pub fn boarding(&self) -> Affiliation {
+    pub fn boarding(&self) -> Relations {
         self.boarding
     }
 

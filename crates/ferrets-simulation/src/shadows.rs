@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use bevy_ecs::{entity::Entity, world::World};
-use ferrets_content::{affiliation::Affiliation, registry::ContentRegistry};
+use ferrets_content::{registry::ContentRegistry, relation::Relations};
 use ferrets_geometry::{
     cell_pos::CellPos,
     cell_rect::CellRect,
@@ -227,14 +227,16 @@ struct Obstruction {
     /// The level its top is at: a viewer whose eyes are below it is blocked.
     top: u32,
     /// Whose sight it blocks, judged from its owner or its coverers.
-    of: Affiliation,
+    of: Relations,
 }
 
 /// Whether `obstruction` blocks the sight of `player`, judged from its owner
 /// or its coverers.
 fn blocks(session: &GameSession, obstruction: &Obstruction, player: PlayerId) -> bool {
     match obstruction.blocker {
-        Blocker::Object { owner, .. } => session.relation(Some(player), owner).fits(obstruction.of),
+        Blocker::Object { owner, .. } => obstruction
+            .of
+            .contains(session.relation(Some(player), owner)),
         Blocker::Field { coverers } => coverers.satisfies(session, obstruction.of, Some(player)),
     }
 }
